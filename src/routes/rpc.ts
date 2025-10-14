@@ -1,17 +1,16 @@
 import { Router } from "express";
 import { z } from "zod";
-import { sb } from "../lib/supabase";
+import { makeUserClient, sbAdmin } from "../lib/supabase";
 
 export const rpcRouter = Router();
 
-// Helper: pull bearer token from Authorization header
 function bearer(req: any): string | null {
   const h = req.headers?.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
   return m ? m[1] : null;
 }
 
-// POST /api/listings  -> calls public.create_listing(...)
+// POST /api/listings
 rpcRouter.post("/listings", async (req, res) => {
   const token = bearer(req);
   const schema = z.object({
@@ -32,14 +31,11 @@ rpcRouter.post("/listings", async (req, res) => {
     charity_name: z.string().optional().nullable(),
     charity_wallet_address: z.string().optional().nullable(),
   });
-
   const parsed = schema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: parsed.error.flatten() });
-  }
+  if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const client = token ? sb.auth.setAuth(token) && sb : sb;
+    const client = makeUserClient(token);
     const { data, error } = await client.rpc("create_listing", {
       p_artwork_id: parsed.data.artwork_id,
       p_type: parsed.data.type,
@@ -58,16 +54,15 @@ rpcRouter.post("/listings", async (req, res) => {
       p_charity_name: parsed.data.charity_name ?? null,
       p_charity_wallet_address: parsed.data.charity_wallet_address ?? null,
     });
-
     if (error) return res.status(400).json({ error: error.message });
-    return res.json({ id: data });
+    res.json({ id: data });
   } catch (e: any) {
     console.error(e);
-    return res.status(500).json({ error: "create_listing failed" });
+    res.status(500).json({ error: "create_listing failed" });
   }
 });
 
-// POST /api/bids -> calls public.place_bid(listing_id, amount)
+// POST /api/bids
 rpcRouter.post("/bids", async (req, res) => {
   const token = bearer(req);
   const schema = z.object({
@@ -78,22 +73,21 @@ rpcRouter.post("/bids", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const client = token ? sb.auth.setAuth(token) && sb : sb;
+    const client = makeUserClient(token);
     const { data, error } = await client.rpc("place_bid", {
       p_listing_id: parsed.data.listing_id,
       p_amount: parsed.data.amount,
     });
     if (error) return res.status(400).json({ error: error.message });
-    return res.json({ id: data });
+    res.json({ id: data });
   } catch (e: any) {
     console.error(e);
-    return res.status(500).json({ error: "place_bid failed" });
+    res.status(500).json({ error: "place_bid failed" });
   }
 });
 
-// POST /api/orders/:id/paid  -> service role only (webhooks)
+// POST /api/orders/:id/paid  (service role only)
 rpcRouter.post("/orders/:id/paid", async (req, res) => {
-  // In production: verify Stripe/Coinbase webhook signatures before calling this.
   const orderId = req.params.id;
   const schema = z.object({
     chain_id: z.number().int().optional().default(0),
@@ -103,15 +97,15 @@ rpcRouter.post("/orders/:id/paid", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const { data, error } = await sb.rpc("mark_order_paid", {
+    const { error } = await sbAdmin.rpc("mark_order_paid", {
       p_order_id: orderId,
       p_chain_id: parsed.data.chain_id,
       p_tx_hash: parsed.data.tx_hash ?? null,
     });
     if (error) return res.status(400).json({ error: error.message });
-    return res.json({ ok: true });
+    res.json({ ok: true });
   } catch (e: any) {
     console.error(e);
-    return res.status(500).json({ error: "mark_order_paid failed" });
+    res.status(500).json({ error: "mark_order_paid failed" });
   }
 });
