@@ -1,35 +1,29 @@
-import { Router } from "express";
+import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { makeUserClient, sbAdmin } from "../lib/supabase";
 
 export const rpcRouter = Router();
 
-function bearer(req: any): string | undefined {
+function bearer(req: Request): string | undefined {
   const h = req.headers?.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
-  return m ? m[1] : undefined;   // <-- return undefined, not null
+  return m ? m[1] : undefined;          // return undefined (not null)
 }
 
-
 // POST /api/listings
-rpcRouter.post("/listings", async (req, res) => {
+rpcRouter.post("/listings", async (req: Request, res: Response) => {
   const token = bearer(req);
   const schema = z.object({
     artwork_id: z.string().uuid(),
     type: z.enum(["coming_soon", "fixed_price", "auction"]),
-    status: z
-      .enum(["draft", "active", "paused", "ended", "canceled"])
-      .default("active"),
+    status: z.enum(["draft", "active", "paused", "ended", "canceled"]).default("active"),
     sale_currency: z.string().default("ETH"),
     fixed_price: z.number().optional().nullable(),
     reserve_price: z.number().optional().nullable(),
-    // use nullish = string | null | undefined
     start_at: z.string().datetime().nullish(),
     end_at: z.string().datetime().nullish(),
     quantity: z.number().int().positive().default(1),
-    settlement_kind: z
-      .enum(["onchain", "stripe", "coinbase_commerce"])
-      .default("onchain"),
+    settlement_kind: z.enum(["onchain", "stripe", "coinbase_commerce"]).default("onchain"),
     payout_wallet_id: z.string().uuid().nullish(),
     charity_flag: z.boolean().optional().default(false),
     charity_pct_bps: z.number().int().min(0).max(10000).optional().default(0),
@@ -42,9 +36,7 @@ rpcRouter.post("/listings", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const client = makeUserClient(token);
-
-    // Avoid TS “null vs undefined” friction by typing the payload as any.
+    const client = makeUserClient(token ?? undefined);
     const payload: any = {
       p_artwork_id: parsed.data.artwork_id,
       p_type: parsed.data.type,
@@ -63,7 +55,6 @@ rpcRouter.post("/listings", async (req, res) => {
       p_charity_name: parsed.data.charity_name ?? null,
       p_charity_wallet_address: parsed.data.charity_wallet_address ?? null,
     };
-
     const { data, error } = await client.rpc("create_listing", payload);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ id: data });
@@ -74,7 +65,7 @@ rpcRouter.post("/listings", async (req, res) => {
 });
 
 // POST /api/bids
-rpcRouter.post("/bids", async (req, res) => {
+rpcRouter.post("/bids", async (req: Request, res: Response) => {
   const token = bearer(req);
   const schema = z.object({
     listing_id: z.string().uuid(),
@@ -84,12 +75,11 @@ rpcRouter.post("/bids", async (req, res) => {
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
-    const client = makeUserClient(token);
-    const payload: any = {
+    const client = makeUserClient(token ?? undefined);
+    const { data, error } = await client.rpc("place_bid", {
       p_listing_id: parsed.data.listing_id,
       p_amount: parsed.data.amount,
-    };
-    const { data, error } = await client.rpc("place_bid", payload);
+    } as any);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ id: data });
   } catch (e: any) {
@@ -99,7 +89,7 @@ rpcRouter.post("/bids", async (req, res) => {
 });
 
 // POST /api/orders/:id/paid  (service role only)
-rpcRouter.post("/orders/:id/paid", async (req, res) => {
+rpcRouter.post("/orders/:id/paid", async (req: Request, res: Response) => {
   const orderId = req.params.id;
   const schema = z.object({
     chain_id: z.number().int().optional().default(0),
