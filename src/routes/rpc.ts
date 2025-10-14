@@ -4,11 +4,12 @@ import { makeUserClient, sbAdmin } from "../lib/supabase";
 
 export const rpcRouter = Router();
 
-function bearer(req: any): string | null {
+function bearer(req: any): string | undefined {
   const h = req.headers?.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
-  return m ? m[1] : null;
+  return m ? m[1] : undefined;   // <-- return undefined, not null
 }
+
 
 // POST /api/listings
 rpcRouter.post("/listings", async (req, res) => {
@@ -16,27 +17,35 @@ rpcRouter.post("/listings", async (req, res) => {
   const schema = z.object({
     artwork_id: z.string().uuid(),
     type: z.enum(["coming_soon", "fixed_price", "auction"]),
-    status: z.enum(["draft", "active", "paused", "ended", "canceled"]).default("active"),
+    status: z
+      .enum(["draft", "active", "paused", "ended", "canceled"])
+      .default("active"),
     sale_currency: z.string().default("ETH"),
     fixed_price: z.number().optional().nullable(),
     reserve_price: z.number().optional().nullable(),
-    start_at: z.string().datetime().optional().nullable(),
-    end_at: z.string().datetime().optional().nullable(),
+    // use nullish = string | null | undefined
+    start_at: z.string().datetime().nullish(),
+    end_at: z.string().datetime().nullish(),
     quantity: z.number().int().positive().default(1),
-    settlement_kind: z.enum(["onchain", "stripe", "coinbase_commerce"]).default("onchain"),
-    payout_wallet_id: z.string().uuid().optional().nullable(),
+    settlement_kind: z
+      .enum(["onchain", "stripe", "coinbase_commerce"])
+      .default("onchain"),
+    payout_wallet_id: z.string().uuid().nullish(),
     charity_flag: z.boolean().optional().default(false),
     charity_pct_bps: z.number().int().min(0).max(10000).optional().default(0),
-    charity_target_id: z.string().uuid().optional().nullable(),
-    charity_name: z.string().optional().nullable(),
-    charity_wallet_address: z.string().optional().nullable(),
+    charity_target_id: z.string().uuid().nullish(),
+    charity_name: z.string().nullish(),
+    charity_wallet_address: z.string().nullish(),
   });
+
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
   try {
     const client = makeUserClient(token);
-    const { data, error } = await client.rpc("create_listing", {
+
+    // Avoid TS “null vs undefined” friction by typing the payload as any.
+    const payload: any = {
       p_artwork_id: parsed.data.artwork_id,
       p_type: parsed.data.type,
       p_status: parsed.data.status,
@@ -53,7 +62,9 @@ rpcRouter.post("/listings", async (req, res) => {
       p_charity_target_id: parsed.data.charity_target_id ?? null,
       p_charity_name: parsed.data.charity_name ?? null,
       p_charity_wallet_address: parsed.data.charity_wallet_address ?? null,
-    });
+    };
+
+    const { data, error } = await client.rpc("create_listing", payload);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ id: data });
   } catch (e: any) {
@@ -74,10 +85,11 @@ rpcRouter.post("/bids", async (req, res) => {
 
   try {
     const client = makeUserClient(token);
-    const { data, error } = await client.rpc("place_bid", {
+    const payload: any = {
       p_listing_id: parsed.data.listing_id,
       p_amount: parsed.data.amount,
-    });
+    };
+    const { data, error } = await client.rpc("place_bid", payload);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ id: data });
   } catch (e: any) {
@@ -91,7 +103,7 @@ rpcRouter.post("/orders/:id/paid", async (req, res) => {
   const orderId = req.params.id;
   const schema = z.object({
     chain_id: z.number().int().optional().default(0),
-    tx_hash: z.string().optional().nullable(),
+    tx_hash: z.string().nullish(),
   });
   const parsed = schema.safeParse(req.body);
   if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
@@ -101,7 +113,7 @@ rpcRouter.post("/orders/:id/paid", async (req, res) => {
       p_order_id: orderId,
       p_chain_id: parsed.data.chain_id,
       p_tx_hash: parsed.data.tx_hash ?? null,
-    });
+    } as any);
     if (error) return res.status(400).json({ error: error.message });
     res.json({ ok: true });
   } catch (e: any) {
