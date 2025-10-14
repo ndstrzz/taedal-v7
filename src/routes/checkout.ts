@@ -1,3 +1,4 @@
+//C:\Users\User\Downloads\taedal-v7\server\src\routes\checkout.ts
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import Stripe from "stripe";

@@ -1,7 +1,7 @@
+//C:\Users\User\Downloads\taedal-v7\server\src\routes\rpc.ts
 import { Router, Request, Response } from "express";
 import { z } from "zod";
 import { makeUserClient, sbAdmin } from "../lib/supabase";
-
 export const rpcRouter = Router();
 
 // 👇 widen the type here

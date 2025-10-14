@@ -1,3 +1,4 @@
+//C:\Users\User\Downloads\taedal-v7\server\tsconfig.json
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -6,7 +7,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "moduleResolution": "node",
-    "types": ["node", "express"],   // <-- include these
+    "types": ["node", "express"],
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true

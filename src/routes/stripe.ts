@@ -1,3 +1,4 @@
+//C:\Users\User\Downloads\taedal-v7\server\src\routes\stripe.ts
 import { Router } from "express";
 import bodyParser from "body-parser";
 import Stripe from "stripe";
