@@ -2,6 +2,8 @@ import "dotenv/config";
 import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
+import { stripeRouter } from "./routes/stripe";
+
 
 import { healthRouter } from "./routes/health";
 import { rpcRouter } from "./routes/rpc";
@@ -11,6 +13,10 @@ const PORT = Number(process.env.PORT || 5000);
 
 app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
+
+// Stripe webhook needs raw body; mount FIRST
+app.use("/", stripeRouter);
+
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/", (_req: Request, res: Response) => {
