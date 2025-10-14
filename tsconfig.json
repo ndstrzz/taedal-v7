@@ -6,6 +6,7 @@
     "rootDir": "src",
     "outDir": "dist",
     "moduleResolution": "node",
+    "types": ["node", "express"],   // <-- include these
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true

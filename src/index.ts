@@ -1,5 +1,5 @@
 import "dotenv/config";
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 
@@ -13,14 +13,15 @@ app.use(helmet());
 app.use(cors({ origin: true, credentials: true }));
 app.use(express.json({ limit: "10mb" }));
 
-app.get("/", (_req, res) => {
+app.get("/", (_req: Request, res: Response) => {
   res.json({ ok: true, name: "taedal-server", uptime: process.uptime() });
 });
 
 app.use("/api/health", healthRouter);
 app.use("/api", rpcRouter);
 
-app.use((err: any, _req: any, res: any, _next: any) => {
+// error handler
+app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   console.error("Unhandled error:", err);
   res.status(500).json({ error: "Internal Server Error" });
 });

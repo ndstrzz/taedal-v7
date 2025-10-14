@@ -4,11 +4,14 @@ import { makeUserClient, sbAdmin } from "../lib/supabase";
 
 export const rpcRouter = Router();
 
-function bearer(req: Request): string | undefined {
+// 👇 widen the type here
+function bearer(req: any): string | undefined {
   const h = req.headers?.authorization || "";
   const m = /^Bearer\s+(.+)$/i.exec(h);
-  return m ? m[1] : undefined;          // return undefined (not null)
+  return m ? m[1] : undefined;
 }
+
+
 
 // POST /api/listings
 rpcRouter.post("/listings", async (req: Request, res: Response) => {
