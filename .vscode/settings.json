@@ -1,0 +1,9 @@
+{
+  // Turn on Deno language server only for these folders
+  "deno.enable": true,
+  "deno.enablePaths": ["supabase/functions"],
+  "deno.unstable": true,
+
+  // (nice to have) keep Node type-checking for the rest of the app
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

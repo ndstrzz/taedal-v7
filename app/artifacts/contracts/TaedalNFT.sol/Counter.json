@@ -1,0 +1,27 @@
+{
+  "_format": "hh3-artifact-1",
+  "contractName": "Counter",
+  "sourceName": "contracts/TaedalNFT.sol",
+  "abi": [
+    {
+      "inputs": [],
+      "name": "currentId",
+      "outputs": [
+        {
+          "internalType": "uint256",
+          "name": "",
+          "type": "uint256"
+        }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ],
+  "bytecode": "0x",
+  "deployedBytecode": "0x",
+  "linkReferences": {},
+  "deployedLinkReferences": {},
+  "immutableReferences": {},
+  "inputSourceName": "project/contracts/TaedalNFT.sol",
+  "buildInfoId": "solc-0_8_20-713b9ba4978af63a23f32da380e2b366f4bcc1e6"
+}
