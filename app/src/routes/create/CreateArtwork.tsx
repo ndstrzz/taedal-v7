@@ -36,7 +36,7 @@ export default function CreateArtworkWizard() {
   const [checkingDupes, setCheckingDupes] = useState(false);
   const [globalMsg, setGlobalMsg] = useState<string | null>(null);
 
-  // Step 2 (details form, LEAN)
+  // Step 2 (details form)
   const {
     register,
     handleSubmit,
@@ -46,28 +46,16 @@ export default function CreateArtworkWizard() {
   } = useForm<CreateArtworkInput>({
     resolver: zodResolver(CreateArtworkSchema) as any,
     defaultValues: {
-      // Lean defaults
-      title: "",
-      description: "",
-      tags: [],
-      medium: "",
-      year_created: "",
-      width: undefined,
-      height: undefined,
-      depth: undefined,
-      dim_unit: "",
       royalty_bps: 500,
-      // Safety: preserve backend expectations; we keep these out of the UI
       edition_type: "unique",
       status: "draft",
+      tags: [],
       is_nsfw: false,
-      sale_type: undefined,
-      list_price: undefined,
-      list_currency: undefined,
-      reserve_price: undefined,
-      min_offer: undefined,
+      // IMPORTANT: let “no unit chosen yet” be undefined (not an empty string)
+      dim_unit: undefined as any,
     },
   });
+  const editionType = watch("edition_type");
 
   // Step 3 (pin & mint)
   const [pinning, setPinning] = useState(false);
@@ -135,40 +123,42 @@ export default function CreateArtworkWizard() {
       // 1) upload
       const uploaded = await uploadToArtworksBucket(pickedFile, userId);
 
-      // 2) insert row (CONTRACT UNCHANGED; sales fields intentionally left null)
+      // 2) insert row
       const payload: any = {
         creator_id: userId,
-        owner_id: userId, // will also be enforced by trigger
+        owner_id: userId,
+
         title: values.title,
-        description: values.description || null,
+        description: values.description ?? null,
+
         image_url: uploaded.publicUrl,
         image_width: uploaded.width ?? null,
         image_height: uploaded.height ?? null,
         mime: uploaded.mime ?? "image/*",
         image_sha256: fileHash ?? null,
 
-        // Optional artwork info
-        medium: values.medium || null,
-        year_created: values.year_created || null,
+        medium: values.medium ?? null,
+        year_created: values.year_created ?? null,
 
-        // Optional dimensions
+        // numeric-ish fields: coerce empty → null
         width: values.width ?? null,
         height: values.height ?? null,
         depth: values.depth ?? null,
-        dim_unit: values.dim_unit || null,
 
-        // Keep edition simple (unique by default)
-        edition_type: "unique",
-        edition_size: null,
+        // 🔒 strict union — only 'cm' | 'in' | 'px' or null
+        dim_unit: values.dim_unit ?? null,
+
+        edition_type: values.edition_type,
+        edition_size:
+          values.edition_type === "limited" ? values.edition_size ?? null : null,
         royalty_bps: values.royalty_bps ?? 500,
 
-        // Do NOT set list/sale fields here (belongs to Listing flow)
-        status: "draft",
-        sale_type: null,
-        list_price: null,
-        list_currency: null,
-        reserve_price: null,
-        min_offer: null,
+        status: values.status,
+        sale_type: values.sale_type ?? null,
+        list_price: values.list_price ?? null,
+        list_currency: values.list_currency ?? null,
+        reserve_price: values.reserve_price ?? null,
+        min_offer: values.min_offer ?? null,
 
         tags: values.tags ?? [],
         is_nsfw: values.is_nsfw ?? false,
@@ -239,8 +229,13 @@ export default function CreateArtworkWizard() {
               </div>
               <div className="grid gap-2">
                 {dupes.map((d) => (
-                  <div key={d.id} className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2">
-                    {d.image_url && <img src={d.image_url} className="h-14 w-14 object-cover rounded" />}
+                  <div
+                    key={d.id}
+                    className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2"
+                  >
+                    {d.image_url && (
+                      <img src={d.image_url} className="h-14 w-14 object-cover rounded" />
+                    )}
                     <div className="text-sm">
                       <div className="font-medium">{d.title ?? "Untitled"}</div>
                       <div className="text-neutral-400 text-xs">id: {d.id}</div>
@@ -264,7 +259,11 @@ export default function CreateArtworkWizard() {
           <div className="flex gap-3">
             <button
               className="btn"
-              disabled={!pickedFile || checkingDupes || (dupes && dupes.length > 0 && !ackOriginal)}
+              disabled={
+                !pickedFile ||
+                checkingDupes ||
+                (dupes && dupes.length > 0 && !ackOriginal)
+              }
               onClick={() => setStep(2)}
             >
               Continue
@@ -273,15 +272,16 @@ export default function CreateArtworkWizard() {
         </div>
       )}
 
-      {/* STEP 2 — LEAN DETAILS */}
+      {/* STEP 2 */}
       {step === 2 && (
         <form onSubmit={onSubmitDetails} className="space-y-6">
-          {/* Required */}
           <div className="card grid gap-3">
             <div>
-              <label className="block text-sm">Title *</label>
+              <label className="block text-sm">Title</label>
               <input className="input" {...register("title")} />
-              {errors.title && <p className="text-sm text-rose-400">{errors.title.message}</p>}
+              {errors.title && (
+                <p className="text-sm text-rose-400">{errors.title.message}</p>
+              )}
             </div>
 
             <div>
@@ -289,46 +289,64 @@ export default function CreateArtworkWizard() {
               <textarea className="input min-h-[100px]" {...register("description")} />
             </div>
 
-            <div>
-              <label className="block text-sm mb-1">Tags</label>
-              <TagsInput value={watch("tags") || []} onChange={(v) => setValue("tags", v)} />
-            </div>
-          </div>
-
-          {/* Optional: Artwork info */}
-          <div className="card grid gap-3">
-            <div className="text-sm font-medium">Artwork info (optional)</div>
             <div className="grid md:grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm">Medium</label>
-                <input className="input" {...register("medium")} placeholder="Oil on canvas / Digital" />
+                <input
+                  className="input"
+                  {...register("medium")}
+                  placeholder="Oil on canvas / Digital"
+                />
               </div>
               <div>
                 <label className="block text-sm">Year created</label>
                 <input className="input" {...register("year_created")} placeholder="2024" />
               </div>
             </div>
-          </div>
 
-          {/* Optional: Dimensions */}
-          <div className="card grid gap-3">
-            <div className="text-sm font-medium">Dimensions (optional)</div>
             <div className="grid md:grid-cols-4 gap-3">
               <div>
                 <label className="block text-sm">Width</label>
-                <input className="input" type="number" step="0.01" {...register("width")} />
+                <input
+                  className="input"
+                  type="number"
+                  step="0.01"
+                  {...register("width", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
               </div>
               <div>
                 <label className="block text-sm">Height</label>
-                <input className="input" type="number" step="0.01" {...register("height")} />
+                <input
+                  className="input"
+                  type="number"
+                  step="0.01"
+                  {...register("height", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
               </div>
               <div>
                 <label className="block text-sm">Depth</label>
-                <input className="input" type="number" step="0.01" {...register("depth")} />
+                <input
+                  className="input"
+                  type="number"
+                  step="0.01"
+                  {...register("depth", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
               </div>
               <div>
                 <label className="block text-sm">Unit</label>
-                <select className="input" {...register("dim_unit")}>
+                <select
+                  className="input"
+                  {...register("dim_unit", {
+                    // 👇 turn "" into undefined so it fits "cm" | "in" | "px" | undefined
+                    setValueAs: (v) => (v === "" ? undefined : v),
+                  })}
+                >
                   <option value=""></option>
                   <option value="cm">cm</option>
                   <option value="in">in</option>
@@ -338,21 +356,128 @@ export default function CreateArtworkWizard() {
             </div>
           </div>
 
-          {/* Optional: Royalties */}
           <div className="card grid gap-3">
-            <div className="text-sm font-medium">Royalties (optional)</div>
-            <div>
-              <label className="block text-sm">Royalty (bps)</label>
-              <input className="input" type="number" {...register("royalty_bps")} />
-              <p className="text-xs text-neutral-400 mt-1">
-                500 bps = 5%. You can change this later for future sales if your policy allows.
-              </p>
+            <div className="grid md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm">Edition type</label>
+                <select className="input" {...register("edition_type")}>
+                  <option value="unique">Unique</option>
+                  <option value="limited">Limited</option>
+                  <option value="open">Open Edition</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm">Edition size (for limited)</label>
+                <input
+                  className="input"
+                  type="number"
+                  {...register("edition_size", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                  disabled={editionType !== "limited"}
+                />
+              </div>
+              <div>
+                <label className="block text-sm">Royalties (bps)</label>
+                <input
+                  className="input"
+                  type="number"
+                  {...register("royalty_bps", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
+              </div>
             </div>
           </div>
 
+          <div className="card grid gap-3">
+            <div className="grid md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm">Status</label>
+                <select className="input" {...register("status")}>
+                  <option value="draft">Draft</option>
+                  <option value="active">Active</option>
+                  <option value="paused">Paused</option>
+                  <option value="ended">Ended</option>
+                  <option value="canceled">Canceled</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm">Sale type</label>
+                <select className="input" {...register("sale_type")}>
+                  <option value=""></option>
+                  <option value="fixed_price">Fixed price</option>
+                  <option value="auction">Auction</option>
+                  <option value="offer_only">Offer only</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm">List price</label>
+                <input
+                  className="input"
+                  type="number"
+                  step="0.00000001"
+                  {...register("list_price", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-sm">Currency</label>
+                <input
+                  className="input"
+                  placeholder="ETH / MATIC / USD"
+                  {...register("list_currency")}
+                />
+              </div>
+              <div>
+                <label className="block text-sm">Reserve price (auction)</label>
+                <input
+                  className="input"
+                  type="number"
+                  step="0.00000001"
+                  {...register("reserve_price", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm">Min offer</label>
+                <input
+                  className="input"
+                  type="number"
+                  step="0.00000001"
+                  {...register("min_offer", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="card grid gap-3">
+            <div>
+              <label className="block text-sm mb-1">Tags</label>
+              <TagsInput value={watch("tags") || []} onChange={(v) => setValue("tags", v)} />
+            </div>
+            <label className="inline-flex items-center gap-2">
+              <input type="checkbox" {...register("is_nsfw")} />
+              <span className="text-sm">Mark as sensitive (NSFW)</span>
+            </label>
+          </div>
+
           <div className="flex items-center gap-3">
-            <button className="btn" type="submit">Continue</button>
-            <button type="button" className="btn" onClick={() => setStep(1)}>Back</button>
+            <button className="btn" type="submit">
+              Continue
+            </button>
+            <button type="button" className="btn" onClick={() => setStep(1)}>
+              Back
+            </button>
           </div>
         </form>
       )}
@@ -364,16 +489,25 @@ export default function CreateArtworkWizard() {
           {pinMsg && <div className="text-xs text-neutral-300">{pinMsg}</div>}
           {pinData && (
             <div className="text-xs space-y-1">
-              <div>Image CID: <code>{pinData.imageCID}</code></div>
-              <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
-              <div>Token URI: <code>{pinData.tokenURI}</code></div>
+              <div>
+                Image CID: <code>{pinData.imageCID}</code>
+              </div>
+              <div>
+                Metadata CID: <code>{pinData.metadataCID}</code>
+              </div>
+              <div>
+                Token URI: <code>{pinData.tokenURI}</code>
+              </div>
             </div>
           )}
           {!pinning && artworkId && pinData?.tokenURI && (
-            <div className="flex flex-wrap gap-2">
-              <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
-              <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
-              {/* We keep listing on the artwork page to avoid touching your listing flow */}
+            <div className="flex gap-2">
+              <button className="btn" onClick={() => setShowMint(true)}>
+                Mint now
+              </button>
+              <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>
+                Skip
+              </button>
             </div>
           )}
         </div>
