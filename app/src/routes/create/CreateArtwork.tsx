@@ -200,6 +200,13 @@ export default function CreateArtworkWizard() {
       setPinning(false); // useMinBusy keeps overlay up to the min duration
       setPinData(pin as PinResp);
       setPinMsg("Pinned ✔ — ready to mint");
+
+      // NEW: Auto-publish after a successful pin so listing is not blocked
+      try {
+        await supabase.from("artworks").update({ status: "active" }).eq("id", row.id);
+      } catch {
+        // best-effort; if this fails, user can still mint and listing can flip it later
+      }
     } catch (e: any) {
       setPinning(false);
       setPinMsg(e?.message ?? "Failed during create/pin");
