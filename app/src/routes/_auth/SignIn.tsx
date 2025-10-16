@@ -1,8 +1,5 @@
-// app/src/routes/_auth/SignIn.tsx
 import { useState } from "react";
 import { supabase } from "../../lib/supabase";
-
-const PUBLIC_URL = import.meta.env.VITE_PUBLIC_URL || window.location.origin;
 
 export default function SignIn() {
   const [email, setEmail] = useState("");
@@ -17,9 +14,14 @@ export default function SignIn() {
       sessionStorage.setItem("returnTo", "/account");
     }
 
+    const redirectTo =
+      import.meta.env.VITE_PUBLIC_URL
+        ? `${import.meta.env.VITE_PUBLIC_URL}/auth/callback`
+        : `${window.location.origin}/auth/callback`;
+
     const { error } = await supabase.auth.signInWithOtp({
       email,
-      options: { emailRedirectTo: `${PUBLIC_URL}/auth/callback` },
+      options: { emailRedirectTo: redirectTo },
     });
 
     if (error) setError(error.message);

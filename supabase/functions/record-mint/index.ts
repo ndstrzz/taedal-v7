@@ -10,10 +10,9 @@ const corsHeaders: Record<string, string> = {
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// Correct env var names for Edge Functions
-const SUPABASE_URL        = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_ANON_KEY   = Deno.env.get("SUPABASE_ANON_KEY")!;  // ✅
-const SERVICE_ROLE_KEY    = Deno.env.get("SERVICE_ROLE_KEY")!;
+const SUPABASE_URL      = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SERVICE_ROLE_KEY  = Deno.env.get("SERVICE_ROLE_KEY")!;
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -57,7 +56,6 @@ Deno.serve(async (req: Request) => {
       return text("artwork_id, contract_address and tx_hash are required", 400);
     }
 
-    // Verify caller is the creator (that’s your current rule)
     const { data: art, error: artErr } = await userClient
       .from("artworks")
       .select("id, creator_id, owner_id")
@@ -67,7 +65,6 @@ Deno.serve(async (req: Request) => {
     if (!art) return text("Artwork not found", 404);
     if (art.creator_id !== callerId) return text("Only the creator can record mint", 403);
 
-    // Update artwork with on-chain refs
     const { error: upErr } = await serverClient
       .from("artworks")
       .update({
@@ -81,7 +78,6 @@ Deno.serve(async (req: Request) => {
       .eq("id", artwork_id);
     if (upErr) throw upErr;
 
-    // Optional provenance event (best-effort)
     try {
       await serverClient.from("provenance_events").insert({
         artwork_id,
@@ -95,9 +91,7 @@ Deno.serve(async (req: Request) => {
         source: "system",
         quantity: 1,
       });
-    } catch {
-      // table may not exist early on — safe to ignore
-    }
+    } catch { /* optional */ }
 
     return json({ ok: true });
   } catch (e: any) {

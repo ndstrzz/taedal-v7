@@ -10,11 +10,11 @@ const corsHeaders: Record<string, string> = {
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-// ---- Environment (trim to avoid stray CR/LF from secrets) ----
-const SUPABASE_URL       = (Deno.env.get("SUPABASE_URL")       || "").trim();
-const SUPABASE_ANON_KEY  = (Deno.env.get("SUPABASE_ANON_KEY")  || "").trim();
-const SERVICE_ROLE_KEY   = (Deno.env.get("SERVICE_ROLE_KEY")   || "").trim();
-const PINATA_JWT         = (Deno.env.get("PINATA_JWT")         || "").trim();
+// Environment (from Supabase Edge secrets)
+const SUPABASE_URL      = (Deno.env.get("SUPABASE_URL")      || "").trim();
+const SUPABASE_ANON_KEY = (Deno.env.get("SUPABASE_ANON_KEY") || "").trim();
+const SERVICE_ROLE_KEY  = (Deno.env.get("SERVICE_ROLE_KEY")  || "").trim();
+const PINATA_JWT        = (Deno.env.get("PINATA_JWT")        || "").trim();
 
 function json(body: any, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -33,7 +33,7 @@ Deno.serve(async (req) => {
     if (req.method !== "POST") return text("Method not allowed", 405);
     if (!PINATA_JWT) return text("PINATA_JWT not set in secrets", 500);
 
-    // Quick auth check against Pinata (helps surface bad JWT clearly)
+    // Helpful preflight to surface bad/malformed JWT clearly
     const test = await fetch("https://api.pinata.cloud/data/testAuthentication", {
       headers: { Authorization: `Bearer ${PINATA_JWT}` },
     });
@@ -69,9 +69,7 @@ Deno.serve(async (req) => {
       .maybeSingle();
     if (artErr) throw artErr;
     if (!art) return text("Artwork not found", 404);
-
-    if (art.creator_id !== callerId)
-      return text("Only the creator can pin this artwork", 403);
+    if (art.creator_id !== callerId) return text("Only the creator can pin this artwork", 403);
     if (!art.image_url) return text("Artwork has no image_url to pin", 400);
 
     await serverClient.from("artworks")
@@ -121,12 +119,13 @@ Deno.serve(async (req) => {
         trait_type: "Edition",
         value:
           art.edition_type === "limited" && art.edition_size
-            ? `Limited / ${art.edition_size}` : art.edition_type === "unique"
-            ? "Unique" : "Open",
+            ? `Limited / ${art.edition_size}`
+            : art.edition_type === "unique"
+            ? "Unique"
+            : "Open",
       });
     }
-    if (typeof art.is_nsfw === "boolean")
-      attributes.push({ trait_type: "NSFW", value: art.is_nsfw });
+    if (typeof art.is_nsfw === "boolean") attributes.push({ trait_type: "NSFW", value: art.is_nsfw });
 
     const metadata = {
       name: art.title ?? `Artwork ${art.id}`,
