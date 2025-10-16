@@ -24,7 +24,7 @@ export default function ArtworkGrid({ items, emptyText = "Nothing here yet.", cl
     <div className={`grid grid-cols-2 sm:grid-cols-3 gap-3 ${className}`}>
       {items.map((a) => (
         <a key={a.id} href={`/art/${a.id}`} className="block group">
-          <div className="aspect-square overflow-hidden rounded-lg border border-neutral-800 bg-neutral-900">
+          <div className="aspect-square overflow-hidden rounded-2xl border border-white/10 bg-white/5 hover:border-white/15 transition">
             {a.image_url ? (
               <img
                 src={a.image_url}
@@ -32,14 +32,10 @@ export default function ArtworkGrid({ items, emptyText = "Nothing here yet.", cl
                 className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
               />
             ) : (
-              <div className="grid place-items-center h-full text-neutral-500 text-xs">
-                No image
-              </div>
+              <div className="grid place-items-center h-full text-neutral-500 text-xs">No image</div>
             )}
           </div>
-          <div className="mt-1 text-xs line-clamp-1 text-neutral-300">
-            {a.title || "Untitled"}
-          </div>
+          <div className="mt-1 text-xs line-clamp-1 text-neutral-300">{a.title || "Untitled"}</div>
         </a>
       ))}
     </div>

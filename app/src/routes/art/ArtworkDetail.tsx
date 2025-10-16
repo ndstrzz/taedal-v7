@@ -1,4 +1,3 @@
-// app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -8,7 +7,6 @@ import {
   type Listing,
 } from "../../lib/listings";
 import { buyNow } from "../../lib/orders";
-
 
 type Artwork = {
   id: string;
@@ -23,6 +21,8 @@ type Artwork = {
   token_uri?: string | null;
 };
 
+type ArtworkFile = { id: string; url: string; kind: string | null; position: number | null };
+
 type Profile = {
   id: string;
   username: string | null;
@@ -30,11 +30,7 @@ type Profile = {
   avatar_url: string | null;
 };
 
-type PinResp = {
-  imageCID: string;
-  metadataCID: string;
-  tokenURI: string;
-};
+type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
 
 export default function ArtworkDetail() {
   const { id } = useParams();
@@ -46,15 +42,17 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // Listing state (from listings table)
   const [activeListing, setActiveListing] = useState<Listing | null>(null);
+
+  // gallery
+  const [files, setFiles] = useState<ArtworkFile[]>([]);
+  const [mainUrl, setMainUrl] = useState<string | null>(null);
 
   // Pinning
   const [pinLoading, setPinLoading] = useState(false);
   const [pinErr, setPinErr] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
 
-  // who am I?
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -62,7 +60,6 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // load artwork + creator/owner + active listing
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -76,7 +73,6 @@ export default function ArtworkDetail() {
           )
           .eq("id", id!)
           .maybeSingle();
-
         if (error) throw error;
         if (!data) {
           setMsg("Artwork not found.");
@@ -85,8 +81,9 @@ export default function ArtworkDetail() {
         }
         if (!alive) return;
         setArt(data as Artwork);
+        setMainUrl((data as Artwork).image_url);
 
-        const [c, o, l] = await Promise.all([
+        const [c, o, l, af] = await Promise.all([
           supabase
             .from("profiles")
             .select("id,username,display_name,avatar_url")
@@ -100,12 +97,18 @@ export default function ArtworkDetail() {
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
           fetchActiveListingForArtwork(data.id),
+          supabase
+            .from("artwork_files")
+            .select("id,url,kind,position")
+            .eq("artwork_id", data.id)
+            .order("position", { ascending: true }),
         ]);
 
         if (!alive) return;
         setCreator((c.data as any) ?? null);
         setOwner((o?.data as any) ?? null);
         setActiveListing(l);
+        setFiles((af.data as any[]) ?? []);
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artwork.");
       } finally {
@@ -129,7 +132,6 @@ export default function ArtworkDetail() {
       if (error) throw error;
       setPinData(data as PinResp);
 
-      // refresh artwork fields that pin-artwork updates
       const fresh = await supabase
         .from("artworks")
         .select(
@@ -137,7 +139,10 @@ export default function ArtworkDetail() {
         )
         .eq("id", art.id)
         .maybeSingle();
-      if (fresh.data) setArt(fresh.data as Artwork);
+      if (fresh.data) {
+        setArt(fresh.data as Artwork);
+        setMainUrl((fresh.data as Artwork).image_url);
+      }
     } catch (e: any) {
       setPinErr(e?.message ?? "Pin failed.");
     } finally {
@@ -145,7 +150,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  // BUY NOW handler
   async function onBuy() {
     if (!activeListing || !art) return;
     try {
@@ -153,7 +157,6 @@ export default function ArtworkDetail() {
       await buyNow(activeListing.id, 1);
       setMsg("Purchase complete ✅");
 
-      // refresh owner + listing
       const freshArt = await supabase
         .from("artworks")
         .select(
@@ -175,61 +178,55 @@ export default function ArtworkDetail() {
     return (
       <div className="max-w-5xl mx-auto p-6">
         {msg ? <p className="text-amber-300">{msg}</p> : null}
-        <Link to="/" className="btn mt-4 inline-block">
-          Back home
-        </Link>
+        <Link to="/" className="btn mt-4 inline-block">Back home</Link>
       </div>
     );
   }
 
-  const creatorHandle = creator?.username
-    ? `/u/${creator.username}`
-    : creator
-    ? `/u/${creator.id}`
-    : "#";
-
-  const ownerHandle =
-    owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
-
+  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
+  const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
   const isOwner = !!viewerId && !!art.owner_id && viewerId === art.owner_id;
   const isSeller = !!activeListing && viewerId === activeListing.seller_id;
   const canBuy = !!activeListing && !!viewerId && !isSeller;
 
   return (
-    <div className="max-w-6xl mx-auto p-6 grid gap-6 md:grid-cols-[1.2fr,0.8fr]">
-      <div className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900">
-        {art.image_url ? (
-          <img
-            src={art.image_url}
-            alt={art.title ?? "Artwork"}
-            className="w-full h-full object-contain bg-neutral-900"
-          />
-        ) : (
-          <div className="aspect-square grid place-items-center text-neutral-400">
-            No image
+    <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
+      {/* Media + gallery */}
+      <div className="lg:col-span-7">
+        <div className="rounded-2xl overflow-hidden border border-white/10 bg-neutral-900">
+          {mainUrl ? (
+            <img src={mainUrl} alt={art.title ?? "Artwork"} className="w-full h-full object-contain bg-neutral-900" />
+          ) : (
+            <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
+          )}
+        </div>
+        {(files?.length || 0) > 0 && (
+          <div className="mt-3 grid grid-cols-5 gap-2">
+            {[{ url: art.image_url } as any, ...files].slice(0, 10).map((f, i) => (
+              <button
+                key={i}
+                onClick={() => setMainUrl(f.url)}
+                className={`aspect-square overflow-hidden rounded-lg border ${mainUrl === f.url ? "border-white/40" : "border-white/10"} bg-neutral-900`}
+              >
+                <img src={f.url} className="h-full w-full object-cover" />
+              </button>
+            ))}
           </div>
         )}
       </div>
 
-      <div className="space-y-4">
+      {/* Right column */}
+      <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6">
         {msg && <p className="text-sm text-amber-300">{msg}</p>}
 
-        <div>
-          <h1 className="text-2xl font-bold">{art.title || "Untitled"}</h1>
-          <p className="text-sm text-neutral-400">
-            Minted {new Date(art.created_at).toLocaleDateString()}
-          </p>
+        <div className="space-y-1">
+          <h1 className="text-3xl font-semibold">{art.title || "Untitled"}</h1>
+          <p className="text-sm text-neutral-400">Minted {new Date(art.created_at).toLocaleDateString()}</p>
         </div>
 
         <div className="card space-y-3">
           <div className="flex items-center gap-3">
-            {creator?.avatar_url ? (
-              <img
-                src={creator.avatar_url}
-                alt="creator avatar"
-                className="h-8 w-8 rounded-full object-cover"
-              />
-            ) : null}
+            {creator?.avatar_url ? <img src={creator.avatar_url} className="h-8 w-8 rounded-full object-cover" /> : null}
             <div className="text-sm">
               <div>
                 By{" "}
@@ -260,114 +257,76 @@ export default function ArtworkDetail() {
           </div>
         )}
 
-        {/* Listing (from listings table) */}
+        {/* Listing summary */}
         <div className="card">
           <h3 className="font-semibold mb-2">Listing</h3>
           {activeListing ? (
-            <p>
-              {activeListing.fixed_price} {activeListing.sale_currency}
-            </p>
+            <p>{activeListing.fixed_price} {activeListing.sale_currency}</p>
           ) : (
             <p className="text-sm text-neutral-400">Not currently listed.</p>
           )}
         </div>
 
-        {/* Buy Now (visible if there is a listing and you are not the seller) */}
+        {/* Buy Now */}
         {canBuy && (
           <div className="card space-y-2">
             <div className="text-sm font-medium">Buy now</div>
             <button className="btn" onClick={onBuy}>
               Buy for {activeListing?.fixed_price} {activeListing?.sale_currency}
             </button>
-            <div className="text-[11px] text-neutral-500">
-              (Transfers ownership immediately for MVP.)
-            </div>
+            <div className="text-[11px] text-neutral-500">(Transfers ownership immediately for MVP.)</div>
           </div>
         )}
 
-        {/* Owner-only: List for sale panel */}
+        {/* Owner: list form */}
         {isOwner && (
           <OwnerListPanel
             artworkId={art.id}
-            onUpdated={async () => {
-              const l = await fetchActiveListingForArtwork(art.id);
-              setActiveListing(l);
-            }}
+            onUpdated={async () => setActiveListing(await fetchActiveListingForArtwork(art.id))}
           />
         )}
 
-        {/* IPFS section */}
+        {/* IPFS */}
         <div className="card">
           <h3 className="font-semibold">IPFS</h3>
-
           {art.token_uri ? (
             <div className="text-xs space-y-1 mt-2">
               <div>✅ Already pinned</div>
-              {art.ipfs_image_cid && (
-                <div>
-                  Image CID: <code>{art.ipfs_image_cid}</code>
-                </div>
-              )}
+              {art.ipfs_image_cid && <div>Image CID: <code>{art.ipfs_image_cid}</code></div>}
               {art.ipfs_metadata_cid && (
                 <div>
                   Metadata CID: <code>{art.ipfs_metadata_cid}</code>{" "}
-                  <a
-                    className="underline"
-                    href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
+                  <a className="underline" href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`} target="_blank" rel="noreferrer">
                     Open metadata
                   </a>
                 </div>
               )}
-              <div>
-                Token URI: <code>{art.token_uri}</code>
-              </div>
+              <div>Token URI: <code>{art.token_uri}</code></div>
             </div>
           ) : (
             <div className="flex items-center gap-3">
               <button
                 className="btn"
                 onClick={handlePin}
-                disabled={
-                  pinLoading ||
-                  !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
-                }
-                title={
-                  viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
-                    ? ""
-                    : "Only the creator/owner can pin"
-                }
+                disabled={pinLoading || !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))}
+                title={viewerId && (viewerId === art.creator_id || viewerId === art.owner_id) ? "" : "Only the creator/owner can pin"}
               >
                 {pinLoading ? "Pinning…" : "Pin to IPFS"}
               </button>
               {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
-              {pinData && (
-                <span className="text-xs text-neutral-300">
-                  ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
-                </span>
-              )}
+              {pinData && <span className="text-xs text-neutral-300">✅ Pinned — CID: <code>{pinData.metadataCID}</code></span>}
             </div>
           )}
         </div>
 
         <div className="card">
           <h3 className="font-semibold mb-2">Price history</h3>
-          <p className="text-sm text-neutral-400">
-            Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
-          </p>
+          <p className="text-sm text-neutral-400">Chart coming soon. We’ll plot points from <code>artwork_prices</code>.</p>
         </div>
 
         <div className="flex gap-2">
-          <Link to="/" className="btn">
-            Back
-          </Link>
-          {creator && (
-            <Link to={creatorHandle} className="btn">
-              View creator
-            </Link>
-          )}
+          <Link to="/" className="btn">Back</Link>
+          {creator && <Link to={creatorHandle} className="btn">View creator</Link>}
         </div>
       </div>
     </div>
@@ -375,14 +334,7 @@ export default function ArtworkDetail() {
 }
 
 /* ---------- Owner List Panel ---------- */
-
-function OwnerListPanel({
-  artworkId,
-  onUpdated,
-}: {
-  artworkId: string;
-  onUpdated: () => Promise<void> | void;
-}) {
+function OwnerListPanel({ artworkId, onUpdated }: { artworkId: string; onUpdated: () => Promise<void> | void; }) {
   const [price, setPrice] = useState<string>("");
   const [currency, setCurrency] = useState<string>("ETH");
   const [msg, setMsg] = useState<string | null>(null);
@@ -417,11 +369,7 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select
-          className="input w-28"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
+        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
           <option value="ETH">ETH</option>
         </select>
         <button className="btn" onClick={onList} disabled={busy}>
@@ -429,9 +377,7 @@ function OwnerListPanel({
         </button>
       </div>
       {msg && <div className="text-xs text-neutral-300">{msg}</div>}
-      <div className="text-[11px] text-neutral-500">
-        (Creates/updates a fixed-price listing visible on Explore.)
-      </div>
+      <div className="text-[11px] text-neutral-500">(Creates/updates a fixed-price listing visible on Explore.)</div>
     </div>
   );
 }
