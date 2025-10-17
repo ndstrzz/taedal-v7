@@ -209,7 +209,7 @@ export default function PublicProfile() {
       {/* Cover with vignette + bottom fade (now responsive height via clamp) */}
       <div
         className="relative border-b border-neutral-800 overflow-hidden"
-        style={{ height: "clamp(12rem, 28vh, 24rem)" }}
+        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
       >
         {coverUrl ? (
           <img
