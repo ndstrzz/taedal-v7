@@ -1,5 +1,4 @@
-// app/src/routes/create/CreateArtwork.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -11,6 +10,7 @@ import { sha256File } from "../../lib/hashFile";
 import MintModal from "../../components/MintModal";
 import SimilarityOverlay from "../../components/SimilarityOverlay";
 import useMinBusy from "../../hooks/useMinBusy";
+import CropModal from "../../components/CropModal";
 
 type DuplicateHit = {
   id: string;
@@ -21,16 +21,13 @@ type DuplicateHit = {
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
 
-function UploadIcon(props: any) {
-  return (
-    <svg viewBox="0 0 24 24" width="28" height="28" {...props}>
-      <path
-        fill="currentColor"
-        d="M12 3l4 4h-3v6h-2V7H8l4-4zm8 12v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-4h2v4h12v-4h2z"
-      />
-    </svg>
-  );
-}
+type LocalImage = {
+  original: File;     // the file user picked (for name)
+  current: File;      // current working file (cropped/replaced)
+  previewUrl: string; // object URL for display
+};
+
+const MAX_IMAGES = 6;
 
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
@@ -39,16 +36,20 @@ export default function CreateArtworkWizard() {
   // Wizard step
   const [step, setStep] = useState<1 | 2 | 3>(1);
 
-  // Step 1 (upload/dupe)
-  const [pickedFile, setPickedFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [fileHash, setFileHash] = useState<string | null>(null);
+  // Upload state
+  const [images, setImages] = useState<LocalImage[]>([]);
+  const [fileHash, setFileHash] = useState<string | null>(null); // hash of cover (images[0])
   const [dupes, setDupes] = useState<DuplicateHit[] | null>(null);
   const [ackOriginal, setAckOriginal] = useState(false);
   const [checkingDupes, setCheckingDupes] = useState(false);
   const [globalMsg, setGlobalMsg] = useState<string | null>(null);
 
-  // Step 2 (details form, LEAN)
+  // Cropper and replace
+  const [cropTargetIdx, setCropTargetIdx] = useState<number | null>(null);
+  const replaceInputRef = useRef<HTMLInputElement>(null);
+  const [replaceIdx, setReplaceIdx] = useState<number | null>(null);
+
+  // Form (details)
   const {
     register,
     handleSubmit,
@@ -79,14 +80,14 @@ export default function CreateArtworkWizard() {
     },
   });
 
-  // Step 3 (pin & mint)
+  // Pin & mint
   const [pinning, setPinning] = useState(false);
   const [pinMsg, setPinMsg] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
   const [artworkId, setArtworkId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
 
-  // Gate overlays to a minimum of 5s for nicer UX
+  // overlays
   const showDupeOverlay = useMinBusy(checkingDupes, 5000);
   const showPinOverlay = useMinBusy(pinning, 5000);
   const overlayOpen = showDupeOverlay || showPinOverlay;
@@ -94,7 +95,7 @@ export default function CreateArtworkWizard() {
     ? "Pinning to IPFS…"
     : "Scanning for visually similar artworks…";
 
-  // Require login
+  // session
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -102,39 +103,34 @@ export default function CreateArtworkWizard() {
     })();
   }, []);
 
-  // cleanup preview URL
+  // cleanup object URLs
   useEffect(() => {
     return () => {
-      if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl);
+      images.forEach((im) => {
+        if (im.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(im.previewUrl);
+      });
     };
-  }, [previewUrl]);
+  }, [images]);
 
-  // STEP 1: file → hash → duplicates
-  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0] ?? null;
-    setPickedFile(f);
-    setDupes(null);
-    setAckOriginal(false);
-    setFileHash(null);
-    setGlobalMsg(null);
+  /* ─────────────────────────── upload helpers ─────────────────────────── */
 
-    // preview immediately
-    if (previewUrl?.startsWith("blob:")) URL.revokeObjectURL(previewUrl || "");
-    setPreviewUrl(f ? URL.createObjectURL(f) : null);
+  function fileToLocal(f: File): LocalImage {
+    return { original: f, current: f, previewUrl: URL.createObjectURL(f) };
+  }
 
-    if (!f) return;
-
+  async function runDupeCheckAgainstCover(local: LocalImage[]) {
+    // cover is the first image after any appends/reorders
+    const cover = (local.length > 0 ? local[0] : images[0])?.current;
+    if (!cover) return;
     setCheckingDupes(true);
     try {
-      const hash = await sha256File(f);
+      const hash = await sha256File(cover);
       setFileHash(hash);
-
       const { data, error } = await supabase
         .from("artworks")
         .select("id,title,image_url,creator_id")
         .eq("image_sha256", hash)
         .limit(5);
-
       if (error) throw error;
       setDupes((data as DuplicateHit[]) ?? []);
     } catch (e: any) {
@@ -144,28 +140,104 @@ export default function CreateArtworkWizard() {
     }
   }
 
-  // STEP 2 → 3: create artwork, then pin
+  // Main "Upload" (adds/appends; does NOT replace)
+  async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+
+    // how many can we still accept?
+    const remaining = Math.max(0, MAX_IMAGES - images.length);
+    const toAdd = files.slice(0, remaining).map(fileToLocal);
+
+    if (toAdd.length === 0) {
+      setGlobalMsg(`You can upload up to ${MAX_IMAGES} images.`);
+      e.target.value = "";
+      return;
+    }
+
+    setDupes(null);
+    setAckOriginal(false);
+    setGlobalMsg(null);
+
+    const next = [...images, ...toAdd];
+    setImages(next);
+    await runDupeCheckAgainstCover(toAdd); // will check current cover (which may be the old one)
+    e.target.value = "";
+  }
+
+  // Replace a specific tile
+  async function onReplaceFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    e.target.value = "";
+    if (!f || replaceIdx == null) return;
+    setImages((arr) => {
+      const copy = [...arr];
+      const prev = copy[replaceIdx];
+      if (prev?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(prev.previewUrl);
+      copy[replaceIdx] = fileToLocal(f);
+      return copy;
+    });
+    // If we replaced the cover, redo dupe check
+    if (replaceIdx === 0) {
+      await runDupeCheckAgainstCover([]);
+    }
+    setReplaceIdx(null);
+  }
+
+  function setAsCover(idx: number) {
+    if (idx === 0) return;
+    setImages((arr) => {
+      const copy = [...arr];
+      const [picked] = copy.splice(idx, 1);
+      copy.unshift(picked);
+      return copy;
+    });
+    // after reorder, no need to re-hash; cover file didn't change
+  }
+
+  function removeImage(idx: number) {
+    setImages((arr) => {
+      const copy = [...arr];
+      const [rm] = copy.splice(idx, 1);
+      if (rm?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(rm.previewUrl);
+      return copy;
+    });
+    // If we deleted the cover, re-run dupe check on the new cover (if any)
+    if (idx === 0 && images.length > 1) {
+      // run on next tick after state updates
+      setTimeout(() => runDupeCheckAgainstCover([]), 0);
+    }
+  }
+
+  const currentCropFile = useMemo(
+    () => (cropTargetIdx == null ? null : images[cropTargetIdx]?.current) as File | null,
+    [cropTargetIdx, images]
+  );
+
+  /* ───────────────────────── create → pin → mint ───────────────────────── */
+
   const onSubmitDetails = handleSubmit(async (values) => {
-    if (!userId || !pickedFile) {
-      setGlobalMsg("Please sign in and pick a file.");
+    if (!userId || images.length === 0) {
+      setGlobalMsg("Please sign in and upload at least one image.");
       return;
     }
     setGlobalMsg(null);
 
     try {
-      // 1) upload
-      const uploaded = await uploadToArtworksBucket(pickedFile, userId);
+      // 1) upload cover
+      const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
 
-      // 2) insert row (list/sale fields intentionally left null)
+      // 2) create artwork row
       const payload: any = {
         creator_id: userId,
         owner_id: userId,
         title: values.title,
         description: values.description || null,
-        image_url: uploaded.publicUrl,
-        image_width: uploaded.width ?? null,
-        image_height: uploaded.height ?? null,
-        mime: uploaded.mime ?? "image/*",
+
+        image_url: coverUpload.publicUrl,
+        image_width: coverUpload.width ?? null,
+        image_height: coverUpload.height ?? null,
+        mime: coverUpload.mime ?? "image/*",
         image_sha256: fileHash ?? null,
 
         medium: values.medium || null,
@@ -193,34 +265,41 @@ export default function CreateArtworkWizard() {
         pin_status: "pending",
       };
 
-      const { data: row, error } = await supabase
-        .from("artworks")
-        .insert(payload)
-        .select("id")
-        .single();
+      const { data: row, error } = await supabase.from("artworks").insert(payload).select("id").single();
       if (error) throw error;
 
       setArtworkId(row.id);
       setStep(3);
 
+      // 2b) upload additional images → artwork_files
+      if (images.length > 1) {
+        const uploads = await Promise.all(
+          images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId))
+        );
+        const records = uploads.map((up, i) => ({
+          artwork_id: row.id,
+          url: up.publicUrl,
+          kind: "image" as const,
+          position: i + 1,
+        }));
+        await supabase.from("artwork_files").insert(records).catch(() => {});
+      }
+
       // 3) pin
       setPinning(true);
       setPinMsg("Pinning to IPFS…");
 
-      const { data: pin, error: pinErr } = await supabase.functions.invoke<PinResp>(
-        "pin-artwork",
-        { body: { artwork_id: row.id } }
-      );
+      const { data: pin, error: pinErr } = await supabase.functions.invoke<PinResp>("pin-artwork", {
+        body: { artwork_id: row.id },
+      });
       if (pinErr) throw pinErr;
 
       setPinning(false);
       setPinData(pin as PinResp);
       setPinMsg("Pinned ✔ — ready to mint");
 
-      // best-effort auto-activate
-      try {
-        await supabase.from("artworks").update({ status: "active" }).eq("id", row.id);
-      } catch {}
+      // publish (best-effort)
+      await supabase.from("artworks").update({ status: "active" }).eq("id", row.id).catch(() => {});
     } catch (e: any) {
       setPinning(false);
       setPinMsg(e?.message ?? "Failed during create/pin");
@@ -228,56 +307,98 @@ export default function CreateArtworkWizard() {
     }
   });
 
-  if (!userId) {
-    return <div className="p-6">Sign in to create an artwork.</div>;
-  }
+  if (!userId) return <div className="p-6">Sign in to create an artwork.</div>;
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6">
+    <div className="max-w-4xl mx-auto p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Create artwork</h1>
       {globalMsg && <div className="text-sm text-amber-300">{globalMsg}</div>}
 
       <div className="text-xs text-neutral-400">
-        Step {step} of 3: {step === 1 ? "Upload" : step === 2 ? "Details" : "Pin & Mint"}
+        Step {step} of 3: {step === 1 ? "Upload" : step === 2 ? "Details" : "Preview & Mint"}
       </div>
 
-      {/* STEP 1 — Upload UI (inspired style) */}
+      {/* STEP 1: media uploader */}
       {step === 1 && (
-        <div className="grid md:grid-cols-3 gap-6">
-          {/* big drop/upload area */}
-          <div className="md:col-span-2">
-            <label className="block cursor-pointer rounded-2xl border border-white/10 bg-white/5 hover:bg-white/[0.08] transition p-8 text-center">
-              <input type="file" accept="image/*" className="hidden" onChange={onPick} />
-              <div className="mx-auto w-14 h-14 rounded-full grid place-items-center bg-white/10 mb-3">
-                <UploadIcon />
-              </div>
-              <div className="text-lg font-medium">Upload media</div>
-              <div className="text-xs text-white/70 mt-1">
-                Photos up to ~8&nbsp;MB. JPG / PNG / WebP. Prefer square or 4:5.
-              </div>
-              <button type="button" className="btn mt-4">Upload</button>
-            </label>
-
-            {/* thumbnail rail like in your reference */}
-            <div className="mt-4 grid grid-cols-4 sm:grid-cols-6 gap-2">
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div
-                  key={i}
-                  className="aspect-square rounded-lg border border-white/10 bg-neutral-900 grid place-items-center overflow-hidden"
-                >
-                  {i === 0 && previewUrl ? (
-                    <img src={previewUrl} className="w-full h-full object-cover" />
-                  ) : (
-                    <div className="opacity-40">
-                      <UploadIcon />
-                    </div>
-                  )}
+        <div className="grid gap-6 lg:grid-cols-12">
+          {/* Left: upload box + rail */}
+          <div className="lg:col-span-8 space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <div className="grid place-items-center gap-2 py-6">
+                <div className="rounded-full h-10 w-10 grid place-items-center bg-white/10">⤴</div>
+                <div className="text-sm font-medium">Upload media</div>
+                <div className="text-xs text-white/60">
+                  Photos up to ~8 MB, JPG / PNG / WebP. Prefer square or 4:5.
                 </div>
-              ))}
+                <label className="btn mt-2 cursor-pointer">
+                  <input type="file" accept="image/*" multiple className="hidden" onChange={onPick} />
+                  Upload
+                </label>
+              </div>
             </div>
 
+            {/* Rail of tiles (always shows crop / replace / set cover / remove) */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+              {[...images, ...Array(Math.max(0, MAX_IMAGES - images.length)).fill(null)].map(
+                (im, idx) =>
+                  im ? (
+                    <div
+                      key={`im-${idx}`}
+                      className={`relative rounded-xl overflow-hidden border ${
+                        idx === 0 ? "border-white/40" : "border-white/10"
+                      } bg-neutral-900 group`}
+                    >
+                      <img src={im.previewUrl} className="h-24 w-full object-cover" />
+                      <div className="absolute inset-x-0 bottom-0 p-1.5 flex flex-wrap gap-1 bg-black/45 backdrop-blur">
+                        <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(idx)}>
+                          Crop
+                        </button>
+                        <button
+                          className="btn px-2 py-1 text-xs"
+                          onClick={() => {
+                            setReplaceIdx(idx);
+                            replaceInputRef.current?.click();
+                          }}
+                        >
+                          Replace
+                        </button>
+                        {idx !== 0 && (
+                          <button className="btn px-2 py-1 text-xs" onClick={() => setAsCover(idx)}>
+                            Set cover
+                          </button>
+                        )}
+                        <button className="btn px-2 py-1 text-xs" onClick={() => removeImage(idx)}>
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <label
+                      key={`slot-${idx}`}
+                      className="rounded-xl border border-white/10 bg-neutral-900/40 grid place-items-center h-24 cursor-pointer hover:bg-white/5"
+                      title="Add image"
+                    >
+                      <input type="file" accept="image/*" className="hidden" onChange={onPick} />
+                      <span className="text-xl opacity-70">＋</span>
+                    </label>
+                  )
+              )}
+            </div>
+
+            {/* Hidden replace input */}
+            <input
+              ref={replaceInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={onReplaceFile}
+            />
+
+            {/* Duplicate hits */}
+            {checkingDupes && <div className="text-sm">Checking for duplicates…</div>}
+
             {dupes && dupes.length > 0 && (
-              <div className="mt-4 space-y-2">
+              <div className="space-y-2">
                 <div className="text-sm">
                   We found artworks with the same file. Please confirm you are the original creator to continue:
                 </div>
@@ -304,32 +425,12 @@ export default function CreateArtworkWizard() {
                 </label>
               </div>
             )}
-          </div>
 
-          {/* live preview card (also shows while still on step 1) */}
-          <div className="md:col-span-1">
-            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <div className="text-sm mb-2">Preview</div>
-              <div className="aspect-square rounded-lg overflow-hidden bg-neutral-900 border border-white/10">
-                {previewUrl ? (
-                  <img src={previewUrl} className="w-full h-full object-contain" />
-                ) : (
-                  <div className="grid place-items-center h-full text-white/60 text-xs">
-                    No image yet
-                  </div>
-                )}
-              </div>
-              <div className="mt-3">
-                <div className="text-sm font-medium line-clamp-1">{watch("title") || "—"}</div>
-                <div className="text-xs text-neutral-400">By you • Not listed</div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex gap-3">
+            <div className="flex gap-3">
               <button
                 className="btn"
                 disabled={
-                  !pickedFile ||
+                  images.length === 0 ||
                   checkingDupes ||
                   (dupes && dupes.length > 0 && !ackOriginal)
                 }
@@ -339,14 +440,38 @@ export default function CreateArtworkWizard() {
               </button>
             </div>
           </div>
+
+          {/* Right: live preview card */}
+          <div className="lg:col-span-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3 sticky top-6">
+              <div className="text-sm font-medium">Preview</div>
+              <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
+                {images[0] ? (
+                  <img src={images[0].previewUrl} className="h-full w-full object-cover" />
+                ) : (
+                  <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
+                )}
+              </div>
+              <div className="space-y-1">
+                <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
+                <div className="text-xs text-white/60">By you • Not listed</div>
+              </div>
+              {images.length > 1 && (
+                <div className="grid grid-cols-5 gap-2">
+                  {images.slice(1).map((im, i) => (
+                    <img key={i} src={im.previewUrl} className="h-16 w-full rounded-md object-cover border border-white/10" />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* STEP 2 — Details + side preview */}
+      {/* STEP 2 — details */}
       {step === 2 && (
-        <div className="grid md:grid-cols-3 gap-6">
-          <form onSubmit={onSubmitDetails} className="md:col-span-2 space-y-6">
-            {/* Required */}
+        <form onSubmit={onSubmitDetails} className="grid gap-6 lg:grid-cols-12">
+          <div className="lg:col-span-7 space-y-6">
             <div className="card grid gap-3">
               <div>
                 <label className="block text-sm">Title *</label>
@@ -365,7 +490,6 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            {/* Optional: Artwork info */}
             <div className="card grid gap-3">
               <div className="text-sm font-medium">Artwork info (optional)</div>
               <div className="grid md:grid-cols-2 gap-3">
@@ -380,7 +504,6 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            {/* Optional: Dimensions */}
             <div className="card grid gap-3">
               <div className="text-sm font-medium">Dimensions (optional)</div>
               <div className="grid md:grid-cols-4 gap-3">
@@ -390,9 +513,7 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("width", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
@@ -401,9 +522,7 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("height", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
@@ -412,18 +531,14 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("depth", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
                   <select
                     className="input"
-                    {...register("dim_unit", {
-                      setValueAs: (v) => (v === "" ? undefined : v),
-                    })}
+                    {...register("dim_unit", { setValueAs: (v) => (v === "" ? undefined : v) })}
                   >
                     <option value=""></option>
                     <option value="cm">cm</option>
@@ -434,7 +549,6 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            {/* Optional: Royalties */}
             <div className="card grid gap-3">
               <div className="text-sm font-medium">Royalties (optional)</div>
               <div>
@@ -442,13 +556,9 @@ export default function CreateArtworkWizard() {
                 <input
                   className="input"
                   type="number"
-                  {...register("royalty_bps", {
-                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                  })}
+                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                 />
-                <p className="text-xs text-neutral-400 mt-1">
-                  500 bps = 5%. You can change this later for future sales if your policy allows.
-                </p>
+                <p className="text-xs text-neutral-400 mt-1">500 bps = 5%.</p>
               </div>
             </div>
 
@@ -456,52 +566,70 @@ export default function CreateArtworkWizard() {
               <button className="btn" type="submit">Continue</button>
               <button type="button" className="btn" onClick={() => setStep(1)}>Back</button>
             </div>
-          </form>
+          </div>
 
-          {/* Side preview (title + image) */}
-          <aside className="md:col-span-1">
-            <div className="rounded-xl border border-white/10 bg-white/5 p-3">
-              <div className="text-sm mb-2">Preview</div>
-              <div className="aspect-square rounded-lg overflow-hidden bg-neutral-900 border border-white/10">
-                {previewUrl ? (
-                  <img src={previewUrl} className="w-full h-full object-contain" />
+          {/* Live preview during details */}
+          <div className="lg:col-span-5">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3 sticky top-6">
+              <div className="text-sm font-medium">Preview</div>
+              <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
+                {images[0] ? (
+                  <img src={images[0].previewUrl} className="h-full w-full object-cover" />
                 ) : (
-                  <div className="grid place-items-center h-full text-white/60 text-xs">
-                    No image yet
-                  </div>
+                  <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
                 )}
               </div>
-              <div className="mt-3">
-                <div className="text-sm font-medium line-clamp-1">{watch("title") || "Untitled"}</div>
-                <div className="text-xs text-neutral-400">By you • Not listed</div>
+              <div className="space-y-1">
+                <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
+                <div className="text-xs text-white/60">By you • Not listed</div>
+              </div>
+              {images.length > 1 && (
+                <div className="grid grid-cols-5 gap-2">
+                  {images.slice(1).map((im, i) => (
+                    <img key={i} src={im.previewUrl} className="h-16 w-full rounded-md object-cover border border-white/10" />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </form>
+      )}
+
+      {/* STEP 3: final preview & mint */}
+      {step === 3 && (
+        <div className="grid gap-6 lg:grid-cols-12">
+          <div className="lg:col-span-7 space-y-4">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+              <div className="text-sm font-medium mb-2">Preview</div>
+              <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
+                {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : null}
               </div>
             </div>
-          </aside>
+          </div>
+
+          <div className="lg:col-span-5 space-y-3">
+            <div className="card space-y-3">
+              <div className="text-sm">{pinning ? "Pinning to IPFS…" : "Ready to mint"}</div>
+              {pinMsg && <div className="text-xs text-neutral-300">{pinMsg}</div>}
+              {pinData && (
+                <div className="text-xs space-y-1">
+                  <div>Image CID: <code>{pinData.imageCID}</code></div>
+                  <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
+                  <div>Token URI: <code>{pinData.tokenURI}</code></div>
+                </div>
+              )}
+              {!pinning && artworkId && pinData?.tokenURI && (
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
+                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
-      {/* STEP 3: Pinning & Minting */}
-      {step === 3 && (
-        <div className="card space-y-3">
-          <div className="text-sm">{pinning ? "Pinning to IPFS…" : "Ready to mint"}</div>
-          {pinMsg && <div className="text-xs text-neutral-300">{pinMsg}</div>}
-          {pinData && (
-            <div className="text-xs space-y-1">
-              <div>Image CID: <code>{pinData.imageCID}</code></div>
-              <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
-              <div>Token URI: <code>{pinData.tokenURI}</code></div>
-            </div>
-          )}
-          {!pinning && artworkId && pinData?.tokenURI && (
-            <div className="flex flex-wrap gap-2">
-              <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
-              <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Status modal */}
+      {/* modal + overlays */}
       {showMint && artworkId && pinData?.tokenURI && (
         <MintModal
           artworkId={artworkId}
@@ -513,8 +641,34 @@ export default function CreateArtworkWizard() {
         />
       )}
 
-      {/* FULL-SCREEN overlay with minimum 5s display */}
       <SimilarityOverlay open={overlayOpen} message={overlayMessage} />
+
+      {/* Crop modal per image */}
+      {cropTargetIdx != null && currentCropFile && (
+        <CropModal
+          file={currentCropFile}
+          aspect={1}
+          title="Crop image"
+          onCancel={() => setCropTargetIdx(null)}
+          onDone={(blob) => {
+            setImages((arr) => {
+              const copy = [...arr];
+              const old = copy[cropTargetIdx];
+              const nextFile = new File([blob], old.original.name.replace(/\.\w+$/, "") + ".jpg", {
+                type: "image/jpeg",
+              });
+              if (old.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(old.previewUrl);
+              const previewUrl = URL.createObjectURL(nextFile);
+              copy[cropTargetIdx] = { ...old, current: nextFile, previewUrl };
+              return copy;
+            });
+            // If cropping cover, no need to redo dupe check (hash is from pre-crop);
+            // but if you want to be strict, uncomment:
+            // if (cropTargetIdx === 0) runDupeCheckAgainstCover([]);
+            setCropTargetIdx(null);
+          }}
+        />
+      )}
     </div>
   );
 }
