@@ -1,4 +1,3 @@
-// app/src/routes/account/Account.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import CropModal from "../../components/CropModal";
@@ -380,8 +379,11 @@ export default function Account() {
 
   return (
     <div className="min-h-[100dvh]">
-      {/* Cover */}
-      <div className="relative h-48 md:h-60 bg-neutral-900 border-b border-neutral-800">
+      {/* Cover (responsive height via clamp) */}
+      <div
+        className="relative bg-neutral-900 border-b border-neutral-800"
+        style={{ height: "clamp(12rem, 28vh, 24rem)" }}
+      >
         {coverPreview && (
           <img
             src={coverPreview}

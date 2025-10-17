@@ -1,4 +1,3 @@
-// app/src/routes/users/PublicProfile.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -207,8 +206,11 @@ export default function PublicProfile() {
 
   return (
     <div className="min-h-[100dvh]">
-      {/* Cover with vignette + bottom fade (kept behind avatar, no clipping) */}
-      <div className="relative h-48 md:h-60 border-b border-neutral-800 overflow-hidden">
+      {/* Cover with vignette + bottom fade (now responsive height via clamp) */}
+      <div
+        className="relative border-b border-neutral-800 overflow-hidden"
+        style={{ height: "clamp(12rem, 28vh, 24rem)" }}
+      >
         {coverUrl ? (
           <img
             src={coverUrl}
