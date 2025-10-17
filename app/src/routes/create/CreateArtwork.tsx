@@ -178,7 +178,7 @@ export default function CreateArtworkWizard() {
     setImages((prev) => {
       const spaceLeft = Math.max(0, MAX_IMAGES - prev.length);
       const toUse = mapped.slice(0, spaceLeft);
-      startIndex = prev.length; // capture where the new ones start
+      startIndex = prev.length; // where the new ones start
       return [...prev, ...toUse];
     });
 
@@ -187,7 +187,7 @@ export default function CreateArtworkWizard() {
       await checkImageDupes(startIndex + i, mapped[i].current);
     }
 
-    // Allow selecting the same input again
+    // Allow selecting the same file(s) again
     e.currentTarget.value = "";
   }
 
@@ -297,7 +297,9 @@ export default function CreateArtworkWizard() {
         }));
         try {
           await supabase.from("artwork_files").insert(records);
-        } catch {}
+        } catch {
+          // ignore best-effort failures
+        }
       }
 
       // 3) pin
@@ -376,7 +378,10 @@ export default function CreateArtworkWizard() {
                     </div>
                   )}
                   {im.dupes && im.dupes.length > 0 && !im.checking && (
-                    <div className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow" title="Possible duplicate" />
+                    <div
+                      className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow"
+                      title="Possible duplicate"
+                    />
                   )}
                   {/* actions */}
                   <div className="absolute inset-x-0 bottom-0 p-2 flex gap-2 bg-black/40 backdrop-blur">
@@ -415,8 +420,13 @@ export default function CreateArtworkWizard() {
                 </div>
                 <div className="grid gap-2">
                   {allDupes.map((d, idx) => (
-                    <div key={`${d.id}-${idx}`} className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2">
-                      {d.image_url && <img src={d.image_url} className="h-14 w-14 object-cover rounded" />}
+                    <div
+                      key={`${d.id}-${idx}`}
+                      className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2"
+                    >
+                      {d.image_url && (
+                        <img src={d.image_url} className="h-14 w-14 object-cover rounded" />
+                      )}
                       <div className="text-sm">
                         <div className="font-medium">{d.title ?? "Untitled"}</div>
                         <div className="text-neutral-400 text-xs">id: {d.id}</div>
@@ -425,7 +435,11 @@ export default function CreateArtworkWizard() {
                   ))}
                 </div>
                 <label className="inline-flex items-center gap-2 mt-2">
-                  <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
+                  <input
+                    type="checkbox"
+                    checked={ackOriginal}
+                    onChange={(e) => setAckOriginal(e.target.checked)}
+                  />
                   <span className="text-sm">
                     I am the original creator and have the rights to mint this artwork.
                   </span>
@@ -452,7 +466,9 @@ export default function CreateArtworkWizard() {
                 {images[0] ? (
                   <img src={images[0].previewUrl} className="h-full w-full object-cover" />
                 ) : (
-                  <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
+                  <div className="grid h-full place-items-center text-neutral-500 text-sm">
+                    No image
+                  </div>
                 )}
               </div>
               <div className="space-y-1">
@@ -472,7 +488,9 @@ export default function CreateArtworkWizard() {
               <div>
                 <label className="block text-sm">Title *</label>
                 <input className="input" {...register("title")} />
-                {errors.title && <p className="text-sm text-rose-400">{errors.title.message}</p>}
+                {errors.title && (
+                  <p className="text-sm text-rose-400">{errors.title.message}</p>
+                )}
               </div>
 
               <div>
@@ -482,7 +500,10 @@ export default function CreateArtworkWizard() {
 
               <div>
                 <label className="block text-sm mb-1">Tags</label>
-                <TagsInput value={watch("tags") || []} onChange={(v) => setValue("tags", v)} />
+                <TagsInput
+                  value={watch("tags") || []}
+                  onChange={(v) => setValue("tags", v)}
+                />
               </div>
             </div>
 
@@ -491,7 +512,11 @@ export default function CreateArtworkWizard() {
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm">Medium</label>
-                  <input className="input" {...register("medium")} placeholder="Oil on canvas / Digital" />
+                  <input
+                    className="input"
+                    {...register("medium")}
+                    placeholder="Oil on canvas / Digital"
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Year created</label>
@@ -509,7 +534,10 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                    {...register("width", {
+                      setValueAs: (v) =>
+                        v === "" || v === null ? undefined : Number(v),
+                    })}
                   />
                 </div>
                 <div>
@@ -518,7 +546,10 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                    {...register("height", {
+                      setValueAs: (v) =>
+                        v === "" || v === null ? undefined : Number(v),
+                    })}
                   />
                 </div>
                 <div>
@@ -527,12 +558,20 @@ export default function CreateArtworkWizard() {
                     className="input"
                     type="number"
                     step="0.01"
-                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                    {...register("depth", {
+                      setValueAs: (v) =>
+                        v === "" || v === null ? undefined : Number(v),
+                    })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
-                  <select className="input" {...register("dim_unit", { setValueAs: (v) => (v === "" ? undefined : v) })}>
+                  <select
+                    className="input"
+                    {...register("dim_unit", {
+                      setValueAs: (v) => (v === "" ? undefined : v),
+                    })}
+                  >
                     <option value=""></option>
                     <option value="cm">cm</option>
                     <option value="in">in</option>
@@ -549,22 +588,34 @@ export default function CreateArtworkWizard() {
                 <input
                   className="input"
                   type="number"
-                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  {...register("royalty_bps", {
+                    setValueAs: (v) =>
+                      v === "" || v === null ? undefined : Number(v),
+                  })}
                 />
                 <p className="text-xs text-neutral-400 mt-1">500 bps = 5%.</p>
               </div>
             </div>
 
             <div className="flex items-center gap-3">
-              <button className="btn" type="submit">Continue</button>
-              <button type="button" className="btn" onClick={() => setStep(1)}>Back</button>
+              <button className="btn" type="submit">
+                Continue
+              </button>
+              <button type="button" className="btn" onClick={() => setStep(1)}>
+                Back
+              </button>
             </div>
 
-            {/* If any dupes exist, also show the rights checkbox here for clarity */}
             {anyDupes && (
               <label className="inline-flex items-center gap-2">
-                <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
-                <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
+                <input
+                  type="checkbox"
+                  checked={ackOriginal}
+                  onChange={(e) => setAckOriginal(e.target.checked)}
+                />
+                <span className="text-sm">
+                  I am the original creator and have the rights to mint this artwork.
+                </span>
               </label>
             )}
           </div>
@@ -577,17 +628,25 @@ export default function CreateArtworkWizard() {
                 {images[0] ? (
                   <img src={images[0].previewUrl} className="h-full w-full object-cover" />
                 ) : (
-                  <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
+                  <div className="grid h-full place-items-center text-neutral-500 text-sm">
+                    No image
+                  </div>
                 )}
               </div>
               <div className="space-y-1">
-                <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
+                <div className="text-lg font-semibold truncate">
+                  {watch("title") || "Untitled"}
+                </div>
                 <div className="text-xs text-white/60">By you • Not listed</div>
               </div>
               {images.length > 1 && (
                 <div className="grid grid-cols-5 gap-2">
                   {images.slice(1).map((im, i) => (
-                    <img key={i} src={im.previewUrl} className="h-16 w-full rounded-md object-cover border border-white/10" />
+                    <img
+                      key={i}
+                      src={im.previewUrl}
+                      className="h-16 w-full rounded-md object-cover border border-white/10"
+                    />
                   ))}
                 </div>
               )}
@@ -603,26 +662,40 @@ export default function CreateArtworkWizard() {
             <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
               <div className="text-sm font-medium mb-2">Preview</div>
               <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
-                {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : null}
+                {images[0] ? (
+                  <img src={images[0].previewUrl} className="h-full w-full object-cover" />
+                ) : null}
               </div>
             </div>
           </div>
 
           <div className="lg:col-span-5 space-y-3">
             <div className="card space-y-3">
-              <div className="text-sm">{pinning ? "Pinning to IPFS…" : "Ready to mint"}</div>
+              <div className="text-sm">
+                {pinning ? "Pinning to IPFS…" : "Ready to mint"}
+              </div>
               {pinMsg && <div className="text-xs text-neutral-300">{pinMsg}</div>}
               {pinData && (
                 <div className="text-xs space-y-1">
-                  <div>Image CID: <code>{pinData.imageCID}</code></div>
-                  <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
-                  <div>Token URI: <code>{pinData.tokenURI}</code></div>
+                  <div>
+                    Image CID: <code>{pinData.imageCID}</code>
+                  </div>
+                  <div>
+                    Metadata CID: <code>{pinData.metadataCID}</code>
+                  </div>
+                  <div>
+                    Token URI: <code>{pinData.tokenURI}</code>
+                  </div>
                 </div>
               )}
               {!pinning && artworkId && pinData?.tokenURI && (
                 <div className="flex flex-wrap gap-2">
-                  <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
-                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
+                  <button className="btn" onClick={() => setShowMint(true)}>
+                    Mint now
+                  </button>
+                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>
+                    Skip (view artwork)
+                  </button>
                 </div>
               )}
             </div>
@@ -653,21 +726,38 @@ export default function CreateArtworkWizard() {
           title="Crop image"
           onCancel={() => setCropTargetIdx(null)}
           onDone={(blob) => {
+            // Create the new file first so we can pass it directly to the dupe checker
+            const idx = cropTargetIdx;
+            const existing = images[idx];
+            if (!existing) return setCropTargetIdx(null);
+
+            const nextFile = new File(
+              [blob],
+              existing.original.name.replace(/\.\w+$/, "") + ".jpg",
+              { type: "image/jpeg" }
+            );
+            const nextPreview = URL.createObjectURL(nextFile);
+
+            // Update state
             setImages((arr) => {
               const copy = [...arr];
-              const old = copy[cropTargetIdx];
-              const nextFile = new File([blob], old.original.name.replace(/\.\w+$/, "") + ".jpg", {
-                type: "image/jpeg",
-              });
-              if (old.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(old.previewUrl);
-              const previewUrl = URL.createObjectURL(nextFile);
-              copy[cropTargetIdx] = { ...old, current: nextFile, previewUrl, dupes: null, hash: null };
+              const old = copy[idx];
+              if (old?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(old.previewUrl);
+              copy[idx] = {
+                ...old,
+                current: nextFile,
+                previewUrl: nextPreview,
+                dupes: null,
+                hash: null,
+              };
               return copy;
             });
-            // re-check similarity for the newly cropped image
-            const idx = cropTargetIdx;
+
             setCropTargetIdx(null);
-            checkImageDupes(idx, (images[idx]?.current as File) ?? currentCropFile);
+
+            // Re-run similarity scan for the freshly cropped image (use the new file directly,
+            // not state, to avoid any timing race with setState).
+            checkImageDupes(idx, nextFile);
           }}
         />
       )}
