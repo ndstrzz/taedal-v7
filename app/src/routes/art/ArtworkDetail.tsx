@@ -1,3 +1,4 @@
+// app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -23,7 +24,12 @@ type Artwork = {
   token_uri?: string | null;
 };
 
-type ArtworkFile = { id: string; url: string; kind: string | null; position: number | null };
+type ArtworkFile = {
+  id: string;
+  url: string;
+  kind: string | null;
+  position: number | null;
+};
 
 type Profile = {
   id: string;
@@ -64,7 +70,9 @@ function Countdown({ endAt }: { endAt: string }) {
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
-      <div className="text-sm font-semibold tabular-nums">{v.toString().padStart(2, "0")}</div>
+      <div className="text-sm font-semibold tabular-nums">
+        {v.toString().padStart(2, "0")}
+      </div>
       <div className="text-[10px] text-white/70">{label}</div>
     </div>
   );
@@ -79,7 +87,7 @@ function Countdown({ endAt }: { endAt: string }) {
   );
 }
 
-/* ─────────────────────────── icon doodads ─────────────────────────── */
+/* ─────────────────────────── icons ─────────────────────────── */
 
 function HeartIcon(props: any) {
   return (
@@ -115,13 +123,16 @@ export default function ArtworkDetail() {
   const [msg, setMsg] = useState<string | null>(null);
 
   // listing
-  const [activeListing, setActiveListing] = useState<Listing | (Listing & {
-    type?: string | null;
-    end_at?: string | null;
-    start_at?: string | null;
-    reserve_price?: number | null;
-    quantity?: number | null;
-  }) | null>(null);
+  const [activeListing, setActiveListing] = useState<
+    | (Listing & {
+        type?: string | null;
+        end_at?: string | null;
+        start_at?: string | null;
+        reserve_price?: number | null;
+        quantity?: number | null;
+      })
+    | null
+  >(null);
 
   // gallery
   const [files, setFiles] = useState<ArtworkFile[]>([]);
@@ -131,12 +142,12 @@ export default function ArtworkDetail() {
   const [tab, setTab] = useState<"owner" | "comments" | "history">("owner");
 
   // owners & history
-  const [owners, setOwners] = useState<{ profile: Profile; quantity: number; updated_at: string }[]>(
-    []
-  );
-  const [sales, setSales] = useState<(SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]>(
-    []
-  );
+  const [owners, setOwners] = useState<
+    { profile: Profile; quantity: number; updated_at: string }[]
+  >([]);
+  const [sales, setSales] = useState<
+    (SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]
+  >([]);
 
   // pinning
   const [pinLoading, setPinLoading] = useState(false);
@@ -223,7 +234,8 @@ export default function ArtworkDetail() {
       .eq("artwork_id", artworkId);
     if (error) return;
 
-    const rows = (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
+    const rows =
+      (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
     const ids = Array.from(new Set(rows.map((r) => r.owner_id))).filter(Boolean);
     if (ids.length === 0) {
       setOwners([]);
@@ -238,7 +250,11 @@ export default function ArtworkDetail() {
     (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
     setOwners(
       rows
-        .map((r) => ({ profile: map.get(r.owner_id)!, quantity: r.quantity, updated_at: r.updated_at }))
+        .map((r) => ({
+          profile: map.get(r.owner_id)!,
+          quantity: r.quantity,
+          updated_at: r.updated_at,
+        }))
         .filter((x) => !!x.profile)
     );
   }
@@ -252,7 +268,9 @@ export default function ArtworkDetail() {
     if (error) return;
 
     const rows = (data ?? []) as SaleRow[];
-    const ids = Array.from(new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))) as string[];
+    const ids = Array.from(
+      new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))
+    ) as string[];
     let map = new Map<string, Profile>();
     if (ids.length > 0) {
       const { data: profs } = await supabase
@@ -261,7 +279,13 @@ export default function ArtworkDetail() {
         .in("id", ids);
       (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
     }
-    setSales(rows.map((r) => ({ ...r, buyer: r.buyer_id ? map.get(r.buyer_id) ?? null : null, seller: r.seller_id ? map.get(r.seller_id) ?? null : null })));
+    setSales(
+      rows.map((r) => ({
+        ...r,
+        buyer: r.buyer_id ? map.get(r.buyer_id) ?? null : null,
+        seller: r.seller_id ? map.get(r.seller_id) ?? null : null,
+      }))
+    );
   }
 
   async function handlePin() {
@@ -326,19 +350,29 @@ export default function ArtworkDetail() {
     return (
       <div className="max-w-5xl mx-auto p-6">
         {msg ? <p className="text-amber-300">{msg}</p> : null}
-        <Link to="/" className="btn mt-4 inline-block">Back home</Link>
+        <Link to="/" className="btn mt-4 inline-block">
+          Back home
+        </Link>
       </div>
     );
   }
 
-  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
-  const ownerHandle   = owner?.username ? `/u/${owner.username}`   : owner   ? `/u/${owner.id}`   : null;
+  const creatorHandle = creator?.username
+    ? `/u/${creator.username}`
+    : creator
+    ? `/u/${creator.id}`
+    : "#";
+  const ownerHandle =
+    owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art.owner_id && viewerId === art.owner_id;
-  const isSeller = !!activeListing && viewerId === (activeListing as any).seller_id;
+  const isSeller =
+    !!activeListing && viewerId === (activeListing as any).seller_id;
   const canBuy = !!activeListing && !!viewerId && !isSeller;
 
-  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction =
+    (activeListing as any)?.type === "auction" &&
+    !!(activeListing as any)?.end_at;
 
   return (
     <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
@@ -346,17 +380,29 @@ export default function ArtworkDetail() {
       <div className="lg:col-span-7">
         <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-900">
           {mainUrl ? (
-            <img src={mainUrl} alt={art.title ?? "Artwork"} className="w-full h-full object-contain bg-neutral-900" />
+            <img
+              src={mainUrl}
+              alt={art.title ?? "Artwork"}
+              className="w-full h-full object-contain bg-neutral-900"
+            />
           ) : (
-            <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
+            <div className="aspect-square grid place-items-center text-neutral-400">
+              No image
+            </div>
           )}
 
           {/* Action rail */}
           <div className="hidden md:flex absolute right-3 top-3 flex-col gap-2">
-            <button className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition" title="Favorite">
+            <button
+              className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition"
+              title="Favorite"
+            >
               <HeartIcon />
             </button>
-            <button className="rounded-full p-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 transition" title="Share">
+            <button
+              className="rounded-full p-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 transition"
+              title="Share"
+            >
               <ShareIcon />
             </button>
           </div>
@@ -384,16 +430,22 @@ export default function ArtworkDetail() {
         {msg && <p className="text-sm text-amber-300">{msg}</p>}
 
         <div className="space-y-1">
-          {/* tiny category/label slot */}
           <div className="text-xs text-white/70">Artwork</div>
           <h1 className="text-3xl font-semibold">{art.title || "Untitled"}</h1>
-          <p className="text-sm text-neutral-400">Minted {new Date(art.created_at).toLocaleDateString()}</p>
+          <p className="text-sm text-neutral-400">
+            Minted {new Date(art.created_at).toLocaleDateString()}
+          </p>
         </div>
 
         {/* creator/owner chip */}
         <div className="card space-y-3">
           <div className="flex items-center gap-3">
-            {creator?.avatar_url ? <img src={creator.avatar_url} className="h-8 w-8 rounded-full object-cover" /> : null}
+            {creator?.avatar_url ? (
+              <img
+                src={creator.avatar_url}
+                className="h-8 w-8 rounded-full object-cover"
+              />
+            ) : null}
             <div className="text-sm">
               <div>
                 By{" "}
@@ -421,7 +473,11 @@ export default function ArtworkDetail() {
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold">Listing</h3>
-            {isAuction && <span className="text-[11px] px-2 py-1 rounded bg-white text-black font-medium">AUCTION</span>}
+            {isAuction && (
+              <span className="text-[11px] px-2 py-1 rounded bg-white text-black font-medium">
+                AUCTION
+              </span>
+            )}
           </div>
 
           {activeListing ? (
@@ -435,20 +491,18 @@ export default function ArtworkDetail() {
                 )}
               </div>
 
-              {/* Actions */}
               <div className="flex gap-2">
                 {canBuy && (
                   <button className="btn flex-1" onClick={onBuy}>
                     {isAuction ? "Place bid (soon)" : `Purchase now`}
                   </button>
                 )}
-                {isOwner && (
-                  <a href="#owner-panel" className="btn">Edit listing</a>
-                )}
+                {isOwner && <a href="#owner-panel" className="btn">Edit listing</a>}
               </div>
               {isAuction && (
                 <div className="text-[11px] text-neutral-500">
-                  Bidding UI coming soon. Countdown uses <code>listings.end_at</code>.
+                  Bidding UI coming soon. Countdown uses{" "}
+                  <code>listings.end_at</code>.
                 </div>
               )}
             </>
@@ -462,7 +516,11 @@ export default function ArtworkDetail() {
           <div id="owner-panel">
             <OwnerListPanel
               artworkId={art.id}
-              onUpdated={async () => setActiveListing(await fetchActiveListingForArtwork(art.id) as any)}
+              onUpdated={async () =>
+                setActiveListing(
+                  (await fetchActiveListingForArtwork(art.id)) as any
+                )
+              }
             />
           </div>
         )}
@@ -473,11 +531,20 @@ export default function ArtworkDetail() {
           {art.token_uri ? (
             <div className="text-xs space-y-1 mt-2">
               <div>✅ Already pinned</div>
-              {art.ipfs_image_cid && <div>Image CID: <code>{art.ipfs_image_cid}</code></div>}
+              {art.ipfs_image_cid && (
+                <div>
+                  Image CID: <code>{art.ipfs_image_cid}</code>
+                </div>
+              )}
               {art.ipfs_metadata_cid && (
                 <div>
                   Metadata CID: <code>{art.ipfs_metadata_cid}</code>{" "}
-                  <a className="underline" href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`} target="_blank" rel="noreferrer">
+                  <a
+                    className="underline"
+                    href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     Open metadata
                   </a>
                 </div>
@@ -489,13 +556,30 @@ export default function ArtworkDetail() {
               <button
                 className="btn"
                 onClick={handlePin}
-                disabled={pinLoading || !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))}
-                title={viewerId && (viewerId === art.creator_id || viewerId === art.owner_id) ? "" : "Only the creator/owner can pin"}
+                disabled={
+                  pinLoading ||
+                  !(
+                    viewerId &&
+                    (viewerId === art.creator_id || viewerId === art.owner_id)
+                  )
+                }
+                title={
+                  viewerId &&
+                  (viewerId === art.creator_id || viewerId === art.owner_id)
+                    ? ""
+                    : "Only the creator/owner can pin"
+                }
               >
                 {pinLoading ? "Pinning…" : "Pin to IPFS"}
               </button>
-              {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
-              {pinData && <span className="text-xs text-neutral-300">✅ Pinned — CID: <code>{pinData.metadataCID}</code></span>}
+              {pinErr && (
+                <span className="text-rose-400 text-sm">{pinErr}</span>
+              )}
+              {pinData && (
+                <span className="text-xs text-neutral-300">
+                  ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -510,7 +594,9 @@ export default function ArtworkDetail() {
                 key={t}
                 onClick={() => setTab(t)}
                 className={`px-3 py-1.5 rounded-lg text-sm ${
-                  tab === t ? "bg-white text-black font-medium" : "bg-white/0 text-white/80 hover:bg-white/10"
+                  tab === t
+                    ? "bg-white text-black font-medium"
+                    : "bg-white/0 text-white/80 hover:bg-white/10"
                 }`}
               >
                 {t === "owner" ? "Owner" : t === "comments" ? "Comments" : "History"}
@@ -522,19 +608,33 @@ export default function ArtworkDetail() {
           {tab === "owner" && (
             <div className="p-4">
               {owners.length === 0 ? (
-                <div className="text-sm text-neutral-400">No owners recorded yet.</div>
+                <div className="text-sm text-neutral-400">
+                  No owners recorded yet.
+                </div>
               ) : (
                 <ul className="divide-y divide-white/10">
                   {owners.map((o, i) => (
                     <li key={i} className="py-3 flex items-center gap-3">
                       {o.profile.avatar_url ? (
-                        <img src={o.profile.avatar_url} className="h-8 w-8 rounded-full object-cover" />
+                        <img
+                          src={o.profile.avatar_url}
+                          className="h-8 w-8 rounded-full object-cover"
+                        />
                       ) : (
                         <div className="h-8 w-8 rounded-full bg-white/10" />
                       )}
                       <div className="flex-1">
-                        <Link to={o.profile.username ? `/u/${o.profile.username}` : `/u/${o.profile.id}`} className="font-medium hover:underline">
-                          {o.profile.display_name || o.profile.username || "Collector"}
+                        <Link
+                          to={
+                            o.profile.username
+                              ? `/u/${o.profile.username}`
+                              : `/u/${o.profile.id}`
+                          }
+                          className="font-medium hover:underline"
+                        >
+                          {o.profile.display_name ||
+                            o.profile.username ||
+                            "Collector"}
                         </Link>
                         <div className="text-xs text-white/60">
                           Since {new Date(o.updated_at).toLocaleDateString()}
@@ -552,12 +652,17 @@ export default function ArtworkDetail() {
           {tab === "comments" && (
             <div className="p-4 space-y-3">
               <div className="text-sm text-neutral-300">
-                Comments coming soon. We’ll hook this up to your messaging or a lightweight comments table.
+                Comments coming soon. We’ll hook this up to your messaging or a
+                lightweight comments table.
               </div>
               <div className="opacity-60">
                 <div className="flex gap-2">
                   <div className="h-8 w-8 rounded-full bg-white/10" />
-                  <input className="input flex-1" placeholder="Write a comment…" disabled />
+                  <input
+                    className="input flex-1"
+                    placeholder="Write a comment…"
+                    disabled
+                  />
                 </div>
               </div>
             </div>
@@ -571,7 +676,10 @@ export default function ArtworkDetail() {
               ) : (
                 <ul className="space-y-3">
                   {sales.map((s) => (
-                    <li key={s.id} className="p-3 rounded-lg bg-white/5 border border-white/10">
+                    <li
+                      key={s.id}
+                      className="p-3 rounded-lg bg-white/5 border border-white/10"
+                    >
                       <div className="text-sm">
                         Sold for <b>{s.price} {s.currency}</b>{" "}
                         on {new Date(s.sold_at).toLocaleString()}
@@ -579,19 +687,38 @@ export default function ArtworkDetail() {
                       <div className="text-xs text-white/70">
                         From{" "}
                         {s.seller ? (
-                          <Link className="underline" to={s.seller.username ? `/u/${s.seller.username}` : `/u/${s.seller.id}`}>
-                            {s.seller.display_name || s.seller.username || "Seller"}
+                          <Link
+                            className="underline"
+                            to={
+                              s.seller.username
+                                ? `/u/${s.seller.username}`
+                                : `/u/${s.seller.id}`
+                            }
+                          >
+                            {s.seller.display_name ||
+                              s.seller.username ||
+                              "Seller"}
                           </Link>
                         ) : "—"}{" "}
                         to{" "}
                         {s.buyer ? (
-                          <Link className="underline" to={s.buyer.username ? `/u/${s.buyer.username}` : `/u/${s.buyer.id}`}>
-                            {s.buyer.display_name || s.buyer.username || "Buyer"}
+                          <Link
+                            className="underline"
+                            to={
+                              s.buyer.username
+                                ? `/u/${s.buyer.username}`
+                                : `/u/${s.buyer.id}`
+                            }
+                          >
+                            {s.buyer.display_name ||
+                              s.buyer.username ||
+                              "Buyer"}
                           </Link>
                         ) : "—"}
                         {s.tx_hash ? (
                           <>
-                            {" "}• tx: <code className="break-all">{s.tx_hash}</code>
+                            {" "}• tx:{" "}
+                            <code className="break-all">{s.tx_hash}</code>
                           </>
                         ) : null}
                       </div>
@@ -600,6 +727,22 @@ export default function ArtworkDetail() {
                 </ul>
               )}
             </div>
+          )}
+        </div>
+
+        {/* Optional: keep your original standalone price history card */}
+        <div className="card mt-4">
+          <h3 className="font-semibold mb-2">Price history</h3>
+          <p className="text-sm text-neutral-400">
+            Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
+          </p>
+        </div>
+
+        {/* Keep your original bottom buttons */}
+        <div className="flex gap-2 mt-4">
+          <Link to="/" className="btn">Back</Link>
+          {creator && (
+            <Link to={creatorHandle} className="btn">View creator</Link>
           )}
         </div>
       </div>
@@ -650,7 +793,11 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+        <select
+          className="input w-28"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+        >
           <option value="ETH">ETH</option>
         </select>
         <button className="btn" onClick={onList} disabled={busy}>
