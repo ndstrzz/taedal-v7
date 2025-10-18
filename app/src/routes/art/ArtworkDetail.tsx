@@ -14,9 +14,34 @@ import {
   endAuction,
   type Bid,
 } from "../../lib/bids";
-import PayModal from "../../components/PayModal";
 
-/* ───────────────────────────── helper types ───────────────────────────── */
+/* ------------------------------ config ------------------------------ */
+
+// Wallet to receive ETH on Sepolia during testing
+const FALLBACK_PAYTO =
+  (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
+
+// Sepolia chain params (MetaMask)
+const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
+const SEPOLIA_PARAMS = {
+  chainId: SEPOLIA_CHAIN_ID_HEX,
+  chainName: "Sepolia",
+  nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
+  rpcUrls: ["https://sepolia.infura.io/v3/"],
+  blockExplorerUrls: ["https://sepolia.etherscan.io"],
+};
+
+// simple parseEther without ethers.js
+function parseEther(amount: string | number): bigint {
+  const s = String(amount);
+  if (!/^\d+(\.\d+)?$/.test(s)) throw new Error("Invalid ETH amount");
+  const [ints, decs = ""] = s.split(".");
+  const d = (decs + "000000000000000000").slice(0, 18);
+  return BigInt(ints) * 10n ** 18n + BigInt(d);
+}
+const toHex = (v: bigint) => "0x" + v.toString(16);
+
+/* ------------------------------ types ------------------------------ */
 
 type Artwork = {
   id: string;
@@ -57,11 +82,7 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
-/* ───────────────────────── config ───────────────────────── */
-const FALLBACK_PAYTO =
-  (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
-
-/* ───────────────────────── countdown component ───────────────────────── */
+/* ------------------------------ Countdown ------------------------------ */
 
 function Countdown({
   endAt,
@@ -109,8 +130,7 @@ function Countdown({
   );
 }
 
-/* ─────────────────────────── icons ─────────────────────────── */
-
+/* ------------------------------ icons ------------------------------ */
 function HeartIcon(props: any) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" {...props}>
@@ -132,7 +152,60 @@ function ShareIcon(props: any) {
   );
 }
 
-/* ───────────────────────────── main page ───────────────────────────── */
+/* ------------------------------ Wallet modal ------------------------------ */
+
+function WalletModal({
+  open,
+  onClose,
+  onMetaMask,
+  disabledText,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onMetaMask: () => Promise<void>;
+  disabledText?: string;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm grid place-items-center">
+      <div className="w-[460px] max-w-[94vw] rounded-2xl bg-neutral-900 border border-white/10 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-lg font-semibold">Choose a wallet</h3>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-2">
+          <button
+            className="w-full px-4 py-3 rounded-xl bg-white text-black font-medium hover:bg-white/90"
+            onClick={onMetaMask}
+          >
+            MetaMask (Sepolia)
+          </button>
+
+          {/* Placeholders (disabled) */}
+          <button
+            className="w-full px-4 py-3 rounded-xl bg-white/10 text-white/40 border border-white/10 cursor-not-allowed"
+            title={disabledText || "Coming soon"}
+            disabled
+          >
+            Coinbase Wallet (soon)
+          </button>
+          <button
+            className="w-full px-4 py-3 rounded-xl bg-white/10 text-white/40 border border-white/10 cursor-not-allowed"
+            title={disabledText || "Coming soon"}
+            disabled
+          >
+            WalletConnect (soon)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
   const { id } = useParams();
@@ -152,7 +225,7 @@ export default function ArtworkDetail() {
         start_at?: string | null;
         reserve_price?: number | null;
         quantity?: number | null;
-        seller_wallet?: string | null; // optional: if you add this to DB
+        seller_wallet?: string | null; // optional DB field
       })
     | null
   >(null);
@@ -186,10 +259,10 @@ export default function ArtworkDetail() {
   const [pinErr, setPinErr] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
 
-  // Pay modal
-  const [payOpen, setPayOpen] = useState(false);
+  // wallet modal
+  const [walletOpen, setWalletOpen] = useState(false);
+  const [payBusy, setPayBusy] = useState(false);
 
-  // who am I?
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -221,7 +294,6 @@ export default function ArtworkDetail() {
         setArt(data as Artwork);
         setMainUrl((data as Artwork).image_url);
 
-        // parallel fetches
         const [c, o, l, af] = await Promise.all([
           supabase
             .from("profiles")
@@ -249,13 +321,8 @@ export default function ArtworkDetail() {
         setActiveListing(l as any);
         setFiles((af.data as any[]) ?? []);
 
-        // load owners + history
-        await Promise.all([
-          loadOwners((data as Artwork).id),
-          loadSales((data as Artwork).id),
-        ]);
+        await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
 
-        // if auction, load top bid
         if (l && (l as any).type === "auction") {
           const tb = await fetchTopBid((l as any).id);
           if (alive) setTopBid(tb);
@@ -271,7 +338,6 @@ export default function ArtworkDetail() {
     };
   }, [id]);
 
-  // subscribe to realtime bids for active auction
   useEffect(() => {
     if (!activeListing || (activeListing as any).type !== "auction") return;
     const off = subscribeBids(activeListing.id, (b) => {
@@ -281,11 +347,10 @@ export default function ArtworkDetail() {
   }, [activeListing?.id]);
 
   async function loadOwners(artworkId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("ownerships")
       .select("owner_id, quantity, updated_at")
       .eq("artwork_id", artworkId);
-    if (error) return;
 
     const rows =
       (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
@@ -313,12 +378,11 @@ export default function ArtworkDetail() {
   }
 
   async function loadSales(artworkId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("sales")
       .select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash")
       .eq("artwork_id", artworkId)
       .order("sold_at", { ascending: false });
-    if (error) return;
 
     const rows = (data ?? []) as SaleRow[];
     const ids = Array.from(
@@ -371,22 +435,132 @@ export default function ArtworkDetail() {
     }
   }
 
-  // BUY NOW handler → open MetaMask modal (same style as your mint)
-  async function onBuy() {
-    if (!activeListing || !art) return;
+  function asMsg(e: unknown) {
+    if (!e) return "Unknown error";
+    if (typeof e === "string") return e;
+    if (typeof (e as any)?.message === "string") return (e as any).message;
     try {
-      setMsg(null);
-
-      if ((activeListing.sale_currency || "").toUpperCase() === "ETH") {
-        setPayOpen(true);
-        return;
-      }
-
-      setMsg("Fiat checkout is not enabled yet.");
-    } catch (e: any) {
-      setMsg(e?.message ?? "Purchase failed");
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
     }
   }
+
+  /* ------------------------------ Buy handlers ------------------------------ */
+
+  // Route by currency:
+  // - ETH -> wallet modal (MetaMask)
+  // - flat fiat (USD etc.) -> Stripe Checkout via your Supabase function `create-checkout`
+  async function onBuy() {
+    if (!activeListing || !art) return;
+    const ccy = (activeListing.sale_currency || "").toUpperCase();
+
+    if (ccy === "ETH") {
+      setMsg(null);
+      setWalletOpen(true);
+      return;
+    }
+
+    // Any fiat currency goes to Stripe
+    try {
+      setMsg("Redirecting to Stripe…");
+      const { data, error } = await supabase.functions.invoke("create-checkout", {
+        body: {
+          listing_id: activeListing.id,
+          // optional: pass title/description to your function
+          title: art.title ?? "Artwork purchase",
+          success_url: `${location.origin}/orders/success`,
+          cancel_url: `${location.origin}${location.pathname}`,
+        },
+      });
+      if (error) throw error;
+      if (!data?.url) throw new Error("Stripe session URL not returned");
+      window.location.href = data.url;
+    } catch (e) {
+      setMsg(asMsg(e));
+    }
+  }
+
+  // MetaMask flow (Sepolia)
+  async function onBuyWithMetaMask() {
+    if (!activeListing) return;
+    setPayBusy(true);
+    setMsg(null);
+
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) throw new Error("MetaMask not found. Please install it.");
+
+      // 1) connect wallet
+      const accounts: string[] = await ethereum.request({
+        method: "eth_requestAccounts",
+      });
+      const from = accounts?.[0];
+      if (!from) throw new Error("No account authorized in MetaMask.");
+
+      // 2) ensure Sepolia
+      let chainId = await ethereum.request({ method: "eth_chainId" });
+      if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
+        try {
+          await ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
+          });
+        } catch {
+          await ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [SEPOLIA_PARAMS],
+          });
+        }
+        chainId = await ethereum.request({ method: "eth_chainId" });
+        if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
+          throw new Error("Please switch MetaMask to Sepolia.");
+        }
+      }
+
+      // 3) send TX
+      const priceEth = Number(activeListing.fixed_price || 0);
+      if (!isFinite(priceEth) || priceEth <= 0) {
+        throw new Error("Invalid price for listing.");
+      }
+
+      const to =
+        (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
+      if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
+
+      const value = toHex(parseEther(priceEth));
+      const txHash: string = await ethereum.request({
+        method: "eth_sendTransaction",
+        params: [{ from, to, value }],
+      });
+
+      // 4) record the sale (best-effort)
+      try {
+        await supabase.functions.invoke("record-eth-purchase", {
+          body: {
+            listing_id: activeListing.id,
+            tx_hash: txHash,
+            buyer_wallet: from,
+            amount_eth: priceEth,
+            network: "sepolia",
+          },
+        });
+      } catch (e) {
+        console.warn("record-eth-purchase failed:", e);
+      }
+
+      setWalletOpen(false);
+      setMsg("Payment sent ✔️");
+      // Optionally navigate:
+      // location.href = `/orders/success?tx=${txHash}`;
+    } catch (e) {
+      setMsg(asMsg(e));
+    } finally {
+      setPayBusy(false);
+    }
+  }
+
+  /* ------------------------------ computed ------------------------------ */
 
   const isAuction =
     (activeListing as any)?.type === "auction" &&
@@ -412,6 +586,8 @@ export default function ArtworkDetail() {
     return Math.max(reserve, base || reserve || 0);
   }, [topBid, activeListing, isAuction]);
 
+  /* ------------------------------ bids ------------------------------ */
+
   async function onPlaceBid() {
     if (!activeListing) return;
     setBidBusy(true);
@@ -430,6 +606,8 @@ export default function ArtworkDetail() {
     }
   }
 
+  /* ------------------------------ render ------------------------------ */
+
   if (loading) return <div className="p-6">loading…</div>;
   if (!art) {
     return (
@@ -441,10 +619,6 @@ export default function ArtworkDetail() {
       </div>
     );
   }
-
-  // resolve where the payment should go
-  const receiver =
-    (activeListing as any)?.seller_wallet || FALLBACK_PAYTO || "";
 
   return (
     <>
@@ -463,19 +637,11 @@ export default function ArtworkDetail() {
                 No image
               </div>
             )}
-
-            {/* Action rail */}
             <div className="hidden md:flex absolute right-3 top-3 flex-col gap-2">
-              <button
-                className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition"
-                title="Favorite"
-              >
+              <button className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition">
                 <HeartIcon />
               </button>
-              <button
-                className="rounded-full p-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 transition"
-                title="Share"
-              >
+              <button className="rounded-full p-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 transition">
                 <ShareIcon />
               </button>
             </div>
@@ -510,7 +676,7 @@ export default function ArtworkDetail() {
             </p>
           </div>
 
-          {/* creator/owner chip */}
+          {/* creator/owner card */}
           <div className="card space-y-3">
             <div className="flex items-center gap-3">
               {creator?.avatar_url ? (
@@ -523,7 +689,10 @@ export default function ArtworkDetail() {
                 <div>
                   By{" "}
                   {creator ? (
-                    <Link to={creatorHandle} className="underline">
+                    <Link
+                      to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
+                      className="underline"
+                    >
                       {creator.display_name || creator.username || "Creator"}
                     </Link>
                   ) : (
@@ -533,7 +702,10 @@ export default function ArtworkDetail() {
                 {owner && (
                   <div className="text-neutral-400">
                     Owner{" "}
-                    <Link to={ownerHandle!} className="underline">
+                    <Link
+                      to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`}
+                      className="underline"
+                    >
                       {owner.display_name || owner.username || "Collector"}
                     </Link>
                   </div>
@@ -542,7 +714,7 @@ export default function ArtworkDetail() {
             </div>
           </div>
 
-          {/* Listing summary with auction/fixed flows */}
+          {/* Listing */}
           <div className="card space-y-3">
             <div className="flex items-center justify-between">
               <h3 className="font-semibold">Listing</h3>
@@ -555,7 +727,6 @@ export default function ArtworkDetail() {
 
             {activeListing ? (
               <>
-                {/* Price / Bid row */}
                 <div className="flex items-center justify-between">
                   {isAuction ? (
                     <div className="text-sm">
@@ -570,8 +741,7 @@ export default function ArtworkDetail() {
                           Reserve: {(activeListing as any).reserve_price}{" "}
                           {activeListing.sale_currency}
                           {!topBid ||
-                          topBid.amount <
-                            (activeListing as any).reserve_price
+                          topBid.amount < (activeListing as any).reserve_price
                             ? " (not met)"
                             : ""}
                         </div>
@@ -597,7 +767,6 @@ export default function ArtworkDetail() {
                   ) : null}
                 </div>
 
-                {/* Action row */}
                 <div className="flex gap-2">
                   {isAuction ? (
                     viewerId && !isSeller ? (
@@ -607,17 +776,11 @@ export default function ArtworkDetail() {
                           type="number"
                           min={minNextBid || 0}
                           step="0.00000001"
-                          placeholder={
-                            minNextBid ? `≥ ${minNextBid}` : "Your bid"
-                          }
+                          placeholder={minNextBid ? `≥ ${minNextBid}` : "Your bid"}
                           value={bidInput}
                           onChange={(e) => setBidInput(e.target.value)}
                         />
-                        <button
-                          className="btn"
-                          onClick={onPlaceBid}
-                          disabled={bidBusy}
-                        >
+                        <button className="btn" onClick={onPlaceBid} disabled={bidBusy}>
                           {bidBusy ? "Bidding…" : "Place bid"}
                         </button>
                       </div>
@@ -637,34 +800,26 @@ export default function ArtworkDetail() {
                   )}
                 </div>
 
-                {/* Bid status */}
                 {isAuction && (
                   <div className="text-[11px] text-neutral-500">
-                    Min next bid: {minNextBid || "—"}{" "}
-                    {activeListing.sale_currency}
-                    {viewerId && topBid?.bidder_id === viewerId
-                      ? " • You’re winning"
-                      : ""}
+                    Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
+                    {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
                   </div>
                 )}
-                {bidMsg && (
-                  <div className="text-xs text-neutral-300">{bidMsg}</div>
-                )}
+                {bidMsg && <div className="text-xs text-neutral-300">{bidMsg}</div>}
               </>
             ) : (
               <p className="text-sm text-neutral-400">Not currently listed.</p>
             )}
           </div>
 
-          {/* Owner-only: list for sale panel */}
+          {/* Owner list panel */}
           {isOwner && (
             <div id="owner-panel">
               <OwnerListPanel
                 artworkId={art.id}
                 onUpdated={async () =>
-                  setActiveListing(
-                    (await fetchActiveListingForArtwork(art.id)) as any
-                  )
+                  setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)
                 }
               />
             </div>
@@ -719,9 +874,7 @@ export default function ArtworkDetail() {
                 >
                   {pinLoading ? "Pinning…" : "Pin to IPFS"}
                 </button>
-                {pinErr && (
-                  <span className="text-rose-400 text-sm">{pinErr}</span>
-                )}
+                {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
                 {pinData && (
                   <span className="text-xs text-neutral-300">
                     ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
@@ -732,32 +885,173 @@ export default function ArtworkDetail() {
           </div>
         </div>
 
-        {/* Bottom section and tabs (owner/comments/history) — keep your existing code */}
+        {/* Tabs: owner / comments / history */}
+        <div className="lg:col-span-12">
+          <div className="mt-2 rounded-2xl border border-white/10 bg-white/5">
+            <div className="flex gap-2 p-2 border-b border-white/10">
+              {(["owner", "comments", "history"] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setTab(t)}
+                  className={`px-3 py-1.5 rounded-lg text-sm ${
+                    tab === t
+                      ? "bg-white text-black font-medium"
+                      : "bg-white/0 text-white/80 hover:bg-white/10"
+                  }`}
+                >
+                  {t === "owner" ? "Owner" : t === "comments" ? "Comments" : "History"}
+                </button>
+              ))}
+            </div>
+
+            {/* OWNER TAB */}
+            {tab === "owner" && (
+              <div className="p-4">
+                {owners.length === 0 ? (
+                  <div className="text-sm text-neutral-400">No owners recorded yet.</div>
+                ) : (
+                  <ul className="divide-y divide-white/10">
+                    {owners.map((o, i) => (
+                      <li key={i} className="py-3 flex items-center gap-3">
+                        {o.profile.avatar_url ? (
+                          <img
+                            src={o.profile.avatar_url}
+                            className="h-8 w-8 rounded-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-8 w-8 rounded-full bg-white/10" />
+                        )}
+                        <div className="flex-1">
+                          <Link
+                            to={
+                              o.profile.username
+                                ? `/u/${o.profile.username}`
+                                : `/u/${o.profile.id}`
+                            }
+                            className="font-medium hover:underline"
+                          >
+                            {o.profile.display_name ||
+                              o.profile.username ||
+                              "Collector"}
+                          </Link>
+                          <div className="text-xs text-white/60">
+                            Since {new Date(o.updated_at).toLocaleDateString()}
+                          </div>
+                        </div>
+                        <div className="text-sm text-white/80">Qty {o.quantity}</div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {/* COMMENTS TAB (placeholder) */}
+            {tab === "comments" && (
+              <div className="p-4 space-y-3">
+                <div className="text-sm text-neutral-300">
+                  Comments coming soon.
+                </div>
+                <div className="opacity-60">
+                  <div className="flex gap-2">
+                    <div className="h-8 w-8 rounded-full bg-white/10" />
+                    <input className="input flex-1" placeholder="Write a comment…" disabled />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* HISTORY TAB */}
+            {tab === "history" && (
+              <div className="p-4">
+                {sales.length === 0 ? (
+                  <div className="text-sm text-neutral-400">No sales yet.</div>
+                ) : (
+                  <ul className="space-y-3">
+                    {sales.map((s) => (
+                      <li
+                        key={s.id}
+                        className="p-3 rounded-lg bg-white/5 border border-white/10"
+                      >
+                        <div className="text-sm">
+                          Sold for <b>{s.price} {s.currency}</b>{" "}
+                          on {new Date(s.sold_at).toLocaleString()}
+                        </div>
+                        <div className="text-xs text-white/70">
+                          From{" "}
+                          {s.seller ? (
+                            <Link
+                              className="underline"
+                              to={
+                                s.seller.username
+                                  ? `/u/${s.seller.username}`
+                                  : `/u/${s.seller.id}`
+                              }
+                            >
+                              {s.seller.display_name || s.seller.username || "Seller"}
+                            </Link>
+                          ) : "—"}{" "}
+                          to{" "}
+                          {s.buyer ? (
+                            <Link
+                              className="underline"
+                              to={
+                                s.buyer.username
+                                  ? `/u/${s.buyer.username}`
+                                  : `/u/${s.buyer.id}`
+                              }
+                            >
+                              {s.buyer.display_name || s.buyer.username || "Buyer"}
+                            </Link>
+                          ) : "—"}
+                          {s.tx_hash ? (
+                            <>
+                              {" "}• tx: <code className="break-all">{s.tx_hash}</code>
+                            </>
+                          ) : null}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Optional: price history placeholder */}
+          <div className="card mt-4">
+            <h3 className="font-semibold mb-2">Price history</h3>
+            <p className="text-sm text-neutral-400">
+              Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
+            </p>
+          </div>
+
+          <div className="flex gap-2 mt-4">
+            <Link to="/" className="btn">Back</Link>
+            {creator && (
+              <Link
+                to={creatorHandle}
+                className="btn"
+              >
+                View creator
+              </Link>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* MetaMask payment modal (same spirit as your MintModal) */}
-      {activeListing && payOpen && (
-        <PayModal
-          open={payOpen}
-          priceEth={Number(activeListing.fixed_price || 0)}
-          toWallet={receiver}
-          listingId={activeListing.id}
-          onClose={() => setPayOpen(false)}
-          onDone={(ok) => {
-            setPayOpen(false);
-            if (ok) {
-              setMsg("Payment sent ✔️");
-              // Optionally: refresh/redirect
-              // location.href = `/orders/success`;
-            }
-          }}
-        />
-      )}
+      {/* Wallet modal (ETH only) */}
+      <WalletModal
+        open={walletOpen}
+        onClose={() => (payBusy ? null : setWalletOpen(false))}
+        onMetaMask={onBuyWithMetaMask}
+        disabledText="Coming soon"
+      />
     </>
   );
 }
 
-/* ───────────────────── Owner List Panel ───────────────────── */
+/* ------------------------------ Owner List Panel ------------------------------ */
 
 function OwnerListPanel({
   artworkId,
@@ -782,9 +1076,15 @@ function OwnerListPanel({
       await onUpdated();
     } catch (e: any) {
       const m =
-        typeof e?.message === "string" ? e.message : (() => {
-          try { return JSON.stringify(e); } catch { return String(e); }
-        })();
+        typeof e?.message === "string"
+          ? e.message
+          : (() => {
+              try {
+                return JSON.stringify(e);
+              } catch {
+                return String(e);
+              }
+            })();
       setMsg(m ?? "Failed to list");
     } finally {
       setBusy(false);
@@ -810,6 +1110,7 @@ function OwnerListPanel({
           onChange={(e) => setCurrency(e.target.value)}
         >
           <option value="ETH">ETH</option>
+          <option value="USD">USD</option>
         </select>
         <button className="btn" onClick={onList} disabled={busy}>
           {busy ? "Listing…" : "List for sale"}
