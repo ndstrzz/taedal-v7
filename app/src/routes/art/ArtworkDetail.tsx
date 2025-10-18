@@ -8,6 +8,13 @@ import {
   type Listing,
 } from "../../lib/listings";
 import { buyNow } from "../../lib/orders";
+import {
+  fetchTopBid,
+  placeBid,
+  subscribeBids,
+  endAuction,
+  type Bid,
+} from "../../lib/bids";
 
 /* ───────────────────────────── helper types ───────────────────────────── */
 
@@ -52,7 +59,13 @@ type SaleRow = {
 
 /* ───────────────────────── countdown component ───────────────────────── */
 
-function Countdown({ endAt }: { endAt: string }) {
+function Countdown({
+  endAt,
+  onElapsed,
+}: {
+  endAt: string;
+  onElapsed?: () => void;
+}) {
   const [now, setNow] = useState(() => Date.now());
   const end = useMemo(() => new Date(endAt).getTime(), [endAt]);
 
@@ -67,6 +80,11 @@ function Countdown({ endAt }: { endAt: string }) {
   const hours = Math.floor((s % 86400) / 3600);
   const mins = Math.floor((s % 3600) / 60);
   const secs = s % 60;
+
+  useEffect(() => {
+    if (ms === 0 && onElapsed) onElapsed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ms]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
@@ -134,6 +152,15 @@ export default function ArtworkDetail() {
     | null
   >(null);
 
+  // bids (auction)
+  const [topBid, setTopBid] = useState<Bid | null>(null);
+  const MIN_INC_BPS = 500;
+
+  // bid UI
+  const [bidInput, setBidInput] = useState<string>("");
+  const [bidMsg, setBidMsg] = useState<string | null>(null);
+  const [bidBusy, setBidBusy] = useState(false);
+
   // gallery
   const [files, setFiles] = useState<ArtworkFile[]>([]);
   const [mainUrl, setMainUrl] = useState<string | null>(null);
@@ -191,20 +218,20 @@ export default function ArtworkDetail() {
           supabase
             .from("profiles")
             .select("id,username,display_name,avatar_url")
-            .eq("id", data.creator_id)
+            .eq("id", (data as Artwork).creator_id)
             .maybeSingle(),
-          data.owner_id
+          (data as Artwork).owner_id
             ? supabase
                 .from("profiles")
                 .select("id,username,display_name,avatar_url")
-                .eq("id", data.owner_id)
+                .eq("id", (data as Artwork).owner_id as string)
                 .maybeSingle()
             : Promise.resolve({ data: null, error: null }),
-          fetchActiveListingForArtwork(data.id),
+          fetchActiveListingForArtwork((data as Artwork).id),
           supabase
             .from("artwork_files")
             .select("id,url,kind,position")
-            .eq("artwork_id", data.id)
+            .eq("artwork_id", (data as Artwork).id)
             .order("position", { ascending: true }),
         ]);
 
@@ -215,7 +242,13 @@ export default function ArtworkDetail() {
         setFiles((af.data as any[]) ?? []);
 
         // load owners + history
-        await Promise.all([loadOwners(data.id), loadSales(data.id)]);
+        await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
+
+        // if auction, load top bid
+        if (l && (l as any).type === "auction") {
+          const tb = await fetchTopBid((l as any).id);
+          if (alive) setTopBid(tb);
+        }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artwork.");
       } finally {
@@ -226,6 +259,15 @@ export default function ArtworkDetail() {
       alive = false;
     };
   }, [id]);
+
+  // subscribe to realtime bids for active auction
+  useEffect(() => {
+    if (!activeListing || (activeListing as any).type !== "auction") return;
+    const off = subscribeBids(activeListing.id, (b) => {
+      setTopBid((cur) => (!cur || b.amount >= cur.amount ? b : cur));
+    });
+    return off;
+  }, [activeListing?.id]);
 
   async function loadOwners(artworkId: string) {
     const { data, error } = await supabase
@@ -345,6 +387,48 @@ export default function ArtworkDetail() {
     }
   }
 
+  const isAuction =
+    (activeListing as any)?.type === "auction" &&
+    !!(activeListing as any)?.end_at;
+
+  const creatorHandle = creator?.username
+    ? `/u/${creator.username}`
+    : creator
+    ? `/u/${creator.id}`
+    : "#";
+  const ownerHandle =
+    owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
+
+  const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
+  const isSeller =
+    !!activeListing && viewerId === (activeListing as any).seller_id;
+  const canBuy = !!activeListing && !!viewerId && !isSeller;
+
+  const minNextBid = useMemo(() => {
+    if (!isAuction) return 0;
+    const reserve = (activeListing as any)?.reserve_price ?? 0;
+    const base = topBid ? topBid.amount * (1 + MIN_INC_BPS / 10000) : 0;
+    return Math.max(reserve, base || reserve || 0);
+  }, [topBid, activeListing, isAuction]);
+
+  async function onPlaceBid() {
+    if (!activeListing) return;
+    setBidBusy(true);
+    setBidMsg(null);
+    try {
+      const amt = Number(bidInput || 0);
+      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+      const b = await placeBid(activeListing.id, amt);
+      setTopBid(b);
+      setBidMsg("Bid placed ✅");
+      setBidInput("");
+    } catch (e: any) {
+      setBidMsg(e?.message || "Bid failed");
+    } finally {
+      setBidBusy(false);
+    }
+  }
+
   if (loading) return <div className="p-6">loading…</div>;
   if (!art) {
     return (
@@ -356,23 +440,6 @@ export default function ArtworkDetail() {
       </div>
     );
   }
-
-  const creatorHandle = creator?.username
-    ? `/u/${creator.username}`
-    : creator
-    ? `/u/${creator.id}`
-    : "#";
-  const ownerHandle =
-    owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
-
-  const isOwner = !!viewerId && !!art.owner_id && viewerId === art.owner_id;
-  const isSeller =
-    !!activeListing && viewerId === (activeListing as any).seller_id;
-  const canBuy = !!activeListing && !!viewerId && !isSeller;
-
-  const isAuction =
-    (activeListing as any)?.type === "auction" &&
-    !!(activeListing as any)?.end_at;
 
   return (
     <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
@@ -469,7 +536,7 @@ export default function ArtworkDetail() {
           </div>
         </div>
 
-        {/* Listing summary with auction block */}
+        {/* Listing summary with auction/fixed flows */}
         <div className="card space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="font-semibold">Listing</h3>
@@ -482,28 +549,100 @@ export default function ArtworkDetail() {
 
           {activeListing ? (
             <>
+              {/* Price / Bid row */}
               <div className="flex items-center justify-between">
-                <div className="text-lg font-semibold">
-                  {activeListing.fixed_price} {activeListing.sale_currency}
-                </div>
-                {isAuction && (activeListing as any).end_at && (
-                  <Countdown endAt={(activeListing as any).end_at as string} />
+                {isAuction ? (
+                  <div className="text-sm">
+                    <div className="text-neutral-400">Highest bid</div>
+                    <div className="text-lg font-semibold">
+                      {topBid
+                        ? `${topBid.amount} ${activeListing.sale_currency}`
+                        : "—"}
+                    </div>
+                    {(activeListing as any).reserve_price && (
+                      <div className="text-[11px] text-neutral-500">
+                        Reserve: {(activeListing as any).reserve_price}{" "}
+                        {activeListing.sale_currency}
+                        {!topBid ||
+                        topBid.amount <
+                          (activeListing as any).reserve_price
+                          ? " (not met)"
+                          : ""}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="text-lg font-semibold">
+                    {activeListing.fixed_price} {activeListing.sale_currency}
+                  </div>
+                )}
+
+                {isAuction && (activeListing as any).end_at ? (
+                  <Countdown
+                    endAt={(activeListing as any).end_at as string}
+                    onElapsed={async () => {
+                      try {
+                        await endAuction(activeListing!.id);
+                      } catch {}
+                      const l = await fetchActiveListingForArtwork(art.id);
+                      setActiveListing(l as any);
+                    }}
+                  />
+                ) : null}
+              </div>
+
+              {/* Action row */}
+              <div className="flex gap-2">
+                {isAuction ? (
+                  viewerId && !isSeller ? (
+                    <div className="flex-1 flex gap-2">
+                      <input
+                        className="input flex-1"
+                        type="number"
+                        min={minNextBid || 0}
+                        step="0.00000001"
+                        placeholder={
+                          minNextBid ? `≥ ${minNextBid}` : "Your bid"
+                        }
+                        value={bidInput}
+                        onChange={(e) => setBidInput(e.target.value)}
+                      />
+                      <button
+                        className="btn"
+                        onClick={onPlaceBid}
+                        disabled={bidBusy}
+                      >
+                        {bidBusy ? "Bidding…" : "Place bid"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-neutral-400">
+                      {isSeller
+                        ? "Sellers can’t bid on their own auction."
+                        : "Sign in to bid."}
+                    </div>
+                  )
+                ) : (
+                  canBuy && (
+                    <button className="btn flex-1" onClick={onBuy}>
+                      Purchase now
+                    </button>
+                  )
                 )}
               </div>
 
-              <div className="flex gap-2">
-                {canBuy && (
-                  <button className="btn flex-1" onClick={onBuy}>
-                    {isAuction ? "Place bid (soon)" : `Purchase now`}
-                  </button>
-                )}
-                {isOwner && <a href="#owner-panel" className="btn">Edit listing</a>}
-              </div>
+              {/* Bid status */}
               {isAuction && (
                 <div className="text-[11px] text-neutral-500">
-                  Bidding UI coming soon. Countdown uses{" "}
-                  <code>listings.end_at</code>.
+                  Min next bid: {minNextBid || "—"}{" "}
+                  {activeListing.sale_currency}
+                  {viewerId && topBid?.bidder_id === viewerId
+                    ? " • You’re winning"
+                    : ""}
                 </div>
+              )}
+              {bidMsg && (
+                <div className="text-xs text-neutral-300">{bidMsg}</div>
               )}
             </>
           ) : (
@@ -549,7 +688,9 @@ export default function ArtworkDetail() {
                   </a>
                 </div>
               )}
-              <div>Token URI: <code>{art.token_uri}</code></div>
+              <div>
+                Token URI: <code>{art.token_uri}</code>
+              </div>
             </div>
           ) : (
             <div className="flex items-center gap-3">
@@ -730,7 +871,7 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Optional: keep your original standalone price history card */}
+        {/* Optional: keep your original price history card */}
         <div className="card mt-4">
           <h3 className="font-semibold mb-2">Price history</h3>
           <p className="text-sm text-neutral-400">
