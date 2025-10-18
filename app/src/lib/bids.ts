@@ -6,24 +6,10 @@ export type Bid = {
   listing_id: string;
   bidder_id: string;
   amount: number;
-  status: "active" | "canceled" | "retracted" | "won" | "lost";
   created_at: string;
 };
 
-export async function fetchTopBid(listingId: string): Promise<Bid | null> {
-  const { data, error } = await supabase
-    .from("bids")
-    .select("*")
-    .eq("listing_id", listingId)
-    .eq("status", "active")
-    .order("amount", { ascending: false })
-    .order("created_at", { ascending: true })
-    .limit(1)
-    .maybeSingle<Bid>();
-  if (error && (error as any).code !== "PGRST116") throw error;
-  return data ?? null;
-}
-
+/** Place a bid via the SQL function place_bid(p_listing_id uuid, p_amount numeric). */
 export async function placeBid(listingId: string, amount: number): Promise<Bid> {
   const { data, error } = await supabase
     .rpc("place_bid", { p_listing_id: listingId, p_amount: amount })
@@ -32,22 +18,82 @@ export async function placeBid(listingId: string, amount: number): Promise<Bid> 
   return data!;
 }
 
-export async function endAuction(listingId: string): Promise<{ order_id?: string; winning_bid_id?: string; } | null> {
+/** Get the current highest bid for a listing (or null). */
+export async function fetchTopBid(listingId: string): Promise<Bid | null> {
   const { data, error } = await supabase
-    .rpc("end_auction", { p_listing_id: listingId });
-  if (error) throw error;
-  return (data as any[] | null)?.[0] ?? null;
+    .from("bids")
+    .select("id, listing_id, bidder_id, amount, created_at")
+    .eq("listing_id", listingId)
+    .order("amount", { ascending: false })
+    .limit(1)
+    .maybeSingle<Bid>();
+
+  // PGRST116 = no rows
+  if (error && (error as any).code !== "PGRST116") throw error;
+  return data ?? null;
 }
 
-/** Realtime subscription to bids for a listing */
-export function subscribeBids(listingId: string, onInsert: (b: Bid) => void) {
-  const ch = supabase
+/** Alias for components that import getHighestBid */
+export const getHighestBid = fetchTopBid;
+
+/* ------------------------------------------------------------------ */
+/* Realtime subscriptions                                             */
+/* ------------------------------------------------------------------ */
+
+type Unsub = (() => void) & { unsubscribe: () => void };
+
+/**
+ * Subscribe to new bids for a listing.
+ * Returns a function you can call directly in effect cleanup (off()),
+ * and also exposes off.unsubscribe() for code that expects that shape.
+ */
+export function subscribeBids(
+  listingId: string,
+  onInsert: (bid: Bid) => void
+): Unsub {
+  const channel = supabase
     .channel(`bids_${listingId}`)
     .on(
       "postgres_changes",
-      { event: "INSERT", schema: "public", table: "bids", filter: `listing_id=eq.${listingId}` },
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "bids",
+        filter: `listing_id=eq.${listingId}`,
+      },
       (payload) => onInsert(payload.new as Bid)
     )
     .subscribe();
-  return () => { supabase.removeChannel(ch); };
+
+  const off: Unsub = (() => {
+    try {
+      supabase.removeChannel(channel);
+    } catch {}
+  }) as Unsub;
+
+  off.unsubscribe = () => {
+    try {
+      supabase.removeChannel(channel);
+    } catch {}
+  };
+
+  return off;
+}
+
+/** Back-compat alias for code importing subscribeToBids */
+export const subscribeToBids = subscribeBids;
+
+/* ------------------------------------------------------------------ */
+/* Auction closing                                                    */
+/* ------------------------------------------------------------------ */
+
+/** End an auction via SQL function end_auction(p_listing_id uuid). */
+export async function endAuction(
+  listingId: string
+): Promise<{ order_id: string | null; winning_bid_id: string | null } | null> {
+  const { data, error } = await supabase
+    .rpc("end_auction", { p_listing_id: listingId })
+    .single<{ order_id: string | null; winning_bid_id: string | null }>();
+  if (error) throw error;
+  return data ?? null;
 }
