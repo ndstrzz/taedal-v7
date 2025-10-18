@@ -10,6 +10,9 @@ export type Listing = {
   sale_currency: string | null;
   fixed_price: number | null;
   quantity?: number | null;
+  reserve_price?: number | null;
+  start_at?: string | null;
+  end_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -26,8 +29,7 @@ export type JoinedListing = Listing & {
 
 /**
  * Create or update the user's active fixed-price listing for a given artwork.
- * Requires the SQL function:
- *   create_or_update_listing(p_artwork_id uuid, p_price numeric, p_currency text)
+ * Requires SQL function: create_or_update_listing(p_artwork_id uuid, p_price numeric, p_currency text)
  */
 export async function createOrUpdateFixedPriceListing(
   artworkId: string,
@@ -40,21 +42,39 @@ export async function createOrUpdateFixedPriceListing(
       p_price: price,
       p_currency: currency,
     })
-    .single<Listing>(); // expect exactly one row back
+    .single<Listing>();
 
   if (error) throw error;
-  return data;
+  return data!;
+}
+
+/** Create a new auction listing (ends any existing active listing for the artwork). */
+export async function createAuctionListing(
+  artworkId: string,
+  reserve: number,
+  durationMinutes: number,
+  currency = "ETH"
+): Promise<Listing> {
+  const { data, error } = await supabase
+    .rpc("create_auction_listing", {
+      p_artwork_id: artworkId,
+      p_reserve: reserve,
+      p_currency: currency,
+      p_minutes: durationMinutes,
+    })
+    .single<Listing>();
+
+  if (error) throw error;
+  return data!;
 }
 
 /** Fetch a grid of active listings with their artwork joined. */
-export async function fetchActiveListings(
-  limit = 24
-): Promise<JoinedListing[]> {
+export async function fetchActiveListings(limit = 24): Promise<JoinedListing[]> {
   const { data, error } = await supabase
     .from("listings")
     .select(
       `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, created_at, updated_at,
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at,
       artworks!inner (
         id, title, image_url, creator_id, status
       )
@@ -75,7 +95,7 @@ export async function fetchActiveListingForArtwork(
   const { data, error } = await supabase
     .from("listings")
     .select(
-      "id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, created_at, updated_at"
+      "id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at"
     )
     .eq("artwork_id", artworkId)
     .eq("status", "active")
