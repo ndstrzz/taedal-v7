@@ -1,60 +1,100 @@
-import { useEffect, useState } from "react";
+// app/src/components/BidList.tsx
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
-import { subscribeToBids } from "../lib/bids";
+import { type Bid, subscribeBids } from "../lib/bids";
 
-type Row = { id: string; amount: number; bidder_id: string; created_at: string };
+type Profile = {
+  id: string;
+  username: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
+};
 
 export default function BidList({ listingId }: { listingId: string }) {
-  const [rows, setRows] = useState<Row[]>([]);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [bids, setBids] = useState<Bid[]>([]);
+  const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
+  const [loading, setLoading] = useState(true);
 
+  // initial load
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
         const { data, error } = await supabase
           .from("bids")
-          .select("id, amount, bidder_id, created_at")
+          .select("id, listing_id, bidder_id, amount, created_at")
           .eq("listing_id", listingId)
           .order("amount", { ascending: false })
-          .limit(20);
+          .limit(50);
         if (error) throw error;
         if (!alive) return;
-        setRows((data ?? []).map((r: any) => ({ ...r, amount: Number(r.amount) })));
-      } catch (e: any) {
-        setMsg(e?.message ?? "Failed to load bids");
+        setBids(data ?? []);
+
+        // fetch involved bidder profiles
+        const ids = Array.from(new Set((data ?? []).map(b => b.bidder_id)));
+        if (ids.length) {
+          const { data: profs } = await supabase
+            .from("profiles")
+            .select("id, username, display_name, avatar_url")
+            .in("id", ids);
+          const map = new Map<string, Profile>();
+          (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
+          if (alive) setProfiles(map);
+        }
+      } catch {
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
-
-    const sub = subscribeToBids(listingId, (row) => {
-      setRows((cur) => {
-        const next = [row as any, ...cur];
-        next.sort((a, b) => Number(b.amount) - Number(a.amount));
-        return next.slice(0, 20);
-      });
-    });
-
-    return () => {
-      alive = false;
-      try { sub?.unsubscribe(); } catch {}
-    };
+    return () => { alive = false; };
   }, [listingId]);
 
-  if (rows.length === 0) {
-    return <div className="text-sm text-neutral-400">No bids yet.</div>;
-  }
+  // realtime subscribe (top up / new inserts)
+  useEffect(() => {
+    const off = subscribeBids(listingId, (b) => {
+      setBids((cur) => {
+        const next = [...cur, b]
+          .sort((a, z) => z.amount - a.amount)
+          .slice(0, 50);
+        return next;
+      });
+    });
+    return () => { try { off(); } catch {} };
+  }, [listingId]);
+
+  const rows = useMemo(() => bids.sort((a,z)=>z.amount-a.amount), [bids]);
+
+  if (loading) return <div className="text-sm text-neutral-400">Loading bids…</div>;
+  if (rows.length === 0) return <div className="text-sm text-neutral-400">No bids yet.</div>;
 
   return (
     <ul className="space-y-2">
-      {rows.map((r) => (
-        <li key={r.id} className="flex items-center justify-between p-2 rounded-md bg-white/5 border border-white/10">
-          <div className="text-sm font-medium">{r.amount}</div>
-          <div className="text-xs text-white/60">
-            {new Date(r.created_at).toLocaleString()}
-          </div>
-        </li>
-      ))}
-      {msg && <div className="text-xs text-rose-400">{msg}</div>}
+      {rows.map((b) => {
+        const p = profiles.get(b.bidder_id);
+        const who =
+          p?.display_name || p?.username || (p ? p.id.slice(0,6) : "Bidder");
+        const href = p
+          ? p.username ? `/u/${p.username}` : `/u/${p.id}`
+          : "#";
+        return (
+          <li key={b.id} className="p-3 rounded-lg bg-white/5 border border-white/10 flex items-center gap-3">
+            {p?.avatar_url ? (
+              <img src={p.avatar_url} className="h-8 w-8 rounded-full object-cover" />
+            ) : (
+              <div className="h-8 w-8 rounded-full bg-white/10" />
+            )}
+            <div className="flex-1">
+              <div className="text-sm">
+                <span className="font-medium">{b.amount}</span> <span className="text-white/70">ETH</span>
+              </div>
+              <div className="text-xs text-white/70">
+                by <a className="underline" href={href}>{who}</a> •{" "}
+                {new Date(b.created_at).toLocaleString()}
+              </div>
+            </div>
+          </li>
+        );
+      })}
     </ul>
   );
 }
