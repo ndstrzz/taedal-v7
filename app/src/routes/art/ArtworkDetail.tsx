@@ -15,8 +15,6 @@ import {
   endAuction,
   type Bid,
 } from "../../lib/bids";
-import CurrencyPicker from "../../components/CurrencyPicker";
-import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
 
 /* ───────────────────────────── helper types ───────────────────────────── */
 
@@ -59,6 +57,26 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
+/* Currency sets */
+const CRYPTO = new Set(["ETH", "MATIC", "SOL", "USDC", "USDT"]);
+const FIAT = new Set([
+  "USD",
+  "EUR",
+  "GBP",
+  "JPY",
+  "KRW",
+  "CNY",
+  "INR",
+  "AUD",
+  "CAD",
+  "SGD",
+  "PHP",
+  "IDR",
+  "MYR",
+  "THB",
+  "VND",
+]);
+
 /* ───────────────────────── countdown component ───────────────────────── */
 
 function Countdown({
@@ -85,7 +103,8 @@ function Countdown({
 
   useEffect(() => {
     if (ms === 0 && onElapsed) onElapsed();
-  }, [ms, onElapsed]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ms]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
@@ -271,10 +290,11 @@ export default function ArtworkDetail() {
   }, [activeListing?.id]);
 
   async function loadOwners(artworkId: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("ownerships")
       .select("owner_id, quantity, updated_at")
       .eq("artwork_id", artworkId);
+    if (error) return;
 
     const rows =
       (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
@@ -302,11 +322,12 @@ export default function ArtworkDetail() {
   }
 
   async function loadSales(artworkId: string) {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("sales")
       .select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash")
       .eq("artwork_id", artworkId)
       .order("sold_at", { ascending: false });
+    if (error) return;
 
     const rows = (data ?? []) as SaleRow[];
     const ids = Array.from(
@@ -359,28 +380,52 @@ export default function ArtworkDetail() {
     }
   }
 
-  // BUY NOW handler
+  // BUY NOW handler (crypto vs fiat)
   async function onBuy() {
     if (!activeListing || !art) return;
     try {
       setMsg("Processing purchase…");
-      await buyNow(activeListing.id, 1);
-      setMsg("Purchase complete ✅");
 
-      const freshArt = await supabase
-        .from("artworks")
-        .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
-        )
-        .eq("id", art.id)
-        .maybeSingle();
-      if (freshArt.data) setArt(freshArt.data as Artwork);
+      const cur = (activeListing.sale_currency || "ETH").toUpperCase();
 
-      const l = await fetchActiveListingForArtwork(art.id);
-      setActiveListing(l as any);
+      if (CRYPTO.has(cur)) {
+        // On-chain/crypto-like (DB order) path
+        await buyNow(activeListing.id, 1);
+        setMsg("Purchase complete ✅");
 
-      // refresh owners + history
-      await Promise.all([loadOwners(art.id), loadSales(art.id)]);
+        const freshArt = await supabase
+          .from("artworks")
+          .select(
+            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
+          )
+          .eq("id", art.id)
+          .maybeSingle();
+        if (freshArt.data) setArt(freshArt.data as Artwork);
+
+        const l = await fetchActiveListingForArtwork(art.id);
+        setActiveListing(l as any);
+
+        await Promise.all([loadOwners(art.id), loadSales(art.id)]);
+      } else if (FIAT.has(cur)) {
+        // Stripe path (Edge Function create-checkout must be deployed)
+        const success_url = window.location.origin + `/art/${art.id}?paid=1`;
+        const cancel_url = window.location.href;
+
+        const { data, error } = await supabase.functions.invoke("create-checkout", {
+          body: {
+            listing_id: activeListing.id,
+            quantity: 1,
+            success_url,
+            cancel_url,
+          },
+        });
+        if (error) throw error;
+        if (!data?.url) throw new Error("Stripe did not return a checkout URL");
+        window.location.href = data.url; // Redirect to Stripe Checkout
+        return;
+      } else {
+        throw new Error(`Unsupported currency: ${cur}`);
+      }
     } catch (e: any) {
       setMsg(e?.message ?? "Purchase failed");
     }
@@ -649,20 +694,12 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Owner-only: list for sale + auction panels */}
+        {/* Owner-only: list for sale panel */}
         {isOwner && (
-          <div className="space-y-4" id="owner-panel">
+          <div id="owner-panel">
             <OwnerListPanel
               artworkId={art.id}
               onUpdated={async () =>
-                setActiveListing(
-                  (await fetchActiveListingForArtwork(art.id)) as any
-                )
-              }
-            />
-            <OwnerAuctionPanel
-              artworkId={art.id}
-              onCreated={async () =>
                 setActiveListing(
                   (await fetchActiveListingForArtwork(art.id)) as any
                 )
@@ -796,7 +833,7 @@ export default function ArtworkDetail() {
             </div>
           )}
 
-          {/* COMMENTS TAB (UI only for now) */}
+          {/* COMMENTS TAB (UI only) */}
           {tab === "comments" && (
             <div className="p-4 space-y-3">
               <div className="text-sm text-neutral-300">
@@ -878,7 +915,7 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Optional: keep your original price history card */}
+        {/* Optional: price history placeholder */}
         <div className="card mt-4">
           <h3 className="font-semibold mb-2">Price history</h3>
           <p className="text-sm text-neutral-400">
@@ -886,7 +923,7 @@ export default function ArtworkDetail() {
           </p>
         </div>
 
-        {/* Keep your original bottom buttons */}
+        {/* Bottom buttons */}
         <div className="flex gap-2 mt-4">
           <Link to="/" className="btn">Back</Link>
           {creator && (
@@ -898,7 +935,7 @@ export default function ArtworkDetail() {
   );
 }
 
-/* ───────────────────── Owner List Panel (uses CurrencyPicker) ───────────────────── */
+/* ───────────────────── Owner List Panel ───────────────────── */
 
 function OwnerListPanel({
   artworkId,
@@ -909,8 +946,40 @@ function OwnerListPanel({
 }) {
   const [price, setPrice] = useState<string>("");
   const [currency, setCurrency] = useState<string>("ETH");
+  const [tab, setTab] = useState<"crypto" | "fiat">("crypto");
+  const [query, setQuery] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  const cryptoList = ["ETH", "MATIC", "SOL", "USDC", "USDT"];
+  const fiatList = [
+    { code: "USD", name: "US Dollar" },
+    { code: "EUR", name: "Euro" },
+    { code: "GBP", name: "British Pound" },
+    { code: "JPY", name: "Japanese Yen" },
+    { code: "KRW", name: "South Korean Won" },
+    { code: "CNY", name: "Chinese Yuan" },
+    { code: "INR", name: "Indian Rupee" },
+    { code: "AUD", name: "Australian Dollar" },
+    { code: "CAD", name: "Canadian Dollar" },
+    { code: "SGD", name: "Singapore Dollar" },
+    { code: "PHP", name: "Philippine Peso" },
+    { code: "IDR", name: "Indonesian Rupiah" },
+    { code: "MYR", name: "Malaysian Ringgit" },
+    { code: "THB", name: "Thai Baht" },
+    { code: "VND", name: "Vietnamese Dong" },
+  ];
+
+  const listToShow =
+    tab === "crypto"
+      ? cryptoList
+          .filter((c) => c.toLowerCase().includes(query.toLowerCase()))
+          .map((code) => ({ code, name: code }))
+      : fiatList.filter(
+          (f) =>
+            f.code.toLowerCase().includes(query.toLowerCase()) ||
+            f.name.toLowerCase().includes(query.toLowerCase())
+        );
 
   async function onList() {
     setBusy(true);
@@ -928,34 +997,83 @@ function OwnerListPanel({
     }
   }
 
+  useEffect(() => {
+    // keep selected currency within current tab set
+    if (tab === "crypto" && !CRYPTO.has(currency)) setCurrency("ETH");
+    if (tab === "fiat" && !FIAT.has(currency)) setCurrency("USD");
+  }, [tab]);
+
   return (
     <div className="card space-y-3">
       <div className="text-sm font-medium">List this artwork</div>
 
-      <div className="grid md:grid-cols-2 gap-3">
-        <div>
-          <div className="text-xs text-white/70 mb-1">Price</div>
-          <input
-            className="input w-full"
-            placeholder="Price"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            type="number"
-            step="0.00000001"
-            min="0"
-          />
-        </div>
+      <label className="text-sm">Price</label>
+      <input
+        className="input w-full"
+        placeholder="Price"
+        value={price}
+        onChange={(e) => setPrice(e.target.value)}
+        type="number"
+        step="0.00000001"
+        min="0"
+      />
 
-        <CurrencyPicker value={currency} onChange={setCurrency} label="Currency" />
-      </div>
-
-      <div className="flex items-center gap-2">
-        <button className="btn" onClick={onList} disabled={busy}>
-          {busy ? "Listing…" : "List for sale"}
+      <div className="text-sm">Currency</div>
+      <div className="flex gap-2">
+        <button
+          className={`px-3 py-1.5 rounded-md border ${
+            tab === "crypto"
+              ? "bg-white text-black border-white/20"
+              : "bg-white/0 text-white/80 border-white/10"
+          }`}
+          onClick={() => setTab("crypto")}
+        >
+          Crypto
         </button>
-        {msg && <div className="text-xs text-neutral-300">{msg}</div>}
+        <button
+          className={`px-3 py-1.5 rounded-md border ${
+            tab === "fiat"
+              ? "bg-white text-black border-white/20"
+              : "bg-white/0 text-white/80 border-white/10"
+          }`}
+          onClick={() => setTab("fiat")}
+        >
+          Fiat
+        </button>
+        <input
+          className="input flex-1"
+          placeholder="Search currency…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
       </div>
 
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-64 overflow-auto p-1 rounded-md border border-white/10">
+        {listToShow.map((item) => (
+          <button
+            key={item.code}
+            onClick={() => setCurrency(item.code)}
+            className={`p-3 rounded-md text-left border ${
+              currency === item.code
+                ? "bg-white text-black border-white"
+                : "bg-white/5 text-white/90 border-white/10 hover:bg-white/10"
+            }`}
+          >
+            <div className="font-semibold">{item.code}</div>
+            {item.code !== item.name && (
+              <div className="text-xs opacity-70">{(item as any).name}</div>
+            )}
+          </button>
+        ))}
+      </div>
+
+      <div className="text-xs text-white/70">Selected: {currency}</div>
+
+      <button className="btn" onClick={onList} disabled={busy}>
+        {busy ? "Listing…" : "List for sale"}
+      </button>
+
+      {msg && <div className="text-xs text-neutral-300">{msg}</div>}
       <div className="text-[11px] text-neutral-500">
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>
