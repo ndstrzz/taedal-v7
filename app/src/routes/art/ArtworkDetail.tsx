@@ -1,13 +1,12 @@
 // app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
   createOrUpdateFixedPriceListing,
   fetchActiveListingForArtwork,
   type Listing,
 } from "../../lib/listings";
-import { buyNow } from "../../lib/orders";
 import {
   fetchTopBid,
   placeBid,
@@ -16,7 +15,7 @@ import {
   type Bid,
 } from "../../lib/bids";
 
-/* ---------------------------------- data ---------------------------------- */
+/* ───────────────────────────── helper types ───────────────────────────── */
 
 type Artwork = {
   id: string;
@@ -57,41 +56,7 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
-/* -------- currencies (keep pretty small; expand later if you like) -------- */
-
-const CRYPTO = [
-  { code: "ETH", name: "Ethereum" },
-  { code: "USDC", name: "USD Coin" },
-  { code: "BTC", name: "Bitcoin" },
-] as const;
-
-const FIAT = [
-  { code: "USD", name: "US Dollar" },
-  { code: "EUR", name: "Euro" },
-  { code: "GBP", name: "British Pound" },
-  { code: "JPY", name: "Japanese Yen" },
-  { code: "KRW", name: "South Korean Won" },
-  { code: "CNY", name: "Chinese Yuan" },
-  { code: "INR", name: "Indian Rupee" },
-  { code: "AUD", name: "Australian Dollar" },
-  { code: "CAD", name: "Canadian Dollar" },
-] as const;
-
-function isFiat(code: string) {
-  return FIAT.some((f) => f.code === code);
-}
-function isCrypto(code: string) {
-  return CRYPTO.some((c) => c.code === code);
-}
-
-/* ------------------------------ small helpers ----------------------------- */
-
-function useQS() {
-  const { search } = useLocation();
-  return useMemo(() => new URLSearchParams(search), [search]);
-}
-
-/* ----------------------------- countdown clock ---------------------------- */
+/* ───────────────────────── countdown component ───────────────────────── */
 
 function Countdown({
   endAt,
@@ -139,7 +104,7 @@ function Countdown({
   );
 }
 
-/* ---------------------------------- icons --------------------------------- */
+/* ─────────────────────────── icons ─────────────────────────── */
 
 function HeartIcon(props: any) {
   return (
@@ -162,13 +127,12 @@ function ShareIcon(props: any) {
   );
 }
 
-/* =============================== main screen ============================== */
+/* ───────────────────────────── main page ───────────────────────────── */
 
 export default function ArtworkDetail() {
   const { id } = useParams();
-  const qs = useQS();
-
   const [viewerId, setViewerId] = useState<string | null>(null);
+
   const [art, setArt] = useState<Artwork | null>(null);
   const [creator, setCreator] = useState<Profile | null>(null);
   const [owner, setOwner] = useState<Profile | null>(null);
@@ -277,7 +241,10 @@ export default function ArtworkDetail() {
         setFiles((af.data as any[]) ?? []);
 
         // load owners + history
-        await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
+        await Promise.all([
+          loadOwners((data as Artwork).id),
+          loadSales((data as Artwork).id),
+        ]);
 
         // if auction, load top bid
         if (l && (l as any).type === "auction") {
@@ -365,8 +332,6 @@ export default function ArtworkDetail() {
     );
   }
 
-  /* ------------------------------- IPFS pinning ------------------------------ */
-
   async function handlePin() {
     if (!art?.id) return;
     setPinLoading(true);
@@ -397,73 +362,37 @@ export default function ArtworkDetail() {
     }
   }
 
-  /* ---------------------------------- BUY NOW --------------------------------- */
-
+  // BUY NOW handler
   async function onBuy() {
     if (!activeListing || !art) return;
-
-    // In case you still keep the DB-side "buy_fixed_price" for bookkeeping
-    // we’ll still call it AFTER payment webhook confirms. For now we only redirect to PSP.
     try {
-      const currency = (activeListing.sale_currency || "ETH").toUpperCase();
-      // Build success/cancel URLs (stay on same artwork page)
-      const base = window.location.origin;
-      const success_url = `${base}/art/${art.id}?paid=1`;
-      const cancel_url = `${base}/art/${art.id}?cancel=1`;
+      setMsg(null);
 
-      // Fiat → Stripe Checkout (create-checkout)
-      if (isFiat(currency)) {
-        setMsg("Opening Stripe Checkout…");
-        const { data, error } = await supabase.functions.invoke("create-checkout", {
-          body: {
-            listing_id: activeListing.id,
-            quantity: 1,
-            success_url,
-            cancel_url,
-          },
-        });
+      // Crypto/ETH (Coinbase Commerce hosted checkout)
+      if ((activeListing.sale_currency || "").toUpperCase() === "ETH") {
+        setMsg("Creating crypto checkout…");
+        const { data, error } = await supabase.functions.invoke(
+          "cc-create-charge",
+          {
+            body: {
+              listing_id: activeListing.id,
+              amount: Number(activeListing.fixed_price || 0),
+              currency: "ETH",
+              title: art.title ?? "Artwork purchase",
+              description: `Purchase of ${art.title ?? "artwork"} (${art.id})`,
+              success_url: `${location.origin}/orders/success`,
+              cancel_url: `${location.origin}${location.pathname}`,
+            },
+          }
+        );
         if (error) throw error;
-        const url = (data as any)?.url;
-        if (!url) throw new Error("No Checkout URL returned");
-        window.location.href = url;
+        if (!data?.hosted_url) throw new Error("No hosted charge URL returned");
+        window.location.href = data.hosted_url;
         return;
       }
 
-      // Crypto → Coinbase Commerce (cc-create-charge)
-      if (isCrypto(currency)) {
-        setMsg("Opening Coinbase Commerce…");
-        const { data, error } = await supabase.functions.invoke("cc-create-charge", {
-          body: {
-            listing_id: activeListing.id,
-            quantity: 1,
-            success_url,
-            cancel_url,
-          },
-        });
-        if (error) throw error;
-        const hosted = (data as any)?.hosted_url;
-        if (!hosted) throw new Error("No hosted charge URL returned");
-        window.location.href = hosted;
-        return;
-      }
-
-      // Fallback to legacy internal (shouldn’t happen if currency chosen properly)
-      setMsg("Processing purchase…");
-      await buyNow(activeListing.id, 1);
-      setMsg("Purchase complete ✅");
-
-      // refresh
-      const freshArt = await supabase
-        .from("artworks")
-        .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
-        )
-        .eq("id", art.id)
-        .maybeSingle();
-      if (freshArt.data) setArt(freshArt.data as Artwork);
-      const l = await fetchActiveListingForArtwork(art.id);
-      setActiveListing(l as any);
-      await Promise.all([loadOwners(art.id), loadSales(art.id)]);
+      // Fiat (Stripe) — TODO: wire to your stripe-create-checkout function
+      setMsg("Fiat checkout is not enabled yet.");
     } catch (e: any) {
       setMsg(e?.message ?? "Purchase failed");
     }
@@ -510,8 +439,6 @@ export default function ArtworkDetail() {
       setBidBusy(false);
     }
   }
-
-  /* ---------------------------------- render --------------------------------- */
 
   if (loading) return <div className="p-6">loading…</div>;
   if (!art) {
@@ -975,7 +902,7 @@ export default function ArtworkDetail() {
   );
 }
 
-/* ============================ Owner List Panel ============================ */
+/* ───────────────────── Owner List Panel ───────────────────── */
 
 function OwnerListPanel({
   artworkId,
@@ -985,25 +912,9 @@ function OwnerListPanel({
   onUpdated: () => Promise<void> | void;
 }) {
   const [price, setPrice] = useState<string>("");
-  const [tab, setTab] = useState<"crypto" | "fiat">("crypto");
   const [currency, setCurrency] = useState<string>("ETH");
-  const [query, setQuery] = useState("");
-
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    // keep currency coherent with tab
-    if (tab === "crypto" && !isCrypto(currency)) setCurrency("ETH");
-    if (tab === "fiat" && !isFiat(currency)) setCurrency("USD");
-  }, [tab]);
-
-  const filtered =
-    (tab === "crypto" ? CRYPTO : FIAT).filter(
-      (c) =>
-        c.code.toLowerCase().includes(query.toLowerCase()) ||
-        c.name.toLowerCase().includes(query.toLowerCase())
-    );
 
   async function onList() {
     setBusy(true);
@@ -1022,13 +933,11 @@ function OwnerListPanel({
   }
 
   return (
-    <div className="card space-y-3">
-      <h3 className="font-semibold">List this artwork</h3>
-
-      <div className="space-y-2">
-        <div className="text-sm">Price</div>
+    <div className="card space-y-2">
+      <div className="text-sm font-medium">List this artwork</div>
+      <div className="flex gap-2 items-center">
         <input
-          className="input w-full"
+          className="input w-32"
           placeholder="Price"
           value={price}
           onChange={(e) => setPrice(e.target.value)}
@@ -1036,71 +945,19 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-      </div>
-
-      <div className="space-y-2">
-        <div className="text-sm">Currency</div>
-
-        <div className="flex gap-2 items-center">
-          <button
-            className={`px-3 py-1.5 rounded-md text-sm border ${
-              tab === "crypto"
-                ? "bg-white text-black border-white/20"
-                : "bg-white/5 text-white border-white/10"
-            }`}
-            onClick={() => setTab("crypto")}
-          >
-            Crypto
-          </button>
-          <button
-            className={`px-3 py-1.5 rounded-md text-sm border ${
-              tab === "fiat"
-                ? "bg-white text-black border-white/20"
-                : "bg-white/5 text-white border-white/10"
-            }`}
-            onClick={() => setTab("fiat")}
-          >
-            Fiat
-          </button>
-
-          <input
-            className="input ml-auto w-64"
-            placeholder="Search currency…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-60 overflow-auto">
-          {filtered.map((c) => {
-            const selected = currency === c.code;
-            return (
-              <button
-                key={c.code}
-                onClick={() => setCurrency(c.code)}
-                className={`text-left p-3 rounded-lg border ${
-                  selected
-                    ? "bg-white text-black border-white/20"
-                    : "bg-white/5 text-white/90 border-white/10 hover:bg-white/10"
-                }`}
-              >
-                <div className="font-medium">{c.code}</div>
-                <div className="text-xs opacity-80">{c.name}</div>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="text-xs text-neutral-400">Selected: {currency}</div>
-      </div>
-
-      <div className="flex items-center gap-2">
+        <select
+          className="input w-28"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+        >
+          <option value="ETH">ETH</option>
+          {/* Add more currencies later when fiat is enabled */}
+        </select>
         <button className="btn" onClick={onList} disabled={busy}>
           {busy ? "Listing…" : "List for sale"}
         </button>
-        {msg && <div className="text-xs text-neutral-300">{msg}</div>}
       </div>
-
+      {msg && <div className="text-xs text-neutral-300">{msg}</div>}
       <div className="text-[11px] text-neutral-500">
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>

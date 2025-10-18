@@ -9,6 +9,37 @@ const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
 const SITE_URL = Deno.env.get("SITE_URL") || "http://localhost:5173";
+// ---- CORS helpers ----
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+// One Deno.serve per file
+Deno.serve(async (req) => {
+  // Handle CORS preflight early
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    // ---------------------------
+    // YOUR EXISTING LOGIC HERE...
+    // e.g. parse JSON body, call APIs, etc.
+    // Make sure every return includes the corsHeaders!
+    // ---------------------------
+
+    // Example success:
+    return new Response(JSON.stringify({ ok: true }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    return new Response(
+      JSON.stringify({ error: String(err?.message ?? err) }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+});
 
 type Listing = { id: string; sale_currency: string | null; fixed_price: number | null; seller_id: string; artwork_id: string; };
 
