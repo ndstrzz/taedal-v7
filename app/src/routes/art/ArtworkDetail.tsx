@@ -15,6 +15,23 @@ import {
   type Bid,
 } from "../../lib/bids";
 
+/* ───────────────────────────── misc helpers ───────────────────────────── */
+
+function toText(err: unknown): string {
+  if (!err) return "";
+  if (typeof err === "string") return err;
+  if (err && typeof err === "object") {
+    // @ts-ignore
+    if (typeof err.message === "string") return err.message as string;
+    try {
+      return JSON.stringify(err);
+    } catch {
+      /* noop */
+    }
+  }
+  return String(err);
+}
+
 /* ───────────────────────────── helper types ───────────────────────────── */
 
 type Artwork = {
@@ -251,8 +268,8 @@ export default function ArtworkDetail() {
           const tb = await fetchTopBid((l as any).id);
           if (alive) setTopBid(tb);
         }
-      } catch (e: any) {
-        setMsg(e?.message || "Failed to load artwork.");
+      } catch (e) {
+        setMsg(toText(e) || "Failed to load artwork.");
       } finally {
         if (alive) setLoading(false);
       }
@@ -355,50 +372,11 @@ export default function ArtworkDetail() {
         setArt(fresh.data as Artwork);
         setMainUrl((fresh.data as Artwork).image_url);
       }
-    } catch (e: any) {
-      setPinErr(e?.message ?? "Pin failed.");
+    } catch (e) {
+      setPinErr(toText(e) || "Pin failed.");
     } finally {
       setPinLoading(false);
     }
-  }
-
-  /** Create Coinbase Commerce hosted checkout via Functions v1 */
-  async function createCryptoCheckout() {
-    if (!activeListing) return;
-    const functionsBase =
-      import.meta.env.VITE_SUPABASE_URL ??
-      // fallback if env isn’t present (uses the client’s url)
-      (supabase as any).supabaseUrl;
-
-    const anonKey =
-      import.meta.env.VITE_SUPABASE_ANON_KEY ??
-      (supabase as any).supabaseKey;
-
-    const url = `${functionsBase}/functions/v1/cc-create-charge`;
-
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: anonKey,
-        Authorization: `Bearer ${anonKey}`,
-      },
-      body: JSON.stringify({
-        listing_id: activeListing.id,
-        amount: Number(activeListing.fixed_price || 0),
-        currency: String(activeListing.sale_currency || "ETH"),
-        title: art?.title ?? "Artwork purchase",
-        description: `Purchase of ${art?.title ?? "artwork"} (${art?.id})`,
-        success_url: `${location.origin}/orders/success`,
-        cancel_url: `${location.origin}${location.pathname}`,
-      }),
-    });
-
-    const data = await res.json().catch(() => null);
-    if (!res.ok || !data?.hosted_url) {
-      throw new Error(data?.error || `Charge creation failed (${res.status})`);
-    }
-    window.location.href = data.hosted_url;
   }
 
   // BUY NOW handler
@@ -410,14 +388,33 @@ export default function ArtworkDetail() {
       // Crypto/ETH (Coinbase Commerce hosted checkout)
       if ((activeListing.sale_currency || "").toUpperCase() === "ETH") {
         setMsg("Creating crypto checkout…");
-        await createCryptoCheckout();
+        const { data, error } = await supabase.functions.invoke(
+          "cc-create-charge",
+          {
+            body: {
+              listing_id: activeListing.id,
+              amount: Number(activeListing.fixed_price || 0),
+              currency: "ETH",
+              title: art.title ?? "Artwork purchase",
+              description: `Purchase of ${art.title ?? "artwork"} (${art.id})`,
+              success_url: `${location.origin}/orders/success`,
+              cancel_url: `${location.origin}${location.pathname}`,
+            },
+          }
+        );
+        if (error) throw error;
+        if ((data as any)?.error) throw new Error(toText((data as any).error));
+        if (!(data as any)?.hosted_url)
+          throw new Error("No hosted charge URL returned");
+
+        window.location.href = (data as any).hosted_url;
         return;
       }
 
-      // Fiat (Stripe) — pending enablement
+      // Fiat (Stripe) — not enabled yet
       setMsg("Fiat checkout is not enabled yet.");
-    } catch (e: any) {
-      setMsg(e?.message ?? "Purchase failed");
+    } catch (e) {
+      setMsg(toText(e) || "Purchase failed");
     }
   }
 
@@ -456,8 +453,8 @@ export default function ArtworkDetail() {
       setTopBid(b);
       setBidMsg("Bid placed ✅");
       setBidInput("");
-    } catch (e: any) {
-      setBidMsg(e?.message || "Bid failed");
+    } catch (e) {
+      setBidMsg(toText(e) || "Bid failed");
     } finally {
       setBidBusy(false);
     }
@@ -467,7 +464,9 @@ export default function ArtworkDetail() {
   if (!art) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        {msg ? <p className="text-amber-300">{msg}</p> : null}
+        {msg ? (
+          <p className="text-amber-300 break-words break-all text-sm">{msg}</p>
+        ) : null}
         <Link to="/" className="btn mt-4 inline-block">
           Back home
         </Link>
@@ -528,7 +527,9 @@ export default function ArtworkDetail() {
 
       {/* Right: details */}
       <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6">
-        {msg && <p className="text-sm text-amber-300">{msg}</p>}
+        {msg && (
+          <p className="text-sm text-amber-300 break-words break-all">{msg}</p>
+        )}
 
         <div className="space-y-1">
           <div className="text-xs text-white/70">Artwork</div>
@@ -598,8 +599,7 @@ export default function ArtworkDetail() {
                         Reserve: {(activeListing as any).reserve_price}{" "}
                         {activeListing.sale_currency}
                         {!topBid ||
-                        topBid.amount <
-                          (activeListing as any).reserve_price
+                        topBid.amount < (activeListing as any).reserve_price
                           ? " (not met)"
                           : ""}
                       </div>
@@ -948,8 +948,8 @@ function OwnerListPanel({
       await createOrUpdateFixedPriceListing(artworkId, p, currency);
       setMsg("Listing is live ✅");
       await onUpdated();
-    } catch (e: any) {
-      setMsg(e?.message ?? "Failed to list");
+    } catch (e) {
+      setMsg(toText(e) || "Failed to list");
     } finally {
       setBusy(false);
     }
