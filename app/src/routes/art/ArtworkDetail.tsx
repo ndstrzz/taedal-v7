@@ -15,23 +15,6 @@ import {
   type Bid,
 } from "../../lib/bids";
 
-/* ───────────────────────────── misc helpers ───────────────────────────── */
-
-function toText(err: unknown): string {
-  if (!err) return "";
-  if (typeof err === "string") return err;
-  if (err && typeof err === "object") {
-    // @ts-ignore
-    if (typeof err.message === "string") return err.message as string;
-    try {
-      return JSON.stringify(err);
-    } catch {
-      /* noop */
-    }
-  }
-  return String(err);
-}
-
 /* ───────────────────────────── helper types ───────────────────────────── */
 
 type Artwork = {
@@ -268,8 +251,8 @@ export default function ArtworkDetail() {
           const tb = await fetchTopBid((l as any).id);
           if (alive) setTopBid(tb);
         }
-      } catch (e) {
-        setMsg(toText(e) || "Failed to load artwork.");
+      } catch (e: any) {
+        setMsg(e?.message || "Failed to load artwork.");
       } finally {
         if (alive) setLoading(false);
       }
@@ -372,10 +355,21 @@ export default function ArtworkDetail() {
         setArt(fresh.data as Artwork);
         setMainUrl((fresh.data as Artwork).image_url);
       }
-    } catch (e) {
-      setPinErr(toText(e) || "Pin failed.");
+    } catch (e: any) {
+      setPinErr(e?.message ?? "Pin failed.");
     } finally {
       setPinLoading(false);
+    }
+  }
+
+  function asMsg(e: unknown) {
+    if (!e) return "Unknown error";
+    if (typeof e === "string") return e;
+    if (typeof (e as any)?.message === "string") return (e as any).message;
+    try {
+      return JSON.stringify(e);
+    } catch {
+      return String(e);
     }
   }
 
@@ -403,18 +397,16 @@ export default function ArtworkDetail() {
           }
         );
         if (error) throw error;
-        if ((data as any)?.error) throw new Error(toText((data as any).error));
-        if (!(data as any)?.hosted_url)
-          throw new Error("No hosted charge URL returned");
-
-        window.location.href = (data as any).hosted_url;
+        if (!data?.hosted_url)
+          throw new Error("Edge Function returned a non-2xx status code");
+        window.location.href = data.hosted_url;
         return;
       }
 
-      // Fiat (Stripe) — not enabled yet
+      // Fiat (Stripe) — placeholder
       setMsg("Fiat checkout is not enabled yet.");
     } catch (e) {
-      setMsg(toText(e) || "Purchase failed");
+      setMsg(asMsg(e));
     }
   }
 
@@ -453,8 +445,8 @@ export default function ArtworkDetail() {
       setTopBid(b);
       setBidMsg("Bid placed ✅");
       setBidInput("");
-    } catch (e) {
-      setBidMsg(toText(e) || "Bid failed");
+    } catch (e: any) {
+      setBidMsg(e?.message || "Bid failed");
     } finally {
       setBidBusy(false);
     }
@@ -464,9 +456,7 @@ export default function ArtworkDetail() {
   if (!art) {
     return (
       <div className="max-w-5xl mx-auto p-6">
-        {msg ? (
-          <p className="text-amber-300 break-words break-all text-sm">{msg}</p>
-        ) : null}
+        {msg ? <p className="text-amber-300">{msg}</p> : null}
         <Link to="/" className="btn mt-4 inline-block">
           Back home
         </Link>
@@ -527,9 +517,7 @@ export default function ArtworkDetail() {
 
       {/* Right: details */}
       <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6">
-        {msg && (
-          <p className="text-sm text-amber-300 break-words break-all">{msg}</p>
-        )}
+        {msg && <p className="text-sm text-amber-300">{msg}</p>}
 
         <div className="space-y-1">
           <div className="text-xs text-white/70">Artwork</div>
@@ -599,7 +587,8 @@ export default function ArtworkDetail() {
                         Reserve: {(activeListing as any).reserve_price}{" "}
                         {activeListing.sale_currency}
                         {!topBid ||
-                        topBid.amount < (activeListing as any).reserve_price
+                        topBid.amount <
+                          (activeListing as any).reserve_price
                           ? " (not met)"
                           : ""}
                       </div>
@@ -823,7 +812,7 @@ export default function ArtworkDetail() {
             </div>
           )}
 
-          {/* COMMENTS TAB (UI only for now) */}
+          {/* COMMENTS TAB (UI only) */}
           {tab === "comments" && (
             <div className="p-4 space-y-3">
               <div className="text-sm text-neutral-300">
@@ -913,7 +902,7 @@ export default function ArtworkDetail() {
           </p>
         </div>
 
-        {/* Keep your original bottom buttons */}
+        {/* Bottom buttons */}
         <div className="flex gap-2 mt-4">
           <Link to="/" className="btn">Back</Link>
           {creator && (
@@ -948,8 +937,18 @@ function OwnerListPanel({
       await createOrUpdateFixedPriceListing(artworkId, p, currency);
       setMsg("Listing is live ✅");
       await onUpdated();
-    } catch (e) {
-      setMsg(toText(e) || "Failed to list");
+    } catch (e: any) {
+      const m =
+        typeof e?.message === "string"
+          ? e.message
+          : (() => {
+              try {
+                return JSON.stringify(e);
+              } catch {
+                return String(e);
+              }
+            })();
+      setMsg(m ?? "Failed to list");
     } finally {
       setBusy(false);
     }
@@ -974,7 +973,6 @@ function OwnerListPanel({
           onChange={(e) => setCurrency(e.target.value)}
         >
           <option value="ETH">ETH</option>
-          {/* Add more currencies later when fiat is enabled */}
         </select>
         <button className="btn" onClick={onList} disabled={busy}>
           {busy ? "Listing…" : "List for sale"}
