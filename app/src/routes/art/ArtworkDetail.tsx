@@ -15,6 +15,7 @@ import {
   endAuction,
   type Bid,
 } from "../../lib/bids";
+import CurrencyPicker from "../../components/CurrencyPicker";
 import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
 
 /* ───────────────────────────── helper types ───────────────────────────── */
@@ -84,8 +85,7 @@ function Countdown({
 
   useEffect(() => {
     if (ms === 0 && onElapsed) onElapsed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ms]);
+  }, [ms, onElapsed]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
@@ -271,11 +271,10 @@ export default function ArtworkDetail() {
   }, [activeListing?.id]);
 
   async function loadOwners(artworkId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("ownerships")
       .select("owner_id, quantity, updated_at")
       .eq("artwork_id", artworkId);
-    if (error) return;
 
     const rows =
       (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
@@ -303,12 +302,11 @@ export default function ArtworkDetail() {
   }
 
   async function loadSales(artworkId: string) {
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from("sales")
       .select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash")
       .eq("artwork_id", artworkId)
       .order("sold_at", { ascending: false });
-    if (error) return;
 
     const rows = (data ?? []) as SaleRow[];
     const ids = Array.from(
@@ -653,7 +651,7 @@ export default function ArtworkDetail() {
 
         {/* Owner-only: list for sale + auction panels */}
         {isOwner && (
-          <div id="owner-panel">
+          <div className="space-y-4" id="owner-panel">
             <OwnerListPanel
               artworkId={art.id}
               onUpdated={async () =>
@@ -662,12 +660,9 @@ export default function ArtworkDetail() {
                 )
               }
             />
-
-            <div className="h-3" />
-
             <OwnerAuctionPanel
               artworkId={art.id}
-              onUpdated={async () =>
+              onCreated={async () =>
                 setActiveListing(
                   (await fetchActiveListingForArtwork(art.id)) as any
                 )
@@ -903,7 +898,7 @@ export default function ArtworkDetail() {
   );
 }
 
-/* ───────────────────── Owner List Panel (unchanged logic) ───────────────────── */
+/* ───────────────────── Owner List Panel (uses CurrencyPicker) ───────────────────── */
 
 function OwnerListPanel({
   artworkId,
@@ -934,30 +929,33 @@ function OwnerListPanel({
   }
 
   return (
-    <div className="card space-y-2">
+    <div className="card space-y-3">
       <div className="text-sm font-medium">List this artwork</div>
-      <div className="flex gap-2 items-center">
-        <input
-          className="input w-32"
-          placeholder="Price"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          type="number"
-          step="0.00000001"
-          min="0"
-        />
-        <select
-          className="input w-28"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
-          <option value="ETH">ETH</option>
-        </select>
+
+      <div className="grid md:grid-cols-2 gap-3">
+        <div>
+          <div className="text-xs text-white/70 mb-1">Price</div>
+          <input
+            className="input w-full"
+            placeholder="Price"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            type="number"
+            step="0.00000001"
+            min="0"
+          />
+        </div>
+
+        <CurrencyPicker value={currency} onChange={setCurrency} label="Currency" />
+      </div>
+
+      <div className="flex items-center gap-2">
         <button className="btn" onClick={onList} disabled={busy}>
           {busy ? "Listing…" : "List for sale"}
         </button>
+        {msg && <div className="text-xs text-neutral-300">{msg}</div>}
       </div>
-      {msg && <div className="text-xs text-neutral-300">{msg}</div>}
+
       <div className="text-[11px] text-neutral-500">
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>
