@@ -1,114 +1,104 @@
-// deno-lint-ignore-file no-explicit-any
-/// <reference lib="deno.unstable" />
+// supabase/functions/cc-create-charge/index.ts
+// Create a Coinbase Commerce charge and return the hosted_url
 
-// Minimal CORS
-const corsHeaders: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-};
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
 type Body = {
   listing_id: string;
-  amount: number;         // Listing amount as shown in UI
-  currency: string;       // "ETH" in your case
-  title?: string;
-  description?: string;
-  success_url?: string;
-  cancel_url?: string;
+  amount: number;
+  currency: string; // e.g. "ETH", "USD"
 };
 
-Deno.serve(async (req) => {
+serve(async (req) => {
+  // CORS
   if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+    return new Response(null, {
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+      },
+    });
   }
 
   try {
-    const apiKey = Deno.env.get("COMMERCE_API_KEY")?.trim();
-    if (!apiKey) {
-      throw new Error("COMMERCE_API_KEY not set");
+    if (req.method !== "POST") {
+      return json({ error: "Method not allowed" }, 405);
     }
 
     const body = (await req.json()) as Body;
-    if (!body?.listing_id || !isFinite(Number(body?.amount))) {
-      throw new Error("listing_id and amount are required");
+
+    if (!body?.listing_id || !body?.amount || !body?.currency) {
+      return json({ error: "listing_id, amount and currency are required" }, 400);
     }
 
-    const title = body.title || "Artwork purchase";
-    const description =
-      body.description || `Listing ${body.listing_id} via Taedal`;
+    // Accept either secret name so you can't get stuck on naming
+    const apiKey =
+      Deno.env.get("COMMERCE_API_KEY") ||
+      Deno.env.get("COINBASE_COMMERCE_API_KEY");
 
-    // ── Convert ETH amount to USD for a fixed-price charge ───────────
-    let usdAmount = body.amount;
-
-    if (String(body.currency).toUpperCase() !== "USD") {
-      // Fetch ETH→USD rate from Coinbase public API
-      const rateRes = await fetch(
-        "https://api.coinbase.com/v2/exchange-rates?currency=ETH",
+    if (!apiKey) {
+      return json(
+        { error: "COMMERCE_API_KEY (or COINBASE_COMMERCE_API_KEY) is not set" },
+        500
       );
-      if (!rateRes.ok) {
-        throw new Error(`Failed to fetch exchange rate (${rateRes.status})`);
-      }
-      const rateJson = await rateRes.json();
-      const usdRate = Number(rateJson?.data?.rates?.USD);
-      if (!isFinite(usdRate) || usdRate <= 0) {
-        throw new Error("Invalid USD rate");
-      }
-
-      // amount is in ETH; convert to USD
-      usdAmount = Number(body.amount) * usdRate;
     }
 
-    // Coinbase Commerce: create a FIXED price charge in USD
+    // Coinbase Commerce charge payload (fixed price)
     const payload = {
-      name: title,
-      description,
+      name: "Artwork purchase",
+      description: `Listing ${body.listing_id}`,
       pricing_type: "fixed_price",
       local_price: {
-        amount: usdAmount.toFixed(2), // cents are handled as decimal string
-        currency: "USD",
+        amount: body.amount.toString(),
+        currency: body.currency.toUpperCase(), // "ETH" or "USD"
       },
       metadata: {
         listing_id: body.listing_id,
-        asked_currency: body.currency,
-        asked_amount: body.amount,
       },
-      redirect_url: body.success_url || undefined,
-      cancel_url: body.cancel_url || undefined,
     };
 
-    const ccRes = await fetch("https://api.commerce.coinbase.com/charges", {
+    const res = await fetch("https://api.commerce.coinbase.com/charges", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-CC-Api-Key": apiKey,
+        "X-CC-Api-Key": apiKey,             // << IMPORTANT
         "X-CC-Version": "2018-03-22",
       },
       body: JSON.stringify(payload),
     });
 
-    const ccJson = await ccRes.json();
-    if (!ccRes.ok) {
-      // Bubble up Coinbase error detail if present
-      const errMsg =
-        ccJson?.error?.message ||
-        ccJson?.message ||
-        `Coinbase error ${ccRes.status}`;
-      throw new Error(errMsg);
+    const data = await res.json();
+
+    if (!res.ok) {
+      // Bubble up a clear error so the client shows something useful
+      return json(
+        { error: "Coinbase error", status: res.status, details: data },
+        res.status
+      );
     }
 
-    const hosted = ccJson?.data?.hosted_url as string | undefined;
-    if (!hosted) {
-      throw new Error("No hosted_url in Coinbase response");
+    const hostedUrl = data?.data?.hosted_url;
+    if (!hostedUrl) {
+      return json(
+        { error: "No hosted charge URL returned", details: data },
+        502
+      );
     }
 
-    return new Response(JSON.stringify({ hosted_url: hosted }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  } catch (err: any) {
-    return new Response(
-      JSON.stringify({ error: err?.message ?? "Server error" }),
-      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-    );
+    return json({ hosted_url: hostedUrl }, 200);
+  } catch (e) {
+    // Final catch-all with details
+    return json({ error: "Unhandled error", details: String(e) }, 500);
   }
 });
+
+function json(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+    },
+  });
+}

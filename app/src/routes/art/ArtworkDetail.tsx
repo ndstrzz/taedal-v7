@@ -362,6 +362,45 @@ export default function ArtworkDetail() {
     }
   }
 
+  /** Create Coinbase Commerce hosted checkout via Functions v1 */
+  async function createCryptoCheckout() {
+    if (!activeListing) return;
+    const functionsBase =
+      import.meta.env.VITE_SUPABASE_URL ??
+      // fallback if env isn’t present (uses the client’s url)
+      (supabase as any).supabaseUrl;
+
+    const anonKey =
+      import.meta.env.VITE_SUPABASE_ANON_KEY ??
+      (supabase as any).supabaseKey;
+
+    const url = `${functionsBase}/functions/v1/cc-create-charge`;
+
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: anonKey,
+        Authorization: `Bearer ${anonKey}`,
+      },
+      body: JSON.stringify({
+        listing_id: activeListing.id,
+        amount: Number(activeListing.fixed_price || 0),
+        currency: String(activeListing.sale_currency || "ETH"),
+        title: art?.title ?? "Artwork purchase",
+        description: `Purchase of ${art?.title ?? "artwork"} (${art?.id})`,
+        success_url: `${location.origin}/orders/success`,
+        cancel_url: `${location.origin}${location.pathname}`,
+      }),
+    });
+
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.hosted_url) {
+      throw new Error(data?.error || `Charge creation failed (${res.status})`);
+    }
+    window.location.href = data.hosted_url;
+  }
+
   // BUY NOW handler
   async function onBuy() {
     if (!activeListing || !art) return;
@@ -371,27 +410,11 @@ export default function ArtworkDetail() {
       // Crypto/ETH (Coinbase Commerce hosted checkout)
       if ((activeListing.sale_currency || "").toUpperCase() === "ETH") {
         setMsg("Creating crypto checkout…");
-        const { data, error } = await supabase.functions.invoke(
-          "cc-create-charge",
-          {
-            body: {
-              listing_id: activeListing.id,
-              amount: Number(activeListing.fixed_price || 0),
-              currency: "ETH",
-              title: art.title ?? "Artwork purchase",
-              description: `Purchase of ${art.title ?? "artwork"} (${art.id})`,
-              success_url: `${location.origin}/orders/success`,
-              cancel_url: `${location.origin}${location.pathname}`,
-            },
-          }
-        );
-        if (error) throw error;
-        if (!data?.hosted_url) throw new Error("No hosted charge URL returned");
-        window.location.href = data.hosted_url;
+        await createCryptoCheckout();
         return;
       }
 
-      // Fiat (Stripe) — TODO: wire to your stripe-create-checkout function
+      // Fiat (Stripe) — pending enablement
       setMsg("Fiat checkout is not enabled yet.");
     } catch (e: any) {
       setMsg(e?.message ?? "Purchase failed");
