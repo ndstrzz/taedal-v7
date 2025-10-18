@@ -1,97 +1,98 @@
 // deno-lint-ignore-file no-explicit-any
 /// <reference lib="deno.window" />
-
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type" };
 
-// ---- Env (set in Supabase: STRIPE_SECRET_KEY, SUPABASE_URL, SUPABASE_ANON_KEY, SERVICE_ROLE_KEY)
-const SUPABASE_URL       = (Deno.env.get("SUPABASE_URL")       || "").trim();
-const SUPABASE_ANON_KEY  = (Deno.env.get("SUPABASE_ANON_KEY")  || "").trim();
-const SERVICE_ROLE_KEY   = (Deno.env.get("SERVICE_ROLE_KEY")   || "").trim();
-const STRIPE_SECRET_KEY  = (Deno.env.get("STRIPE_SECRET_KEY")  || "").trim();
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
+const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
+const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
+const SITE_URL = Deno.env.get("SITE_URL") || "http://localhost:5173";
 
-const corsHeaders: Record<string,string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-};
+type Listing = { id: string; sale_currency: string | null; fixed_price: number | null; seller_id: string; artwork_id: string; };
 
-function text(body: string, status=200) {
-  return new Response(body, { status, headers: corsHeaders });
+function json(body: any, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
 }
-function json(body: unknown, status=200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, "Content-Type": "application/json" }});
+function text(body: string, status = 200) {
+  return new Response(body, { status, headers: cors });
 }
 
-const FIAT = new Set([
-  "USD","EUR","GBP","JPY","KRW","CNY","INR","AUD","CAD","SGD","PHP","IDR","MYR","THB","VND",
-]);
+// Convert decimal price to the integer amount for Stripe (e.g. USD cents). For zero-decimal currencies, multiply by 1.
+const ZERO_DEC = new Set(["JPY","KRW"]);
+function toStripeAmount(amount: number, currency: string) {
+  return Math.round(amount * (ZERO_DEC.has(currency.toUpperCase()) ? 1 : 100));
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return text("ok");
 
   try {
-    if (!STRIPE_SECRET_KEY) return text("STRIPE_SECRET_KEY not set", 500);
-
-    const { listing_id, quantity = 1, success_url, cancel_url } = await req.json();
-    if (!listing_id || !success_url || !cancel_url) return text("listing_id, success_url, cancel_url required", 400);
+    if (req.method !== "POST") return text("Method not allowed", 405);
+    if (!STRIPE_SK) return text("Stripe secret not set", 500);
 
     const auth = req.headers.get("Authorization");
-    if (!auth) return text("Missing Authorization header", 401);
+    if (!auth) return text("Missing Authorization", 401);
 
-    const userClient = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, { global: { headers: { Authorization: auth } }});
-    const serverClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY);
+    const { listing_id, quantity = 1 } = await req.json();
+    if (!listing_id) return text("listing_id required", 400);
 
-    // Fetch listing + artwork for description
-    const { data: listing, error: lErr } = await userClient
+    const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
+    const server = createClient(SUPABASE_URL, SERVICE);
+
+    const { data: me } = await userClient.auth.getUser();
+    if (!me?.user) return text("Unauthorized", 401);
+    const buyerId = me.user.id;
+
+    const { data: listing, error } = await userClient
       .from("listings")
-      .select("id, artwork_id, seller_id, type, status, fixed_price, sale_currency, artworks!inner(id,title,image_url)")
+      .select("id, sale_currency, fixed_price, seller_id, artwork_id")
       .eq("id", listing_id)
-      .maybeSingle();
-    if (lErr) throw lErr;
+      .eq("status", "active")
+      .maybeSingle<Listing>();
+    if (error) throw error;
     if (!listing) return text("Listing not found", 404);
-    if (listing.type !== "fixed_price") return text("Only fixed_price via Stripe in this function", 400);
-    if (!FIAT.has(listing.sale_currency)) return text("Listing currency must be fiat for Stripe", 400);
-    if (listing.status !== "active") return text("Listing is not active", 400);
+    if (!listing.fixed_price || !listing.sale_currency) return text("Listing missing price/currency", 400);
 
-    const price = Number(listing.fixed_price || 0);
-    if (!isFinite(price) || price <= 0) return text("Bad price", 400);
+    // Fetch artwork title for prettier Checkout
+    const { data: art } = await userClient
+      .from("artworks")
+      .select("title, image_url")
+      .eq("id", listing.artwork_id)
+      .maybeSingle();
 
-    // Stripe fetch (Deno—no SDK)
-    const params = new URLSearchParams();
-    params.append("mode", "payment");
-    params.append("success_url", success_url);
-    params.append("cancel_url", cancel_url);
-    params.append("metadata[listing_id]", listing_id);
-    params.append("metadata[quantity]", String(quantity));
-    params.append("line_items[0][quantity]", String(quantity));
-    params.append("line_items[0][price_data][currency]", listing.sale_currency.toLowerCase());
-    params.append("line_items[0][price_data][product_data][name]", listing.artworks?.title || `Artwork ${listing.artwork_id}`);
-    if (listing.artworks?.image_url) {
-      params.append("line_items[0][price_data][product_data][images][0]", listing.artworks.image_url);
-    }
+    const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
+    const stripe = new Stripe(STRIPE_SK, { httpClient: Stripe.createFetchHttpClient() });
 
-    // Stripe expects amount in smallest unit (e.g., cents)
-    const amount = Math.round(price * 100);
-    params.append("line_items[0][price_data][unit_amount]", String(amount));
+    const amount = toStripeAmount(listing.fixed_price, listing.sale_currency);
+    const currency = listing.sale_currency.toLowerCase();
 
-    const resp = await fetch("https://api.stripe.com/v1/checkout/sessions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: params.toString(),
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      success_url: `${SITE_URL}/checkout/success?listing=${listing.id}`,
+      cancel_url: `${SITE_URL}/art/${listing.artwork_id}?cancelled=1`,
+      line_items: [{
+        quantity,
+        price_data: {
+          currency,
+          unit_amount: amount,
+          product_data: {
+            name: art?.title || "Artwork",
+            images: art?.image_url ? [art.image_url] : [],
+          }
+        },
+      }],
+      metadata: {
+        listing_id: listing.id,
+        artwork_id: listing.artwork_id,
+        seller_id: listing.seller_id,
+        buyer_id: buyerId,
+        quantity: String(quantity),
+      }
     });
 
-    const body = await resp.json();
-    if (!resp.ok) {
-      console.error("Stripe error", body);
-      return text(body?.error?.message || "Stripe checkout failed", 502);
-    }
-
-    // Optionally: mark an order draft here (not required since webhook finalizes)
-    return json({ url: body.url });
+    return json({ url: session.url });
   } catch (e: any) {
     return json({ error: e?.message || "Server error" }, 500);
   }

@@ -1,6 +1,6 @@
 // app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
   createOrUpdateFixedPriceListing,
@@ -16,7 +16,7 @@ import {
   type Bid,
 } from "../../lib/bids";
 
-/* ───────────────────────────── helper types ───────────────────────────── */
+/* ---------------------------------- data ---------------------------------- */
 
 type Artwork = {
   id: string;
@@ -57,27 +57,41 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
-/* Currency sets */
-const CRYPTO = new Set(["ETH", "MATIC", "SOL", "USDC", "USDT"]);
-const FIAT = new Set([
-  "USD",
-  "EUR",
-  "GBP",
-  "JPY",
-  "KRW",
-  "CNY",
-  "INR",
-  "AUD",
-  "CAD",
-  "SGD",
-  "PHP",
-  "IDR",
-  "MYR",
-  "THB",
-  "VND",
-]);
+/* -------- currencies (keep pretty small; expand later if you like) -------- */
 
-/* ───────────────────────── countdown component ───────────────────────── */
+const CRYPTO = [
+  { code: "ETH", name: "Ethereum" },
+  { code: "USDC", name: "USD Coin" },
+  { code: "BTC", name: "Bitcoin" },
+] as const;
+
+const FIAT = [
+  { code: "USD", name: "US Dollar" },
+  { code: "EUR", name: "Euro" },
+  { code: "GBP", name: "British Pound" },
+  { code: "JPY", name: "Japanese Yen" },
+  { code: "KRW", name: "South Korean Won" },
+  { code: "CNY", name: "Chinese Yuan" },
+  { code: "INR", name: "Indian Rupee" },
+  { code: "AUD", name: "Australian Dollar" },
+  { code: "CAD", name: "Canadian Dollar" },
+] as const;
+
+function isFiat(code: string) {
+  return FIAT.some((f) => f.code === code);
+}
+function isCrypto(code: string) {
+  return CRYPTO.some((c) => c.code === code);
+}
+
+/* ------------------------------ small helpers ----------------------------- */
+
+function useQS() {
+  const { search } = useLocation();
+  return useMemo(() => new URLSearchParams(search), [search]);
+}
+
+/* ----------------------------- countdown clock ---------------------------- */
 
 function Countdown({
   endAt,
@@ -125,7 +139,7 @@ function Countdown({
   );
 }
 
-/* ─────────────────────────── icons ─────────────────────────── */
+/* ---------------------------------- icons --------------------------------- */
 
 function HeartIcon(props: any) {
   return (
@@ -148,12 +162,13 @@ function ShareIcon(props: any) {
   );
 }
 
-/* ───────────────────────────── main page ───────────────────────────── */
+/* =============================== main screen ============================== */
 
 export default function ArtworkDetail() {
   const { id } = useParams();
-  const [viewerId, setViewerId] = useState<string | null>(null);
+  const qs = useQS();
 
+  const [viewerId, setViewerId] = useState<string | null>(null);
   const [art, setArt] = useState<Artwork | null>(null);
   const [creator, setCreator] = useState<Profile | null>(null);
   const [owner, setOwner] = useState<Profile | null>(null);
@@ -350,6 +365,8 @@ export default function ArtworkDetail() {
     );
   }
 
+  /* ------------------------------- IPFS pinning ------------------------------ */
+
   async function handlePin() {
     if (!art?.id) return;
     setPinLoading(true);
@@ -380,37 +397,23 @@ export default function ArtworkDetail() {
     }
   }
 
-  // BUY NOW handler (crypto vs fiat)
+  /* ---------------------------------- BUY NOW --------------------------------- */
+
   async function onBuy() {
     if (!activeListing || !art) return;
+
+    // In case you still keep the DB-side "buy_fixed_price" for bookkeeping
+    // we’ll still call it AFTER payment webhook confirms. For now we only redirect to PSP.
     try {
-      setMsg("Processing purchase…");
+      const currency = (activeListing.sale_currency || "ETH").toUpperCase();
+      // Build success/cancel URLs (stay on same artwork page)
+      const base = window.location.origin;
+      const success_url = `${base}/art/${art.id}?paid=1`;
+      const cancel_url = `${base}/art/${art.id}?cancel=1`;
 
-      const cur = (activeListing.sale_currency || "ETH").toUpperCase();
-
-      if (CRYPTO.has(cur)) {
-        // On-chain/crypto-like (DB order) path
-        await buyNow(activeListing.id, 1);
-        setMsg("Purchase complete ✅");
-
-        const freshArt = await supabase
-          .from("artworks")
-          .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
-          )
-          .eq("id", art.id)
-          .maybeSingle();
-        if (freshArt.data) setArt(freshArt.data as Artwork);
-
-        const l = await fetchActiveListingForArtwork(art.id);
-        setActiveListing(l as any);
-
-        await Promise.all([loadOwners(art.id), loadSales(art.id)]);
-      } else if (FIAT.has(cur)) {
-        // Stripe path (Edge Function create-checkout must be deployed)
-        const success_url = window.location.origin + `/art/${art.id}?paid=1`;
-        const cancel_url = window.location.href;
-
+      // Fiat → Stripe Checkout (create-checkout)
+      if (isFiat(currency)) {
+        setMsg("Opening Stripe Checkout…");
         const { data, error } = await supabase.functions.invoke("create-checkout", {
           body: {
             listing_id: activeListing.id,
@@ -420,12 +423,47 @@ export default function ArtworkDetail() {
           },
         });
         if (error) throw error;
-        if (!data?.url) throw new Error("Stripe did not return a checkout URL");
-        window.location.href = data.url; // Redirect to Stripe Checkout
+        const url = (data as any)?.url;
+        if (!url) throw new Error("No Checkout URL returned");
+        window.location.href = url;
         return;
-      } else {
-        throw new Error(`Unsupported currency: ${cur}`);
       }
+
+      // Crypto → Coinbase Commerce (cc-create-charge)
+      if (isCrypto(currency)) {
+        setMsg("Opening Coinbase Commerce…");
+        const { data, error } = await supabase.functions.invoke("cc-create-charge", {
+          body: {
+            listing_id: activeListing.id,
+            quantity: 1,
+            success_url,
+            cancel_url,
+          },
+        });
+        if (error) throw error;
+        const hosted = (data as any)?.hosted_url;
+        if (!hosted) throw new Error("No hosted charge URL returned");
+        window.location.href = hosted;
+        return;
+      }
+
+      // Fallback to legacy internal (shouldn’t happen if currency chosen properly)
+      setMsg("Processing purchase…");
+      await buyNow(activeListing.id, 1);
+      setMsg("Purchase complete ✅");
+
+      // refresh
+      const freshArt = await supabase
+        .from("artworks")
+        .select(
+          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
+        )
+        .eq("id", art.id)
+        .maybeSingle();
+      if (freshArt.data) setArt(freshArt.data as Artwork);
+      const l = await fetchActiveListingForArtwork(art.id);
+      setActiveListing(l as any);
+      await Promise.all([loadOwners(art.id), loadSales(art.id)]);
     } catch (e: any) {
       setMsg(e?.message ?? "Purchase failed");
     }
@@ -472,6 +510,8 @@ export default function ArtworkDetail() {
       setBidBusy(false);
     }
   }
+
+  /* ---------------------------------- render --------------------------------- */
 
   if (loading) return <div className="p-6">loading…</div>;
   if (!art) {
@@ -833,7 +873,7 @@ export default function ArtworkDetail() {
             </div>
           )}
 
-          {/* COMMENTS TAB (UI only) */}
+          {/* COMMENTS TAB (UI only for now) */}
           {tab === "comments" && (
             <div className="p-4 space-y-3">
               <div className="text-sm text-neutral-300">
@@ -915,7 +955,7 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Optional: price history placeholder */}
+        {/* Optional: keep your original price history card */}
         <div className="card mt-4">
           <h3 className="font-semibold mb-2">Price history</h3>
           <p className="text-sm text-neutral-400">
@@ -923,7 +963,7 @@ export default function ArtworkDetail() {
           </p>
         </div>
 
-        {/* Bottom buttons */}
+        {/* Keep your original bottom buttons */}
         <div className="flex gap-2 mt-4">
           <Link to="/" className="btn">Back</Link>
           {creator && (
@@ -935,7 +975,7 @@ export default function ArtworkDetail() {
   );
 }
 
-/* ───────────────────── Owner List Panel ───────────────────── */
+/* ============================ Owner List Panel ============================ */
 
 function OwnerListPanel({
   artworkId,
@@ -945,41 +985,25 @@ function OwnerListPanel({
   onUpdated: () => Promise<void> | void;
 }) {
   const [price, setPrice] = useState<string>("");
-  const [currency, setCurrency] = useState<string>("ETH");
   const [tab, setTab] = useState<"crypto" | "fiat">("crypto");
+  const [currency, setCurrency] = useState<string>("ETH");
   const [query, setQuery] = useState("");
+
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const cryptoList = ["ETH", "MATIC", "SOL", "USDC", "USDT"];
-  const fiatList = [
-    { code: "USD", name: "US Dollar" },
-    { code: "EUR", name: "Euro" },
-    { code: "GBP", name: "British Pound" },
-    { code: "JPY", name: "Japanese Yen" },
-    { code: "KRW", name: "South Korean Won" },
-    { code: "CNY", name: "Chinese Yuan" },
-    { code: "INR", name: "Indian Rupee" },
-    { code: "AUD", name: "Australian Dollar" },
-    { code: "CAD", name: "Canadian Dollar" },
-    { code: "SGD", name: "Singapore Dollar" },
-    { code: "PHP", name: "Philippine Peso" },
-    { code: "IDR", name: "Indonesian Rupiah" },
-    { code: "MYR", name: "Malaysian Ringgit" },
-    { code: "THB", name: "Thai Baht" },
-    { code: "VND", name: "Vietnamese Dong" },
-  ];
+  useEffect(() => {
+    // keep currency coherent with tab
+    if (tab === "crypto" && !isCrypto(currency)) setCurrency("ETH");
+    if (tab === "fiat" && !isFiat(currency)) setCurrency("USD");
+  }, [tab]);
 
-  const listToShow =
-    tab === "crypto"
-      ? cryptoList
-          .filter((c) => c.toLowerCase().includes(query.toLowerCase()))
-          .map((code) => ({ code, name: code }))
-      : fiatList.filter(
-          (f) =>
-            f.code.toLowerCase().includes(query.toLowerCase()) ||
-            f.name.toLowerCase().includes(query.toLowerCase())
-        );
+  const filtered =
+    (tab === "crypto" ? CRYPTO : FIAT).filter(
+      (c) =>
+        c.code.toLowerCase().includes(query.toLowerCase()) ||
+        c.name.toLowerCase().includes(query.toLowerCase())
+    );
 
   async function onList() {
     setBusy(true);
@@ -997,83 +1021,86 @@ function OwnerListPanel({
     }
   }
 
-  useEffect(() => {
-    // keep selected currency within current tab set
-    if (tab === "crypto" && !CRYPTO.has(currency)) setCurrency("ETH");
-    if (tab === "fiat" && !FIAT.has(currency)) setCurrency("USD");
-  }, [tab]);
-
   return (
     <div className="card space-y-3">
-      <div className="text-sm font-medium">List this artwork</div>
+      <h3 className="font-semibold">List this artwork</h3>
 
-      <label className="text-sm">Price</label>
-      <input
-        className="input w-full"
-        placeholder="Price"
-        value={price}
-        onChange={(e) => setPrice(e.target.value)}
-        type="number"
-        step="0.00000001"
-        min="0"
-      />
-
-      <div className="text-sm">Currency</div>
-      <div className="flex gap-2">
-        <button
-          className={`px-3 py-1.5 rounded-md border ${
-            tab === "crypto"
-              ? "bg-white text-black border-white/20"
-              : "bg-white/0 text-white/80 border-white/10"
-          }`}
-          onClick={() => setTab("crypto")}
-        >
-          Crypto
-        </button>
-        <button
-          className={`px-3 py-1.5 rounded-md border ${
-            tab === "fiat"
-              ? "bg-white text-black border-white/20"
-              : "bg-white/0 text-white/80 border-white/10"
-          }`}
-          onClick={() => setTab("fiat")}
-        >
-          Fiat
-        </button>
+      <div className="space-y-2">
+        <div className="text-sm">Price</div>
         <input
-          className="input flex-1"
-          placeholder="Search currency…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          className="input w-full"
+          placeholder="Price"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          type="number"
+          step="0.00000001"
+          min="0"
         />
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-64 overflow-auto p-1 rounded-md border border-white/10">
-        {listToShow.map((item) => (
+      <div className="space-y-2">
+        <div className="text-sm">Currency</div>
+
+        <div className="flex gap-2 items-center">
           <button
-            key={item.code}
-            onClick={() => setCurrency(item.code)}
-            className={`p-3 rounded-md text-left border ${
-              currency === item.code
-                ? "bg-white text-black border-white"
-                : "bg-white/5 text-white/90 border-white/10 hover:bg-white/10"
+            className={`px-3 py-1.5 rounded-md text-sm border ${
+              tab === "crypto"
+                ? "bg-white text-black border-white/20"
+                : "bg-white/5 text-white border-white/10"
             }`}
+            onClick={() => setTab("crypto")}
           >
-            <div className="font-semibold">{item.code}</div>
-            {item.code !== item.name && (
-              <div className="text-xs opacity-70">{(item as any).name}</div>
-            )}
+            Crypto
           </button>
-        ))}
+          <button
+            className={`px-3 py-1.5 rounded-md text-sm border ${
+              tab === "fiat"
+                ? "bg-white text-black border-white/20"
+                : "bg-white/5 text-white border-white/10"
+            }`}
+            onClick={() => setTab("fiat")}
+          >
+            Fiat
+          </button>
+
+          <input
+            className="input ml-auto w-64"
+            placeholder="Search currency…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-60 overflow-auto">
+          {filtered.map((c) => {
+            const selected = currency === c.code;
+            return (
+              <button
+                key={c.code}
+                onClick={() => setCurrency(c.code)}
+                className={`text-left p-3 rounded-lg border ${
+                  selected
+                    ? "bg-white text-black border-white/20"
+                    : "bg-white/5 text-white/90 border-white/10 hover:bg-white/10"
+                }`}
+              >
+                <div className="font-medium">{c.code}</div>
+                <div className="text-xs opacity-80">{c.name}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="text-xs text-neutral-400">Selected: {currency}</div>
       </div>
 
-      <div className="text-xs text-white/70">Selected: {currency}</div>
+      <div className="flex items-center gap-2">
+        <button className="btn" onClick={onList} disabled={busy}>
+          {busy ? "Listing…" : "List for sale"}
+        </button>
+        {msg && <div className="text-xs text-neutral-300">{msg}</div>}
+      </div>
 
-      <button className="btn" onClick={onList} disabled={busy}>
-        {busy ? "Listing…" : "List for sale"}
-      </button>
-
-      {msg && <div className="text-xs text-neutral-300">{msg}</div>}
       <div className="text-[11px] text-neutral-500">
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>
