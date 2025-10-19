@@ -515,7 +515,8 @@ export default function ArtworkDetail() {
         body: {
           listing_id: activeListing.id,
           title: art.title ?? "Artwork purchase",
-          success_url: `${location.origin}/orders/success`,
+          // ✅ send the route that actually exists in your app
+          success_url: `${location.origin}/checkout/success`,
           cancel_url: `${location.origin}${location.pathname}`,
         },
       });
