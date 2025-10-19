@@ -7,9 +7,8 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
-const SITE_URL = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
+const FALLBACK_SITE = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
 
-// CORS
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -42,15 +41,14 @@ Deno.serve(async (req) => {
     if (req.method !== "POST") return t("Method not allowed", 405);
     if (!STRIPE_SK) return t("Stripe secret not set", 500);
 
-    // Require user auth (so we know buyer_id)
     const auth = req.headers.get("Authorization");
     if (!auth) return t("Missing Authorization", 401);
 
-    const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
-    const server = createClient(SUPABASE_URL, SERVICE);
+    const { listing_id, quantity = 1, success_url, cancel_url } = await req.json();
 
-    const { listing_id, quantity = 1 } = await req.json();
     if (!listing_id) return t("listing_id required", 400);
+
+    const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
 
     const { data: me } = await userClient.auth.getUser();
     if (!me?.user) return t("Unauthorized", 401);
@@ -66,24 +64,25 @@ Deno.serve(async (req) => {
     if (listing.status !== "active") return t("Listing is not active", 400);
     if (!listing.fixed_price || !listing.sale_currency) return t("Listing missing price/currency", 400);
 
-    // Fetch artwork for nicer Checkout
     const { data: art } = await userClient
       .from("artworks")
       .select("title,image_url")
       .eq("id", listing.artwork_id)
       .maybeSingle();
 
-    // Create Stripe session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, { httpClient: Stripe.createFetchHttpClient() });
 
     const currency = listing.sale_currency.toLowerCase();
     const amount = toStripeAmount(listing.fixed_price, currency);
 
+    const success = (success_url || `${FALLBACK_SITE}/checkout/success?listing=${listing.id}`).replace(/\/$/, "");
+    const cancel = (cancel_url || `${FALLBACK_SITE}/art/${listing.artwork_id}?cancelled=1`).replace(/\/$/, "");
+
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
-      success_url: `${SITE_URL}/checkout/success?listing=${listing.id}`,
-      cancel_url: `${SITE_URL}/art/${listing.artwork_id}?cancelled=1`,
+      success_url: success,
+      cancel_url: cancel,
       line_items: [{
         quantity,
         price_data: {

@@ -5,6 +5,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
+const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -25,9 +26,16 @@ Deno.serve(async (req) => {
     const { listing_id, tx_hash, buyer_wallet, amount_eth, network } = await req.json();
     if (!listing_id || !tx_hash || !amount_eth) return j({ error: "Missing fields" }, 400);
 
+    // Get buyer id from Authorization header for trustworthy ownership transfer
+    const auth = req.headers.get("Authorization");
+    if (!auth) return j({ error: "Missing Authorization" }, 401);
+    const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
+    const { data: me } = await userClient.auth.getUser();
+    if (!me?.user) return j({ error: "Unauthorized" }, 401);
+    const buyerId = me.user.id;
+
     const db = createClient(SUPABASE_URL, SERVICE);
 
-    // Read listing with seller/buyer IDs via joined info
     const { data: listing, error: lerr } = await db
       .from("listings")
       .select("id, artwork_id, seller_id, status")
@@ -36,21 +44,8 @@ Deno.serve(async (req) => {
     if (lerr) throw lerr;
     if (!listing) return j({ error: "Listing not found" }, 404);
 
-    // Buyer from Authorization (optional) — you can trust client or add wallet→user map.
-    // For now, require Authorization so we can set buyer_id reliably.
-    const auth = req.headers.get("Authorization");
-    if (!auth) return j({ error: "Missing Authorization" }, 401);
-    const userClient = createClient(SUPABASE_URL, Deno.env.get("SUPABASE_ANON_KEY")!, {
-      global: { headers: { Authorization: auth } },
-    });
-    const { data: me } = await userClient.auth.getUser();
-    if (!me?.user) return j({ error: "Unauthorized" }, 401);
-    const buyerId = me.user.id;
-
-    // End listing if still active
     await db.from("listings").update({ status: "ended" }).eq("id", listing_id).eq("status", "active");
 
-    // Insert sale
     await db.from("sales").insert({
       artwork_id: listing.artwork_id,
       buyer_id: buyerId,
@@ -61,7 +56,6 @@ Deno.serve(async (req) => {
       tx_hash,
     });
 
-    // Transfer ownership
     await db.from("artworks").update({ owner_id: buyerId }).eq("id", listing.artwork_id);
 
     await db.from("ownerships").upsert({

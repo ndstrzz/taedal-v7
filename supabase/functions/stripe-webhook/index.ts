@@ -30,29 +30,26 @@ Deno.serve(async (req) => {
     if (event.type === "checkout.session.completed") {
       const session: any = event.data.object;
       const md = session.metadata || {};
-
       const listingId = md.listing_id;
       const artworkId = md.artwork_id;
       const sellerId = md.seller_id;
       const buyerId = md.buyer_id;
       const quantity = Number(md.quantity || 1);
 
-      // Sanity check
       if (!listingId || !artworkId || !sellerId || !buyerId) {
         return res({ error: "Missing metadata" }, 400);
       }
 
-      // Derive price/currency from session
-      const amountTotal = session.amount_total; // in smallest unit
-      const currency = (session.currency || "").toUpperCase();
+      const amountTotal: number = session.amount_total; // smallest unit
+      const currency: string = (session.currency || "").toUpperCase();
       const price = ["JPY", "KRW"].includes(currency) ? amountTotal : amountTotal / 100;
 
       const db = createClient(SUPABASE_URL, SERVICE);
 
-      // 1) End listing if still active
+      // End listing (idempotent)
       await db.from("listings").update({ status: "ended" }).eq("id", listingId).eq("status", "active");
 
-      // 2) Insert sales row
+      // Record sale
       await db.from("sales").insert({
         artwork_id: artworkId,
         buyer_id: buyerId,
@@ -60,14 +57,13 @@ Deno.serve(async (req) => {
         price,
         currency,
         sold_at: new Date().toISOString(),
-        tx_hash: null, // not an on-chain tx
+        tx_hash: null,
       });
 
-      // 3) Transfer ownership — simplest: set owner_id on single-edition artwork
+      // Transfer ownership (single-edition simple flow)
       await db.from("artworks").update({ owner_id: buyerId }).eq("id", artworkId);
 
-      // 4) Update ownerships table (upsert buyer + decrement seller)
-      // Buyer +1
+      // Ownership bookkeeping
       await db.from("ownerships").upsert({
         artwork_id: artworkId,
         owner_id: buyerId,
@@ -75,13 +71,12 @@ Deno.serve(async (req) => {
         updated_at: new Date().toISOString(),
       }, { onConflict: "artwork_id,owner_id" });
 
-      // Seller -1 (best-effort; ignore if it wasn't tracked)
+      // Optional: decrement seller quantity
       await db.rpc("decrement_ownership_if_exists", { p_artwork_id: artworkId, p_owner_id: sellerId }).catch(() => {});
 
       return res({ ok: true });
     }
 
-    // No-op for other event types
     return res({ received: true });
   } catch (e: any) {
     return res({ error: e?.message || "Webhook error" }, 400);
