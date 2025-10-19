@@ -180,47 +180,65 @@ export default function Account() {
   }
 
   async function loadCreated(uid: string) {
-    const { data, error } = await supabase
-      .from("artworks")
-      .select("id,title,image_url,creator_id,created_at")
-      .eq("creator_id", uid)
-      .order("created_at", { ascending: false })
-      .limit(60);
-    if (error) throw error;
-    setCreated((data ?? []) as ArtworkThumb[]);
+  // 1) all artworks you created
+  const { data, error } = await supabase
+    .from("artworks")
+    .select("id,title,image_url,creator_id,created_at")
+    .eq("creator_id", uid)
+    .order("created_at", { ascending: false })
+    .limit(60);
+  if (error) throw error;
+  const createdArts = (data ?? []) as ArtworkThumb[];
+
+  // 2) of those, which ones do you ALSO own and have marked hidden?
+  if (!createdArts.length) {
+    setCreated([]);
+    return;
   }
+  const ids = createdArts.map((a) => a.id);
+  const { data: hiddenRows, error: hErr } = await supabase
+    .from("ownerships")
+    .select("artwork_id")
+    .eq("owner_id", uid)
+    .eq("hidden", true)
+    .in("artwork_id", ids);
+  if (hErr) throw hErr;
+  const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
+
+  // 3) exclude hidden ones from the "Created" grid on Account page
+  setCreated(createdArts.filter((a) => !hiddenIds.has(a.id)));
+}
 
   async function loadPurchased(uid: string) {
-    // 1) Get owned artwork IDs, newest ownership first
-    const { data: ownIds, error: idsErr } = await supabase
-      .from("ownerships")
-      .select("artwork_id, updated_at")
-      .eq("owner_id", uid)
-      .order("updated_at", { ascending: false })
-      .limit(200);
-    if (idsErr) throw idsErr;
+  // 1) Get owned (visible) artwork IDs, newest first
+  const { data: ownIds, error: idsErr } = await supabase
+    .from("ownerships")
+    .select("artwork_id, updated_at")
+    .eq("owner_id", uid)
+    .eq("hidden", false)             // ⬅️ only show visible
+    .order("updated_at", { ascending: false })
+    .limit(200);
+  if (idsErr) throw idsErr;
 
-    const ids = (ownIds ?? []).map((r) => r.artwork_id);
-    if (ids.length === 0) {
-      setPurchased([]);
-      return;
-    }
-
-    // 2) Fetch those artworks (RLS lets owners read them)
-    const { data: arts, error: artsErr } = await supabase
-      .from("artworks")
-      .select("id,title,image_url,creator_id,created_at")
-      .in("id", ids);
-    if (artsErr) throw artsErr;
-
-    // 3) Keep the ownership order — NO filtering of self-created items
-    const byId = new Map(arts!.map((a) => [a.id, a]));
-    const ordered = ids
-      .map((id) => byId.get(id))
-      .filter((a): a is ArtworkThumb => !!a);
-
-    setPurchased(ordered);
+  const ids = (ownIds ?? []).map((r) => r.artwork_id);
+  if (ids.length === 0) {
+    setPurchased([]);
+    return;
   }
+
+  // 2) Fetch those artworks (RLS allows the owner to read them)
+  const { data: arts, error: artsErr } = await supabase
+    .from("artworks")
+    .select("id,title,image_url,creator_id,created_at")
+    .in("id", ids);
+  if (artsErr) throw artsErr;
+
+  // 3) Keep the same order as ownerships.updated_at
+  const byId = new Map(arts!.map((a) => [a.id, a]));
+  const ordered = ids.map((id) => byId.get(id)).filter((a): a is ArtworkThumb => !!a);
+
+  setPurchased(ordered);
+}
 
   useEffect(() => {
     let alive = true;
