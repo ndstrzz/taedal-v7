@@ -33,6 +33,9 @@ import CreateChooser from "./routes/studio/CreateChooser";
 import DeployCollection from "./routes/studio/DeployCollection";
 import Deploying from "./routes/studio/Deploying";
 
+// ✅ Checkout success page
+import CheckoutSuccess from "./routes/checkout/Success";
+
 function Layout() {
   return (
     <>
@@ -56,6 +59,10 @@ const router = createBrowserRouter([
       { path: "/contracts", element: <Contracts /> },
       { path: "/u/:handle", element: <PublicProfile /> },
       { path: "/art/:id", element: <ArtworkDetail /> },
+
+      // ✅ Stripe success routes (both paths supported)
+      { path: "/checkout/success", element: <CheckoutSuccess /> },
+      { path: "/orders/success", element: <CheckoutSuccess /> },
 
       // Auth
       { path: "/signin", element: <SignIn /> },
