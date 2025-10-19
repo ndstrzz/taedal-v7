@@ -26,7 +26,7 @@ type Profile = {
 export default function PublicProfile() {
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
-  const tabParam = sp.get("tab") as "created" | "purchased" | "hidden" | null;
+  const activeTab = (sp.get("tab") as "created" | "purchased" | "hidden") || "created";
 
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [p, setP] = useState<Profile | null>(null);
@@ -41,7 +41,7 @@ export default function PublicProfile() {
 
   const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
 
-  /* read viewer session (for "Edit profile") */
+  /* read viewer session (to know if isMe) */
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -94,108 +94,131 @@ export default function PublicProfile() {
     };
   }, [handle]);
 
-  const isMe = useMemo(
-    () => Boolean(viewerId && p?.id && viewerId === p.id),
-    [viewerId, p?.id]
-  );
+  /* helpers */
+  const mapArt = (rows: any[]): Artwork[] =>
+    (rows || []).map((r) => ({
+      id: r.id,
+      title: r.title ?? null,
+      image_url: r.image_url ?? null,
+    }));
 
-  // resolve active tab (hidden is only meaningful for self)
-  const activeTab: "created" | "purchased" | "hidden" =
-    tabParam && (tabParam !== "hidden" || isMe) ? tabParam : "created";
+  /* loaders that respect ownerships.hidden */
+  async function loadCreatedVisible(profileId: string) {
+    // 1) all artworks they created
+    const { data, error } = await supabase
+      .from("artworks")
+      .select(ARTWORK_COLS)
+      .eq("creator_id", profileId)
+      .order("created_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    const rows = (data ?? []) as any[];
 
-  /* load artworks for the active tab */
+    if (!rows.length) {
+      setCreated([]);
+      return;
+    }
+
+    // 2) among those, which they ALSO own and have hidden?
+    const ids = rows.map((r) => r.id);
+    const { data: hiddenRows, error: hErr } = await supabase
+      .from("ownerships")
+      .select("artwork_id")
+      .eq("owner_id", profileId)
+      .eq("hidden", true)
+      .gt("quantity", 0)
+      .in("artwork_id", ids);
+    if (hErr) throw hErr;
+
+    const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
+
+    // 3) exclude those from Created
+    setCreated(
+      rows
+        .filter((r) => !hiddenIds.has(r.id))
+        .map((r) => ({ id: r.id, title: r.title, image_url: r.image_url }))
+    );
+  }
+
+  async function loadPurchasedVisible(profileId: string) {
+    // visible ownerships only
+    const { data: ownRows, error } = await supabase
+      .from("ownerships")
+      .select(
+        `
+        artwork_id,
+        updated_at,
+        artworks:artworks!ownerships_artwork_id_fkey ( id, title, image_url )
+      `
+      )
+      .eq("owner_id", profileId)
+      .eq("hidden", false)
+      .gt("quantity", 0)
+      .order("updated_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+
+    type Row = { artwork_id: string; updated_at: string; artworks: any | any[] };
+    const rows = (ownRows ?? []) as Row[];
+
+    const idsInOrder = rows.map((r) => r.artwork_id);
+    const byId = new Map(
+      rows
+        .map((r) => Array.isArray(r.artworks) ? r.artworks[0] : r.artworks)
+        .filter(Boolean)
+        .map((a: any) => [a.id, a])
+    );
+
+    setPurchased(
+      idsInOrder
+        .map((id) => byId.get(id))
+        .filter(Boolean)
+        .map((a: any) => ({ id: a.id, title: a.title, image_url: a.image_url }))
+    );
+  }
+
+  async function loadHidden(profileId: string) {
+    // Only the owner should see this; RLS will also enforce owner_id = viewer
+    const { data, error } = await supabase
+      .from("ownerships")
+      .select(
+        `
+        artwork_id,
+        updated_at,
+        artworks:artworks!ownerships_artwork_id_fkey ( id, title, image_url )
+      `
+      )
+      .eq("owner_id", profileId)
+      .eq("hidden", true)
+      .gt("quantity", 0)
+      .order("updated_at", { ascending: false })
+      .limit(200);
+    if (error) throw error;
+
+    const rows = (data ?? []) as { artwork_id: string; artworks: any | any[] }[];
+    setHidden(
+      rows
+        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+        .filter(Boolean)
+        .map((a: any) => ({ id: a.id, title: a.title, image_url: a.image_url }))
+    );
+  }
+
+  /* load artworks for the active tab (and whenever profile changes) */
   useEffect(() => {
     if (!p?.id) return;
     let alive = true;
-
-    const mapArt = (rows: any[]): Artwork[] =>
-      (rows || []).map((r) => ({
-        id: r.id,
-        title: r.title ?? null,
-        image_url: r.image_url ?? null,
-      }));
 
     const load = async () => {
       setLoadingGrid(true);
       setMsg(null);
       try {
         if (activeTab === "created") {
-          const { data, error } = await supabase
-            .from("artworks")
-            .select(ARTWORK_COLS)
-            .eq("creator_id", p.id)
-            .order("created_at", { ascending: false });
-          if (error) throw error;
-          if (!alive) return;
-          setCreated(mapArt(data as any[]));
+          await loadCreatedVisible(p.id);
         } else if (activeTab === "purchased") {
-          // PURCHASED: show only visible ones (hidden = false) to everyone
-          const { data: own, error: ownErr } = await supabase
-            .from("ownerships")
-            .select(
-              `
-              artwork_id,
-              hidden,
-              updated_at,
-              artworks:artworks!ownerships_artwork_id_fkey (id, title, image_url, creator_id, created_at)
-            `
-            )
-            .eq("owner_id", p.id)
-            .eq("hidden", false)
-            .order("updated_at", { ascending: false })
-            .limit(200);
-          if (ownErr) throw ownErr;
-
-          type Row = { artwork_id: string; artworks: any | any[] };
-          const rows = (own || []) as Row[];
-          const seen = new Set<string>();
-          const viaOwnerships: Artwork[] = [];
-          for (const r of rows) {
-            const a = Array.isArray(r.artworks) ? r.artworks[0] : r.artworks;
-            if (!a) continue;
-            if (seen.has(a.id)) continue;
-            seen.add(a.id);
-            viaOwnerships.push({ id: a.id, title: a.title ?? null, image_url: a.image_url ?? null });
-          }
-          if (alive) setPurchased(viaOwnerships);
-
-          // fallback (legacy) if none found
-          if (!viaOwnerships.length) {
-            const { data: owned, error: fallbackErr } = await supabase
-              .from("artworks")
-              .select(ARTWORK_COLS)
-              .eq("owner_id", p.id)
-              .order("created_at", { ascending: false });
-            if (fallbackErr) throw fallbackErr;
-            if (alive) setPurchased(mapArt((owned || []) as any[]));
-          }
+          await loadPurchasedVisible(p.id);
         } else {
-          // HIDDEN: only for self
-          if (!isMe) {
-            setHidden([]);
-          } else {
-            const { data: own, error } = await supabase
-              .from("ownerships")
-              .select(
-                `
-                artwork_id,
-                hidden,
-                updated_at,
-                artworks:artworks!ownerships_artwork_id_fkey (id, title, image_url, creator_id, created_at)
-              `
-              )
-              .eq("owner_id", p.id)
-              .eq("hidden", true)
-              .order("updated_at", { ascending: false })
-              .limit(200);
-            if (error) throw error;
-            const items: Artwork[] = [];
-            for (const r of (own || []) as any[]) {
-              const a = Array.isArray(r.artworks) ? r.artworks[0] : r.artworks;
-              if (a) items.push({ id: a.id, title: a.title ?? null, image_url: a.image_url ?? null });
-            }
-            if (alive) setHidden(items);
-          }
+          await loadHidden(p.id);
         }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artworks.");
@@ -208,7 +231,7 @@ export default function PublicProfile() {
     return () => {
       alive = false;
     };
-  }, [p?.id, activeTab, isMe]);
+  }, [p?.id, activeTab]);
 
   /* page title */
   useEffect(() => {
@@ -217,6 +240,11 @@ export default function PublicProfile() {
   }, [p]);
 
   /* derived UI bits */
+  const isMe = useMemo(
+    () => Boolean(viewerId && p?.id && viewerId === p.id),
+    [viewerId, p?.id]
+  );
+
   const coverUrl = p?.cover_url || "";
   const avatarUrl = p?.avatar_url || "/images/taedal-logo.svg";
   const displayName = p?.display_name?.trim() || p?.username || "Profile";
@@ -301,7 +329,7 @@ export default function PublicProfile() {
         ) : activeTab === "purchased" ? (
           <ArtworkGrid items={purchased} emptyText="No purchased pieces yet." />
         ) : (
-          <ArtworkGrid items={hidden} emptyText="Nothing hidden." />
+          <ArtworkGrid items={hidden} emptyText="No hidden pieces." />
         )}
       </div>
     </div>
