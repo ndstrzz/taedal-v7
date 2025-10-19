@@ -1,21 +1,20 @@
+// app/src/App.tsx
 import { useEffect, useState, Suspense } from "react";
 import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
 
-/* ---- pages (your existing files) ---- */
+/* ---- pages ---- */
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
-/* If you added the success page I proposed earlier, keep this import. 
-   If not yet, you can comment it out until the file exists. */
-import CheckoutSuccess from "./routes/checkout/Success";
+import CheckoutSuccess from "./routes/checkout/Success"; // <-- success page
 
 /* ---- libs ---- */
 import { fetchActiveListings, type JoinedListing } from "./lib/listings";
 
-/* ---- global styles (keep your existing CSS/Tailwind setup) ---- */
+/* ---- styles ---- */
 import "./App.css";
 
 /* ----------------------------------------- */
-/* Top navigation (simple & clean)           */
+/* Top navigation                            */
 /* ----------------------------------------- */
 function TopNav() {
   const loc = useLocation();
@@ -59,7 +58,7 @@ function TopNav() {
 }
 
 /* ----------------------------------------- */
-/* Explore (Home) — minimal, uses listings   */
+/* Explore (Home)                            */
 /* ----------------------------------------- */
 function Explore() {
   const [items, setItems] = useState<JoinedListing[] | null>(null);
@@ -183,8 +182,9 @@ function App() {
             <Route path="/" element={<Explore />} />
             <Route path="/create" element={<CreateArtwork />} />
             <Route path="/art/:id" element={<ArtworkDetail />} />
+            {/* Stripe success landing */}
             <Route path="/checkout/success" element={<CheckoutSuccess />} />
-            {/* add more: /checkout/cancel, /u/:handle, etc. */}
+            {/* Add others later: /checkout/cancel, /u/:handle, etc. */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
