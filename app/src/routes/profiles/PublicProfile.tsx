@@ -119,7 +119,7 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // ✅ PURCHASED: prefer ownerships→artworks join (same as Account.tsx)
+          // ✅ PURCHASED: read from ownerships→artworks (and sort by most recent sale if present)
           const { data: own, error: ownErr } = await supabase
             .from("ownerships")
             .select(
@@ -127,28 +127,43 @@ export default function PublicProfile() {
               artwork_id,
               artworks!inner (
                 id, title, image_url, creator_id, created_at
-              )
+              ),
+              sales:sales!left (sold_at, tx_hash)
             `
             )
             .eq("owner_id", p.id)
+            .order("sold_at", { foreignTable: "sales", ascending: false })
             .order("created_at", { foreignTable: "artworks", ascending: false })
-            .limit(100);
+            .limit(200);
           if (ownErr) throw ownErr;
 
-          type Row = { artwork_id: string; artworks: any | any[] };
+          type Row = {
+            artwork_id: string;
+            artworks: any | any[];
+          };
           const rows = (own || []) as Row[];
 
-          const viaOwnerships: Artwork[] = rows
-            .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
-            .filter((a) => !!a && a.creator_id !== p.id)
-            .map((a) => ({ id: a.id, title: a.title, image_url: a.image_url }));
+          // Flatten / de-dupe per artwork id, hide self-created pieces
+          const seen = new Set<string>();
+          const viaOwnerships: Artwork[] = [];
+          for (const r of rows) {
+            const a = Array.isArray(r.artworks) ? r.artworks[0] : r.artworks;
+            if (!a || a.creator_id === p.id) continue;
+            if (seen.has(a.id)) continue;
+            seen.add(a.id);
+            viaOwnerships.push({
+              id: a.id,
+              title: a.title ?? null,
+              image_url: a.image_url ?? null,
+            });
+          }
 
           if (viaOwnerships.length) {
             if (alive) setPurchased(viaOwnerships);
             return;
           }
 
-          // Fallback (legacy): artworks whose owner_id is the user but not created by them
+          // Fallback (legacy): artworks with owner_id = user (useful for old data or one-off updates)
           const { data: owned, error: fallbackErr } = await supabase
             .from("artworks")
             .select(ARTWORK_COLS)
@@ -203,16 +218,26 @@ export default function PublicProfile() {
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
-      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
+      <div
+        className="relative border-b border-neutral-800 overflow-hidden"
+        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
+      >
         {coverUrl ? (
-          <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
+          <img
+            src={coverUrl}
+            alt="cover"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
         )}
-        <div className="absolute inset-0 pointer-events-none" style={{
-          backgroundImage:
-            "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
-        }} />
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage:
+              "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
+          }}
+        />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-b from-transparent to-black/70 pointer-events-none" />
       </div>
 
@@ -220,22 +245,42 @@ export default function PublicProfile() {
       <div className="max-w-6xl mx-auto px-4 -mt-12 md:-mt-14 relative z-10 pb-2">
         <div className="flex items-end justify-between">
           <div className="flex items-end gap-4">
-            <img src={avatarUrl} alt="avatar" className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900" />
+            <img
+              src={avatarUrl}
+              alt="avatar"
+              className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900"
+            />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
-              {usernameText && <p className="text-neutral-400">{usernameText}</p>}
-              <div className="mt-1"><Socials p={p} /></div>
+              {usernameText && (
+                <p className="text-neutral-400">{usernameText}</p>
+              )}
+              <div className="mt-1">
+                <Socials p={p} />
+              </div>
             </div>
           </div>
-          <div className="pb-1">{isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}</div>
+          <div className="pb-1">
+            {isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>Created</TabButton>
-          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>Purchased</TabButton>
+          <TabButton
+            active={activeTab === "created"}
+            onClick={() => setTab("created")}
+          >
+            Created
+          </TabButton>
+          <TabButton
+            active={activeTab === "purchased"}
+            onClick={() => setTab("purchased")}
+          >
+            Purchased
+          </TabButton>
         </div>
       </div>
 
@@ -254,7 +299,7 @@ export default function PublicProfile() {
   );
 }
 
-/* ---------- UI pieces (unchanged) ---------- */
+/* ---------- UI pieces ---------- */
 
 function TabButton({
   active,
@@ -270,7 +315,9 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active
+          ? "border-white text-white"
+          : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -278,7 +325,13 @@ function TabButton({
   );
 }
 
-function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string; }) {
+function ArtworkGrid({
+  items,
+  emptyText,
+}: {
+  items: Artwork[];
+  emptyText: string;
+}) {
   if (!items?.length) {
     return <div className="card text-sm text-neutral-400">{emptyText}</div>;
   }
@@ -292,11 +345,18 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
         >
           <div className="aspect-square bg-neutral-800">
             {a.image_url ? (
-              <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" loading="lazy" />
+              <img
+                src={a.image_url}
+                alt={a.title ?? "Artwork"}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
+            <div className="truncate font-medium group-hover:text-white">
+              {a.title || "Untitled"}
+            </div>
           </div>
         </Link>
       ))}
@@ -308,7 +368,10 @@ function GridSkeleton() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse">
+        <div
+          key={i}
+          className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse"
+        >
           <div className="aspect-square bg-neutral-800/70" />
           <div className="p-3 h-5 bg-neutral-800/70" />
         </div>
@@ -320,15 +383,39 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
-  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
-  if (p.youtube) items.push({ label: "YT", href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}` });
-  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
+  if (p.instagram)
+    items.push({
+      label: "IG",
+      href: `https://instagram.com/${p.instagram.replace(/^@/, "")}`,
+    });
+  if (p.x_handle)
+    items.push({
+      label: "X",
+      href: `https://x.com/${p.x_handle.replace(/^@/, "")}`,
+    });
+  if (p.youtube)
+    items.push({
+      label: "YT",
+      href: p.youtube.startsWith("http")
+        ? p.youtube
+        : `https://youtube.com/${p.youtube}`,
+    });
+  if (p.telegram)
+    items.push({
+      label: "TG",
+      href: `https://t.me/${p.telegram.replace(/^@/, "")}`,
+    });
   if (!items.length) return null;
   return (
     <div className="flex items-center gap-2">
       {items.map((it) => (
-        <a key={it.label} href={it.href} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700">
+        <a
+          key={it.label}
+          href={it.href}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700"
+        >
           {it.label}
         </a>
       ))}
