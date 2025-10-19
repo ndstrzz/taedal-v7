@@ -113,9 +113,7 @@ export default function Account() {
   // gallery data
   const [created, setCreated] = useState<ArtworkThumb[]>([]);
   const [purchased, setPurchased] = useState<ArtworkThumb[]>([]);
-  const [activeTab, setActiveTab] = useState<"created" | "purchased">(
-    "created"
-  );
+  const [activeTab, setActiveTab] = useState<"created" | "purchased">("created");
 
   // local, post-crop files
   const [avatarFile, setAvatarFile] = useState<Blob | null>(null);
@@ -193,28 +191,49 @@ export default function Account() {
   }
 
   async function loadPurchased(uid: string) {
+    // Pull from ownerships → artworks. Sort by ownerships.updated_at for recency.
     const { data, error } = await supabase
       .from("ownerships")
       .select(
         `
-      artwork_id,
-      artworks:artworks!ownerships_artwork_id_fkey (
-        id, title, image_url, creator_id, created_at
-      )
-    `
+        artwork_id,
+        updated_at,
+        artworks:artworks!ownerships_artwork_id_fkey (
+          id, title, image_url, creator_id, created_at
+        )
+      `
       )
       .eq("owner_id", uid)
-      .order("created_at", { foreignTable: "artworks", ascending: false })
-      .limit(60);
+      .order("updated_at", { ascending: false }) // ⬅️ new: surface latest purchases
+      .limit(120);
 
     if (error) throw error;
 
-    type Row = { artwork_id: string; artworks: ArtworkThumb | ArtworkThumb[] };
+    type Row = {
+      artwork_id: string;
+      updated_at: string;
+      artworks: ArtworkThumb | ArtworkThumb[];
+    };
     const rows = (data ?? []) as Row[];
 
     const mapped: ArtworkThumb[] = rows
       .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
       .filter((a): a is ArtworkThumb => !!a && a.creator_id !== uid);
+
+    // Fallback (legacy schemas or strict RLS)
+    if (!mapped.length) {
+      const { data: owned, error: fbErr } = await supabase
+        .from("artworks")
+        .select("id,title,image_url,creator_id,created_at")
+        .eq("owner_id", uid)
+        .order("created_at", { ascending: false })
+        .limit(120);
+      if (!fbErr) {
+        const filtered = (owned ?? []).filter((a) => a.creator_id !== uid);
+        setPurchased(filtered as ArtworkThumb[]);
+        return;
+      }
+    }
 
     setPurchased(mapped);
   }
@@ -228,11 +247,7 @@ export default function Account() {
         const uid = s?.session?.user?.id ?? null;
         setUserId(uid);
         if (!uid) return;
-        await Promise.all([
-          loadProfile(uid),
-          loadCreated(uid),
-          loadPurchased(uid),
-        ]);
+        await Promise.all([loadProfile(uid), loadCreated(uid), loadPurchased(uid)]);
       } catch (e: any) {
         setMsg(e?.message || "Failed to load account");
       } finally {
@@ -274,15 +289,10 @@ export default function Account() {
         const path = `avatars/${userId}.jpg`;
         const { error: upErr } = await supabase.storage
           .from("avatars")
-          .upload(path, resized, {
-            upsert: true,
-            cacheControl: "0",
-          });
+          .upload(path, resized, { upsert: true, cacheControl: "0" });
         if (upErr) throw upErr;
         const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
-        avatar_url = `${pub.publicUrl}${
-          pub.publicUrl.includes("?") ? "&" : "?"
-        }${stamp}`;
+        avatar_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
       }
 
       if (coverFile) {
@@ -290,15 +300,10 @@ export default function Account() {
         const path = `covers/${userId}.jpg`;
         const { error: upErr } = await supabase.storage
           .from("covers")
-          .upload(path, resized, {
-            upsert: true,
-            cacheControl: "0",
-          });
+          .upload(path, resized, { upsert: true, cacheControl: "0" });
         if (upErr) throw upErr;
         const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
-        cover_url = `${pub.publicUrl}${
-          pub.publicUrl.includes("?") ? "&" : "?"
-        }${stamp}`;
+        cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
       }
 
       const payload = {
@@ -353,9 +358,7 @@ export default function Account() {
       Icon = IconX;
     }
     if (kind === "yt") {
-      href = handle.startsWith("http")
-        ? handle
-        : `https://youtube.com/${handle}`;
+      href = handle.startsWith("http") ? handle : `https://youtube.com/${handle}`;
       Icon = IconYouTube;
     }
     if (kind === "tg") {
@@ -379,17 +382,13 @@ export default function Account() {
 
   return (
     <div className="min-h-[100dvh]">
-      {/* Cover (responsive height via clamp) */}
+      {/* Cover */}
       <div
         className="relative bg-neutral-900 border-b border-neutral-800"
         style={{ height: "clamp(12rem, 28vh, 24rem)" }}
       >
         {coverPreview && (
-          <img
-            src={coverPreview}
-            alt="cover"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          <img src={coverPreview} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
         )}
         <div className="absolute inset-0 bg-black/10 pointer-events-none" />
         <div className="absolute right-4 bottom-4">
@@ -434,12 +433,8 @@ export default function Account() {
               </label>
             </div>
             <div className="pb-1">
-              <h1 className="text-2xl font-bold">
-                {form.display_name?.trim() || "Account"}
-              </h1>
-              {form.username ? (
-                <p className="text-neutral-400">@{form.username}</p>
-              ) : null}
+              <h1 className="text-2xl font-bold">{form.display_name?.trim() || "Account"}</h1>
+              {form.username ? <p className="text-neutral-400">@{form.username}</p> : null}
               <div className="mt-2 flex items-center gap-2">
                 <SocialLink kind="ig" handle={form.instagram} />
                 <SocialLink kind="x" handle={form.x_handle} />
@@ -462,9 +457,7 @@ export default function Account() {
               <input
                 className="input"
                 value={form.username ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, username: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
               />
             </div>
             <div>
@@ -472,9 +465,7 @@ export default function Account() {
               <input
                 className="input"
                 value={form.display_name ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, display_name: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, display_name: e.target.value }))}
               />
             </div>
             <div className="md:col-span-2">
@@ -482,9 +473,7 @@ export default function Account() {
               <textarea
                 className="input min-h-[96px]"
                 value={form.bio ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, bio: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
               />
             </div>
           </div>
@@ -497,19 +486,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. art.by.kuro"
                 value={form.instagram ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, instagram: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, instagram: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    instagram: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, instagram: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@”. Link shows as instagram.com/
-                <b>{(form.instagram || "").replace(/^@/, "")}</b>.
+                We store it without “@”. Link shows as instagram.com/<b>{(form.instagram || "").replace(/^@/, "")}</b>.
               </p>
             </div>
             <div>
@@ -518,19 +501,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. kuro_wolf"
                 value={form.x_handle ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, x_handle: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, x_handle: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    x_handle: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, x_handle: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@” → x.com/
-                <b>{(form.x_handle || "").replace(/^@/, "")}</b>.
+                We store it without “@” → x.com/<b>{(form.x_handle || "").replace(/^@/, "")}</b>.
               </p>
             </div>
             <div>
@@ -539,19 +516,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. kurochannel"
                 value={form.telegram ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, telegram: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, telegram: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    telegram: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, telegram: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@” → t.me/
-                <b>{(form.telegram || "").replace(/^@/, "")}</b>.
+                We store it without “@” → t.me/<b>{(form.telegram || "").replace(/^@/, "")}</b>.
               </p>
             </div>
           </div>
@@ -561,9 +532,7 @@ export default function Account() {
               {saving ? "Saving…" : "Save"}
             </button>
             {avatarFile || coverFile ? (
-              <span className="text-sm text-neutral-400">
-                You have unsaved image changes.
-              </span>
+              <span className="text-sm text-neutral-400">You have unsaved image changes.</span>
             ) : null}
           </div>
           {msg && <p className="text-sm text-amber-300">{msg}</p>}
@@ -573,9 +542,7 @@ export default function Account() {
         <div className="flex gap-3">
           <button
             className={`px-3 py-1 rounded-lg ${
-              activeTab === "created"
-                ? "bg-neutral-800"
-                : "bg-neutral-900 border border-neutral-800"
+              activeTab === "created" ? "bg-neutral-800" : "bg-neutral-900 border border-neutral-800"
             }`}
             onClick={() => setActiveTab("created")}
           >
@@ -583,9 +550,7 @@ export default function Account() {
           </button>
           <button
             className={`px-3 py-1 rounded-lg ${
-              activeTab === "purchased"
-                ? "bg-neutral-800"
-                : "bg-neutral-900 border border-neutral-800"
+              activeTab === "purchased" ? "bg-neutral-800" : "bg-neutral-900 border border-neutral-800"
             }`}
             onClick={() => setActiveTab("purchased")}
           >
@@ -595,17 +560,9 @@ export default function Account() {
 
         {/* Galleries */}
         {activeTab === "created" ? (
-          <Gallery
-            title="Your Artworks"
-            subtitle="Uploads you created."
-            items={created}
-          />
+          <Gallery title="Your Artworks" subtitle="Uploads you created." items={created} />
         ) : (
-          <Gallery
-            title="Purchased"
-            subtitle="Pieces you currently own."
-            items={purchased}
-          />
+          <Gallery title="Purchased" subtitle="Pieces you currently own." items={purchased} />
         )}
       </div>
 
@@ -655,18 +612,12 @@ function Gallery({
             >
               <div className="aspect-square bg-neutral-950 grid place-items-center overflow-hidden">
                 {a.image_url ? (
-                  <img
-                    src={a.image_url}
-                    alt={a.title ?? "Artwork"}
-                    className="w-full h-full object-cover"
-                  />
+                  <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" />
                 ) : (
                   <span className="text-neutral-500 text-xs">No image</span>
                 )}
               </div>
-              <div className="p-2 text-sm truncate">
-                {a.title || "Untitled"}
-              </div>
+              <div className="p-2 text-sm truncate">{a.title || "Untitled"}</div>
             </Link>
           ))}
         </div>

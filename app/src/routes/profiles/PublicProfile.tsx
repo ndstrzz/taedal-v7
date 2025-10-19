@@ -119,23 +119,24 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // PURCHASED: ownerships -> artworks (explicit FK hint)
+          // PURCHASED: ownerships -> artworks (explicit FK), sorted by ownerships.updated_at
           const { data: own, error: ownErr } = await supabase
             .from("ownerships")
             .select(
               `
               artwork_id,
+              updated_at,
               artworks:artworks!ownerships_artwork_id_fkey (
                 id, title, image_url, creator_id, created_at
               )
             `
             )
             .eq("owner_id", p.id)
-            .order("created_at", { foreignTable: "artworks", ascending: false })
+            .order("updated_at", { ascending: false })
             .limit(200);
           if (ownErr) throw ownErr;
 
-          type Row = { artwork_id: string; artworks: any | any[] };
+          type Row = { artwork_id: string; updated_at: string; artworks: any | any[] };
           const rows = (own || []) as Row[];
 
           // flatten, de-dupe, hide self-created
@@ -163,9 +164,7 @@ export default function PublicProfile() {
               .eq("owner_id", p.id)
               .order("created_at", { ascending: false });
             if (fallbackErr) throw fallbackErr;
-            const filtered = (owned || []).filter(
-              (r: any) => r.creator_id !== p.id
-            );
+            const filtered = (owned || []).filter((r: any) => r.creator_id !== p.id);
             if (alive) setPurchased(mapArt(filtered));
           }
         }
@@ -216,11 +215,7 @@ export default function PublicProfile() {
         style={{ height: "clamp(12rem, 48vh, 52rem)" }}
       >
         {coverUrl ? (
-          <img
-            src={coverUrl}
-            alt="cover"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
         )}
@@ -245,33 +240,23 @@ export default function PublicProfile() {
             />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
-              {usernameText && (
-                <p className="text-neutral-400">{usernameText}</p>
-              )}
+              {usernameText && <p className="text-neutral-400">{usernameText}</p>}
               <div className="mt-1">
                 <Socials p={p} />
               </div>
             </div>
           </div>
-          <div className="pb-1">
-            {isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}
-          </div>
+          <div className="pb-1">{isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}</div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton
-            active={activeTab === "created"}
-            onClick={() => setTab("created")}
-          >
+          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>
             Created
           </TabButton>
-          <TabButton
-            active={activeTab === "purchased"}
-            onClick={() => setTab("purchased")}
-          >
+          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
             Purchased
           </TabButton>
         </div>
@@ -308,9 +293,7 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active
-          ? "border-white text-white"
-          : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -318,13 +301,7 @@ function TabButton({
   );
 }
 
-function ArtworkGrid({
-  items,
-  emptyText,
-}: {
-  items: Artwork[];
-  emptyText: string;
-}) {
+function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string }) {
   if (!items?.length) {
     return <div className="card text-sm text-neutral-400">{emptyText}</div>;
   }
@@ -347,9 +324,7 @@ function ArtworkGrid({
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">
-              {a.title || "Untitled"}
-            </div>
+            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
           </div>
         </Link>
       ))}
@@ -361,10 +336,7 @@ function GridSkeleton() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse"
-        >
+        <div key={i} className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse">
           <div className="aspect-square bg-neutral-800/70" />
           <div className="p-3 h-5 bg-neutral-800/70" />
         </div>
@@ -376,28 +348,14 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-  if (p.instagram)
-    items.push({
-      label: "IG",
-      href: `https://instagram.com/${p.instagram.replace(/^@/, "")}`,
-    });
-  if (p.x_handle)
-    items.push({
-      label: "X",
-      href: `https://x.com/${p.x_handle.replace(/^@/, "")}`,
-    });
+  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
+  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
   if (p.youtube)
     items.push({
       label: "YT",
-      href: p.youtube.startsWith("http")
-        ? p.youtube
-        : `https://youtube.com/${p.youtube}`,
+      href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}`,
     });
-  if (p.telegram)
-    items.push({
-      label: "TG",
-      href: `https://t.me/${p.telegram.replace(/^@/, "")}`,
-    });
+  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
   if (!items.length) return null;
   return (
     <div className="flex items-center gap-2">
