@@ -2,14 +2,20 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>app</title>
 
-    <!-- preload the loading video -->
+    <!-- Tab title -->
+    <title>taedal</title>
+
+    <!-- Favicons (served from /public) -->
+    <link rel="icon" type="image/svg+xml" href="/images/taedal-static.svg" />
+    <link rel="icon" type="image/png" href="/images/taedal-logo-32.png" sizes="32x32" />
+    <link rel="apple-touch-icon" href="/images/taedal-logo-180.png" />
+    <meta name="theme-color" content="#000000" />
+
+    <!-- Preloads -->
     <link rel="preload" href="/media/similarity.webm" as="video" type="video/webm" />
     <link rel="preload" href="/media/taedal-coin.glb" as="fetch" crossorigin="anonymous" />
-
   </head>
   <body>
     <div id="root"></div>
