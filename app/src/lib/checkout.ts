@@ -1,13 +1,17 @@
 import { supabase } from "./supabase";
 
 export async function createFiatCheckout(listingId: string, quantity = 1) {
-  const { data, error } = await supabase.functions.invoke<{
-    url: string;
-  }>("create-checkout", { body: { listing_id: listingId, quantity } });
+  const success_url = `${window.location.origin}/checkout/success`;
+  const cancel_url = `${window.location.origin}`;
+  const { data, error } = await supabase.functions.invoke<{ url: string }>(
+    "create-checkout",
+    { body: { listing_id: listingId, quantity, success_url, cancel_url } }
+  );
   if (error) throw error;
   if (!data?.url) throw new Error("No checkout URL returned");
   return data.url;
 }
+
 
 // Optional crypto charge (Coinbase Commerce)
 export async function createCryptoCharge(listingId: string, quantity = 1) {
