@@ -82,6 +82,45 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
+/* ------------------------------ UI helpers (visual only) ------------------------------ */
+
+function Pill({
+  children,
+  tone = "neutral",
+  className = "",
+}: { children: React.ReactNode; tone?: "neutral" | "success" | "warning"; className?: string }) {
+  const toneCls =
+    tone === "success"
+      ? "bg-emerald-400 text-black"
+      : tone === "warning"
+      ? "bg-amber-300 text-black"
+      : "bg-white/10 text-white";
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${toneCls} ${className}`} >
+      {children}
+    </span>
+  );
+}
+
+function Card({ title, right, children, className = "" }: {
+  title?: React.ReactNode;
+  right?: React.ReactNode;
+  children?: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}>
+      {(title || right) && (
+        <div className="mb-3 flex items-center justify-between">
+          {title ? <h3 className="text-sm font-semibold">{title}</h3> : <div />}
+          {right}
+        </div>
+      )}
+      {children}
+    </div>
+  );
+}
+
 /* ------------------------------ Countdown ------------------------------ */
 
 function Countdown({
@@ -112,7 +151,7 @@ function Countdown({
   }, [ms]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
-    <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
+    <div className="px-2 py-1 rounded-md bg-white/8 border border-white/10 text-center">
       <div className="text-sm font-semibold tabular-nums">
         {v.toString().padStart(2, "0")}
       </div>
@@ -124,8 +163,8 @@ function Countdown({
     <div className="flex gap-2 items-center">
       <Box v={days} label="DAYS" />
       <Box v={hours} label="HOURS" />
-      <Box v={mins} label="MINUTES" />
-      <Box v={secs} label="SECONDS" />
+      <Box v={mins} label="MIN" />
+      <Box v={secs} label="SEC" />
     </div>
   );
 }
@@ -448,9 +487,6 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ Buy handlers ------------------------------ */
 
-  // Route by currency:
-  // - ETH -> wallet modal (MetaMask)
-  // - flat fiat (USD etc.) -> Stripe Checkout via your Supabase function `create-checkout`
   async function onBuy() {
     if (!activeListing || !art) return;
     const ccy = (activeListing.sale_currency || "").toUpperCase();
@@ -467,7 +503,6 @@ export default function ArtworkDetail() {
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
-          // optional: pass title/description to your function
           title: art.title ?? "Artwork purchase",
           success_url: `${location.origin}/orders/success`,
           cancel_url: `${location.origin}${location.pathname}`,
@@ -551,12 +586,29 @@ export default function ArtworkDetail() {
 
       setWalletOpen(false);
       setMsg("Payment sent ✔️");
-      // Optionally navigate:
-      // location.href = `/orders/success?tx=${txHash}`;
     } catch (e) {
       setMsg(asMsg(e));
     } finally {
       setPayBusy(false);
+    }
+  }
+
+  /* ------------------------------ bids ------------------------------ */
+  async function onPlaceBid() {
+    if (!activeListing) return;
+    setBidBusy(true);
+    setBidMsg(null);
+    try {
+      const amt = Number(bidInput || 0);
+      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+      const b = await placeBid(activeListing.id, amt);
+      setTopBid(b);
+      setBidMsg("Bid placed ✅");
+      setBidInput("");
+    } catch (e: any) {
+      setBidMsg(e?.message || "Bid failed");
+    } finally {
+      setBidBusy(false);
     }
   }
 
@@ -586,29 +638,26 @@ export default function ArtworkDetail() {
     return Math.max(reserve, base || reserve || 0);
   }, [topBid, activeListing, isAuction]);
 
-  /* ------------------------------ bids ------------------------------ */
-
-  async function onPlaceBid() {
-    if (!activeListing) return;
-    setBidBusy(true);
-    setBidMsg(null);
-    try {
-      const amt = Number(bidInput || 0);
-      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
-      const b = await placeBid(activeListing.id, amt);
-      setTopBid(b);
-      setBidMsg("Bid placed ✅");
-      setBidInput("");
-    } catch (e: any) {
-      setBidMsg(e?.message || "Bid failed");
-    } finally {
-      setBidBusy(false);
-    }
-  }
-
   /* ------------------------------ render ------------------------------ */
 
-  if (loading) return <div className="p-6">loading…</div>;
+  if (loading) {
+    return (
+      <div className="max-w-7xl mx-auto p-6">
+        <div className="animate-pulse grid gap-6 lg:grid-cols-12">
+          <div className="lg:col-span-7">
+            <div className="aspect-square rounded-2xl bg-white/[0.06]" />
+          </div>
+          <div className="lg:col-span-5 space-y-4">
+            <div className="h-6 w-48 bg-white/[0.06] rounded" />
+            <div className="h-4 w-64 bg-white/[0.06] rounded" />
+            <div className="rounded-2xl bg-white/[0.06] h-44" />
+            <div className="rounded-2xl bg-white/[0.06] h-36" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (!art) {
     return (
       <div className="max-w-5xl mx-auto p-6">
@@ -624,13 +673,13 @@ export default function ArtworkDetail() {
     <>
       <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
         {/* Left: Media & thumbs */}
-        <div className="lg:col-span-7">
-          <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-900">
+        <div className="lg:col-span-7 space-y-3">
+          <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
             {mainUrl ? (
               <img
                 src={mainUrl}
                 alt={art.title ?? "Artwork"}
-                className="w-full h-full object-contain bg-neutral-900"
+                className="w-full h-full object-contain bg-neutral-950"
               />
             ) : (
               <div className="aspect-square grid place-items-center text-neutral-400">
@@ -638,7 +687,7 @@ export default function ArtworkDetail() {
               </div>
             )}
             <div className="hidden md:flex absolute right-3 top-3 flex-col gap-2">
-              <button className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition">
+              <button className="rounded-full p-2 bg-white text-black/90 hover:bg-white/90 transition shadow">
                 <HeartIcon />
               </button>
               <button className="rounded-full p-2 bg-white/10 text-white hover:bg-white/20 border border-white/10 transition">
@@ -648,13 +697,13 @@ export default function ArtworkDetail() {
           </div>
 
           {(files?.length || 0) > 0 && (
-            <div className="mt-3 grid grid-cols-5 gap-2">
+            <div className="grid grid-cols-5 gap-2">
               {[{ url: art.image_url } as any, ...files].slice(0, 10).map((f, i) => (
                 <button
                   key={i}
                   onClick={() => setMainUrl(f.url)}
-                  className={`aspect-square overflow-hidden rounded-lg border ${
-                    mainUrl === f.url ? "border-white/40" : "border-white/10"
+                  className={`aspect-square overflow-hidden rounded-xl border transition ${
+                    mainUrl === f.url ? "border-white/50" : "border-white/10 hover:border-white/30"
                   } bg-neutral-900`}
                 >
                   <img src={f.url} className="h-full w-full object-cover" />
@@ -665,79 +714,74 @@ export default function ArtworkDetail() {
         </div>
 
         {/* Right: details */}
-        <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6">
-          {msg && <p className="text-sm text-amber-300">{msg}</p>}
+        <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
+          {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
           <div className="space-y-1">
-            <div className="text-xs text-white/70">Artwork</div>
-            <h1 className="text-3xl font-semibold">{art.title || "Untitled"}</h1>
-            <p className="text-sm text-neutral-400">
-              Minted {new Date(art.created_at).toLocaleDateString()}
-            </p>
+            <div className="text-[11px] text-white/60 flex items-center gap-2">
+              <Pill>Artwork</Pill>
+              <span>Minted {new Date(art.created_at).toLocaleDateString()}</span>
+            </div>
+            <h1 className="text-3xl font-semibold leading-tight">{art.title || "Untitled"}</h1>
           </div>
 
-          {/* creator/owner card */}
-          <div className="card space-y-3">
+          <Card>
             <div className="flex items-center gap-3">
               {creator?.avatar_url ? (
                 <img
                   src={creator.avatar_url}
-                  className="h-8 w-8 rounded-full object-cover"
+                  className="h-10 w-10 rounded-full object-cover"
                 />
-              ) : null}
+              ) : (
+                <div className="h-10 w-10 rounded-full bg-white/10" />
+              )}
               <div className="text-sm">
-                <div>
-                  By{" "}
-                  {creator ? (
-                    <Link
-                      to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
-                      className="underline"
-                    >
-                      {creator.display_name || creator.username || "Creator"}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </div>
-                {owner && (
-                  <div className="text-neutral-400">
-                    Owner{" "}
-                    <Link
-                      to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`}
-                      className="underline"
-                    >
-                      {owner.display_name || owner.username || "Collector"}
-                    </Link>
-                  </div>
+                <div className="text-white/70">By</div>
+                {creator ? (
+                  <Link
+                    to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
+                    className="underline font-medium"
+                  >
+                    {creator.display_name || creator.username || "Creator"}
+                  </Link>
+                ) : (
+                  "—"
                 )}
               </div>
-            </div>
-          </div>
 
-          {/* Listing */}
-          <div className="card space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="font-semibold">Listing</h3>
-              {isAuction && (
-                <span className="text-[11px] px-2 py-1 rounded bg-white text-black font-medium">
-                  AUCTION
-                </span>
+              {owner && (
+                <div className="ml-auto text-right">
+                  <div className="text-xs text-white/60">Owner</div>
+                  <Link
+                    to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`}
+                    className="underline text-sm"
+                  >
+                    {owner.display_name || owner.username || "Collector"}
+                  </Link>
+                </div>
               )}
             </div>
+          </Card>
 
+          <Card
+            title="Listing"
+            right={
+              isAuction ? <Pill tone="warning">AUCTION</Pill> : null
+            }
+          >
             {activeListing ? (
               <>
-                <div className="flex items-center justify-between">
+                <div className="flex items-start justify-between gap-3">
                   {isAuction ? (
                     <div className="text-sm">
-                      <div className="text-neutral-400">Highest bid</div>
-                      <div className="text-lg font-semibold">
+                      <div className="text-white/60">Highest bid</div>
+                      <div className="text-2xl font-semibold mt-0.5">
                         {topBid
                           ? `${topBid.amount} ${activeListing.sale_currency}`
                           : "—"}
                       </div>
                       {(activeListing as any).reserve_price && (
-                        <div className="text-[11px] text-neutral-500">
+                        <div className="text-[11px] text-white/60 mt-1">
                           Reserve: {(activeListing as any).reserve_price}{" "}
                           {activeListing.sale_currency}
                           {!topBid ||
@@ -748,7 +792,7 @@ export default function ArtworkDetail() {
                       )}
                     </div>
                   ) : (
-                    <div className="text-lg font-semibold">
+                    <div className="text-3xl font-semibold">
                       {activeListing.fixed_price} {activeListing.sale_currency}
                     </div>
                   )}
@@ -767,10 +811,10 @@ export default function ArtworkDetail() {
                   ) : null}
                 </div>
 
-                <div className="flex gap-2">
+                <div className="mt-3">
                   {isAuction ? (
                     viewerId && !isSeller ? (
-                      <div className="flex-1 flex gap-2">
+                      <div className="flex gap-2">
                         <input
                           className="input flex-1"
                           type="number"
@@ -785,7 +829,7 @@ export default function ArtworkDetail() {
                         </button>
                       </div>
                     ) : (
-                      <div className="text-sm text-neutral-400">
+                      <div className="text-sm text-white/70">
                         {isSeller
                           ? "Sellers can’t bid on their own auction."
                           : "Sign in to bid."}
@@ -793,7 +837,7 @@ export default function ArtworkDetail() {
                     )
                   ) : (
                     canBuy && (
-                      <button className="btn flex-1" onClick={onBuy}>
+                      <button className="btn w-full" onClick={onBuy}>
                         Purchase now
                       </button>
                     )
@@ -801,19 +845,19 @@ export default function ArtworkDetail() {
                 </div>
 
                 {isAuction && (
-                  <div className="text-[11px] text-neutral-500">
+                  <div className="text-[12px] text-white/60 mt-2">
                     Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
                     {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
                   </div>
                 )}
-                {bidMsg && <div className="text-xs text-neutral-300">{bidMsg}</div>}
+                {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
               </>
             ) : (
-              <p className="text-sm text-neutral-400">Not currently listed.</p>
+              <p className="text-sm text-white/70">Not currently listed.</p>
             )}
-          </div>
+          </Card>
 
-          {/* Owner list panel */}
+          {/* Owner tools */}
           {isOwner && (
             <div id="owner-panel">
               <OwnerListPanel
@@ -826,11 +870,10 @@ export default function ArtworkDetail() {
           )}
 
           {/* IPFS */}
-          <div className="card">
-            <h3 className="font-semibold">IPFS</h3>
+          <Card title="IPFS">
             {art.token_uri ? (
-              <div className="text-xs space-y-1 mt-2">
-                <div>✅ Already pinned</div>
+              <div className="text-xs space-y-1">
+                <div><Pill tone="success">Pinned</Pill></div>
                 {art.ipfs_image_cid && (
                   <div>
                     Image CID: <code>{art.ipfs_image_cid}</code>
@@ -882,18 +925,18 @@ export default function ArtworkDetail() {
                 )}
               </div>
             )}
-          </div>
+          </Card>
         </div>
 
         {/* Tabs: owner / comments / history */}
         <div className="lg:col-span-12">
-          <div className="mt-2 rounded-2xl border border-white/10 bg-white/5">
+          <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
             <div className="flex gap-2 p-2 border-b border-white/10">
               {(["owner", "comments", "history"] as const).map((t) => (
                 <button
                   key={t}
                   onClick={() => setTab(t)}
-                  className={`px-3 py-1.5 rounded-lg text-sm ${
+                  className={`px-3 py-1.5 rounded-lg text-sm transition ${
                     tab === t
                       ? "bg-white text-black font-medium"
                       : "bg-white/0 text-white/80 hover:bg-white/10"
@@ -908,7 +951,7 @@ export default function ArtworkDetail() {
             {tab === "owner" && (
               <div className="p-4">
                 {owners.length === 0 ? (
-                  <div className="text-sm text-neutral-400">No owners recorded yet.</div>
+                  <div className="text-sm text-white/70">No owners recorded yet.</div>
                 ) : (
                   <ul className="divide-y divide-white/10">
                     {owners.map((o, i) => (
@@ -938,7 +981,7 @@ export default function ArtworkDetail() {
                             Since {new Date(o.updated_at).toLocaleDateString()}
                           </div>
                         </div>
-                        <div className="text-sm text-white/80">Qty {o.quantity}</div>
+                        <div className="text-sm text-white/90">Qty {o.quantity}</div>
                       </li>
                     ))}
                   </ul>
@@ -949,7 +992,7 @@ export default function ArtworkDetail() {
             {/* COMMENTS TAB (placeholder) */}
             {tab === "comments" && (
               <div className="p-4 space-y-3">
-                <div className="text-sm text-neutral-300">
+                <div className="text-sm text-neutral-200">
                   Comments coming soon.
                 </div>
                 <div className="opacity-60">
@@ -965,13 +1008,13 @@ export default function ArtworkDetail() {
             {tab === "history" && (
               <div className="p-4">
                 {sales.length === 0 ? (
-                  <div className="text-sm text-neutral-400">No sales yet.</div>
+                  <div className="text-sm text-white/70">No sales yet.</div>
                 ) : (
                   <ul className="space-y-3">
                     {sales.map((s) => (
                       <li
                         key={s.id}
-                        className="p-3 rounded-lg bg-white/5 border border-white/10"
+                        className="p-3 rounded-xl bg-white/[0.04] border border-white/10"
                       >
                         <div className="text-sm">
                           Sold for <b>{s.price} {s.currency}</b>{" "}
@@ -1019,12 +1062,11 @@ export default function ArtworkDetail() {
           </div>
 
           {/* Optional: price history placeholder */}
-          <div className="card mt-4">
-            <h3 className="font-semibold mb-2">Price history</h3>
-            <p className="text-sm text-neutral-400">
+          <Card className="mt-4" title="Price history">
+            <p className="text-sm text-white/70">
               Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
             </p>
-          </div>
+          </Card>
 
           <div className="flex gap-2 mt-4">
             <Link to="/" className="btn">Back</Link>
@@ -1092,8 +1134,7 @@ function OwnerListPanel({
   }
 
   return (
-    <div className="card space-y-2">
-      <div className="text-sm font-medium">List this artwork</div>
+    <Card title="List this artwork">
       <div className="flex gap-2 items-center">
         <input
           className="input w-32"
@@ -1116,10 +1157,10 @@ function OwnerListPanel({
           {busy ? "Listing…" : "List for sale"}
         </button>
       </div>
-      {msg && <div className="text-xs text-neutral-300">{msg}</div>}
-      <div className="text-[11px] text-neutral-500">
+      {msg && <div className="text-xs text-neutral-200 mt-2">{msg}</div>}
+      <div className="text-[11px] text-white/60 mt-1">
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>
-    </div>
+    </Card>
   );
 }

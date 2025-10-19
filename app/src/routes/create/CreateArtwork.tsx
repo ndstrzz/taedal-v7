@@ -34,6 +34,30 @@ type LocalImage = {
 
 const MAX_IMAGES = 6;
 
+/* ------------------------------ UI helpers (visual only) ------------------------------ */
+
+function Stepper({ step }: { step: 1 | 2 | 3 }) {
+  const steps = ["Upload", "Details", "Preview & Mint"];
+  return (
+    <div className="flex items-center gap-2 text-xs text-white/70">
+      {steps.map((label, i) => {
+        const idx = (i + 1) as 1 | 2 | 3;
+        const active = step === idx;
+        return (
+          <div key={label} className="flex items-center gap-2">
+            <div
+              className={`h-6 px-2 rounded-full border ${active ? "bg-white text-black border-white" : "bg-white/0 text-white/70 border-white/20"}`}
+            >
+              <span className="leading-6 align-middle">{label}</span>
+            </div>
+            {i < steps.length - 1 && <div className="w-6 h-px bg-white/20" />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
@@ -332,20 +356,20 @@ export default function CreateArtworkWizard() {
   }
 
   return (
-    <div className="max-w-5xl mx-auto p-6 space-y-6">
-      <h1 className="text-2xl font-semibold">Create artwork</h1>
-      {globalMsg && <div className="text-sm text-amber-300">{globalMsg}</div>}
-
-      <div className="text-xs text-neutral-400">
-        Step {step} of 3: {step === 1 ? "Upload" : step === 2 ? "Details" : "Preview & Mint"}
+    <div className="max-w-6xl mx-auto p-6 space-y-6">
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold">Create artwork</h1>
+        <Stepper step={step} />
       </div>
+
+      {globalMsg && <div className="text-sm text-amber-300">{globalMsg}</div>}
 
       {/* ── STEP 1: MEDIA ───────────────────────────────────────────────────── */}
       {step === 1 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
             {/* Upload panel */}
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6">
               <div className="flex flex-col items-center justify-center text-center gap-3">
                 <div className="h-12 w-12 rounded-full bg-white/8 grid place-items-center">
                   <span className="text-2xl">⤴</span>
@@ -422,7 +446,7 @@ export default function CreateArtworkWizard() {
                   {allDupes.map((d, idx) => (
                     <div
                       key={`${d.id}-${idx}`}
-                      className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2"
+                      className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]"
                     >
                       {d.image_url && (
                         <img src={d.image_url} className="h-14 w-14 object-cover rounded" />
@@ -460,7 +484,7 @@ export default function CreateArtworkWizard() {
 
           {/* Right: live preview while uploading */}
           <div className="lg:col-span-5">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3 sticky top-6">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 sticky top-6">
               <div className="text-sm font-medium">Preview</div>
               <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
                 {images[0] ? (
@@ -484,7 +508,7 @@ export default function CreateArtworkWizard() {
       {step === 2 && (
         <form onSubmit={onSubmitDetails} className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-6">
-            <div className="card grid gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 grid gap-3">
               <div>
                 <label className="block text-sm">Title *</label>
                 <input className="input" {...register("title")} />
@@ -507,7 +531,7 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            <div className="card grid gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 grid gap-3">
               <div className="text-sm font-medium">Artwork info (optional)</div>
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
@@ -525,7 +549,7 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            <div className="card grid gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 grid gap-3">
               <div className="text-sm font-medium">Dimensions (optional)</div>
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
@@ -581,7 +605,7 @@ export default function CreateArtworkWizard() {
               </div>
             </div>
 
-            <div className="card grid gap-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 grid gap-3">
               <div className="text-sm font-medium">Royalties (optional)</div>
               <div>
                 <label className="block text-sm">Royalty (bps)</label>
@@ -593,7 +617,7 @@ export default function CreateArtworkWizard() {
                       v === "" || v === null ? undefined : Number(v),
                   })}
                 />
-                <p className="text-xs text-neutral-400 mt-1">500 bps = 5%.</p>
+                <p className="text-xs text-white/60 mt-1">500 bps = 5%.</p>
               </div>
             </div>
 
@@ -622,7 +646,7 @@ export default function CreateArtworkWizard() {
 
           {/* Live preview */}
           <div className="lg:col-span-5">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4 space-y-3 sticky top-6">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 sticky top-6">
               <div className="text-sm font-medium">Preview</div>
               <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
                 {images[0] ? (
@@ -659,7 +683,7 @@ export default function CreateArtworkWizard() {
       {step === 3 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-4">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
               <div className="text-sm font-medium mb-2">Preview</div>
               <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
                 {images[0] ? (
@@ -670,11 +694,11 @@ export default function CreateArtworkWizard() {
           </div>
 
           <div className="lg:col-span-5 space-y-3">
-            <div className="card space-y-3">
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
               <div className="text-sm">
                 {pinning ? "Pinning to IPFS…" : "Ready to mint"}
               </div>
-              {pinMsg && <div className="text-xs text-neutral-300">{pinMsg}</div>}
+              {pinMsg && <div className="text-xs text-neutral-200">{pinMsg}</div>}
               {pinData && (
                 <div className="text-xs space-y-1">
                   <div>
@@ -755,8 +779,7 @@ export default function CreateArtworkWizard() {
 
             setCropTargetIdx(null);
 
-            // Re-run similarity scan for the freshly cropped image (use the new file directly,
-            // not state, to avoid any timing race with setState).
+            // Re-run similarity scan for the freshly cropped image
             checkImageDupes(idx, nextFile);
           }}
         />
