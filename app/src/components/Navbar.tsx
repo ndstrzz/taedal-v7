@@ -162,14 +162,17 @@ export default function Navbar() {
           >
             Contracts
           </NavLink>
+
+          {/* CHANGED: 'Create' → 'Studio' and route to /studio */}
           <NavLink
-            to="/create"
+            to="/studio"
             className={({ isActive }) =>
               isActive ? "text-white" : "text-neutral-300 hover:text-white"
             }
           >
-            Create
+            Studio
           </NavLink>
+
           <NavLink
             to="/explore"
             className={({ isActive }) =>
