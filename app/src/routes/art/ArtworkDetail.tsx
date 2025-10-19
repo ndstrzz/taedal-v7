@@ -658,26 +658,26 @@ export default function ArtworkDetail() {
       setPayBusy(false);
     }
   }
+
   // ------------------------------ bids ------------------------------
-async function onPlaceBid() {
-  if (!activeListing) return;
-  setBidBusy(true);
-  setBidMsg(null);
-  try {
-    const amt = Number(bidInput || 0);
-    if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+  async function onPlaceBid() {
+    if (!activeListing) return;
+    setBidBusy(true);
+    setBidMsg(null);
+    try {
+      const amt = Number(bidInput || 0);
+      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
 
-    const b = await placeBid(activeListing.id, amt);
-    setTopBid(b);
-    setBidMsg("Bid placed ✅");
-    setBidInput("");
-  } catch (e: any) {
-    setBidMsg(e?.message || "Bid failed");
-  } finally {
-    setBidBusy(false);
+      const b = await placeBid(activeListing.id, amt);
+      setTopBid(b);
+      setBidMsg("Bid placed ✅");
+      setBidInput("");
+    } catch (e: any) {
+      setBidMsg(e?.message || "Bid failed");
+    } finally {
+      setBidBusy(false);
+    }
   }
-}
-
 
   /* ------------------------------ computed ------------------------------ */
 
@@ -1056,7 +1056,7 @@ async function onPlaceBid() {
                 {/* Traits (placeholder) */}
                 <Card
                   title={
-                    <div className="flex items-center gap-2">
+                    <div className="flex items一起 gap-2">
                       <span className="text-base font-semibold">Traits</span>
                       <Pill className="ml-1">Soon</Pill>
                     </div>
@@ -1066,7 +1066,7 @@ async function onPlaceBid() {
                       <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
                         ▦
                       </button>
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
+                      <button className="px-2 py-1 rounded-lg hover:bg白/10" title="List">
                         ☰
                       </button>
                     </div>
@@ -1087,19 +1087,19 @@ async function onPlaceBid() {
                   <div className="space-y-4">
                     <div>
                       <div className="font-medium">About {art.title || "this artwork"}</div>
-                      <div className="mt-1 text-sm text-white/80 whitespace-pre-wrap">
+                      <div className="mt-1 text-sm text白/80 whitespace-pre-wrap">
                         {art.description || "No description provided."}
                       </div>
                     </div>
                     {creator && (
                       <>
-                        <div className="h-px bg-white/10" />
+                        <div className="h-px bg白/10" />
                         <div>
                           <div className="font-medium flex items-center gap-2">
                             {creator.avatar_url ? (
                               <img src={creator.avatar_url} className="h-6 w-6 rounded-full object-cover" />
                             ) : (
-                              <div className="h-6 w-6 rounded-full bg-white/10" />
+                              <div className="h-6 w-6 rounded-full bg白/10" />
                             )}
                             <span>
                               A collection by{" "}
@@ -1108,7 +1108,7 @@ async function onPlaceBid() {
                               </Link>
                             </span>
                           </div>
-                          <div className="mt-1 text-sm text-white/70">Creator bio coming soon.</div>
+                          <div className="mt-1 text-sm text白/70">Creator bio coming soon.</div>
                         </div>
                       </>
                     )}
@@ -1118,7 +1118,7 @@ async function onPlaceBid() {
                 {/* Blockchain details */}
                 <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
                   <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-                    <div className="text-white/60">Contract Address</div>
+                    <div className="text白/60">Contract Address</div>
                     <div className="truncate">
                       {art.token_uri ? (
                         <a className="underline" href={art.token_uri} target="_blank" rel="noreferrer">
@@ -1130,18 +1130,18 @@ async function onPlaceBid() {
                         "—"
                       )}
                     </div>
-                    <div className="text-white/60">Token ID</div>
+                    <div className="text白/60">Token ID</div>
                     <div>{art.id}</div>
-                    <div className="text-white/60">Token Standard</div>
+                    <div className="text白/60">Token Standard</div>
                     <div>ERC721</div>
-                    <div className="text-white/60">Chain</div>
+                    <div className="text白/60">Chain</div>
                     <div>Ethereum (Sepolia)</div>
                   </div>
                 </Card>
 
                 {/* More from this collection (placeholder) */}
                 <Card title={<span className="text-base font-semibold">More from this collection</span>}>
-                  <div className="text-sm text-white/70">Collection grid coming soon.</div>
+                  <div className="text-sm text白/70">Collection grid coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1150,7 +1150,7 @@ async function onPlaceBid() {
             {tab === "orders" && (
               <div className="p-4">
                 <Card>
-                  <div className="text-sm text-white/70">Orders UI coming soon.</div>
+                  <div className="text-sm text白/70">Orders UI coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1159,16 +1159,16 @@ async function onPlaceBid() {
             {tab === "activity" && (
               <div className="p-4">
                 {sales.length === 0 ? (
-                  <div className="text-sm text-white/70">No activity yet.</div>
+                  <div className="text-sm text白/70">No activity yet.</div>
                 ) : (
                   <ul className="space-y-3">
                     {sales.map((s) => (
-                      <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
+                      <li key={s.id} className="p-3 rounded-xl bg白/[0.04] border border白/10">
                         <div className="text-sm">
                           Sale • <b>{s.price} {s.currency}</b>{" "}
                           on {new Date(s.sold_at).toLocaleString()}
                         </div>
-                        <div className="text-xs text-white/70">
+                        <div className="text-xs text白/70">
                           From{" "}
                           {s.seller ? (
                             <Link
@@ -1227,7 +1227,7 @@ async function onPlaceBid() {
   );
 }
 
-/* ------------------------------ Owner List Panel (reused inside Seller Console) ------------------------------ */
+/* ------------------------------ Owner List Panel ------------------------------ */
 
 function OwnerListPanel({
   artworkId,

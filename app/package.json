@@ -16,6 +16,7 @@
     "@supabase/supabase-js": "^2.75.0",
     "@tailwindcss/cli": "^4.1.14",
     "@tanstack/react-query": "^5.90.3",
+    "@walletconnect/ethereum-provider": "^2.22.4",
     "ethers": "^6.15.0",
     "ogl": "^1.0.11",
     "react": "^19.1.1",
