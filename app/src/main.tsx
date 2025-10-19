@@ -10,14 +10,17 @@ import RequireAuth from "./routes/_auth/RequireAuth";
 import Navbar from "./components/Navbar";
 import Home from "./routes/home/Home";
 import Account from "./routes/account/Account";
-import CreateArtwork from "./routes/create/CreateArtwork"; // ⬅️ use this page
+import CreateArtwork from "./routes/create/CreateArtwork";
 import Explore from "./routes/explore/Explore";
 import Contracts from "./routes/contracts/Contracts";
 import SignIn from "./routes/_auth/SignIn";
 import Callback from "./routes/_auth/Callback";
 import PublicProfile from "./routes/profiles/PublicProfile";
-import ArtworkDetail from "./routes/art/ArtworkDetail"; // <-- add this
+import ArtworkDetail from "./routes/art/ArtworkDetail";
 
+// NEW:
+import StudioHome from "./routes/studio/StudioHome";
+import CreateChooser from "./routes/studio/CreateChooser";
 
 function Layout() {
   return (
@@ -42,11 +45,16 @@ const router = createBrowserRouter([
 
       // Protected
       { path: "/account", element: <RequireAuth><Account /></RequireAuth> },
-      { path: "/create", element: <RequireAuth><CreateArtwork /></RequireAuth> }, // ⬅️ here
+      { path: "/create", element: <RequireAuth><CreateArtwork /></RequireAuth> },
+
+      // NEW: Studio & Create chooser (protected like OpenSea Studio)
+      { path: "/studio", element: <RequireAuth><StudioHome /></RequireAuth> },
+      { path: "/studio/create", element: <RequireAuth><CreateChooser /></RequireAuth> },
+
       // Public profile
       { path: "/u/:handle", element: <PublicProfile /> },
 
-      { path: "/art/:id", element: <ArtworkDetail /> }, // <-- add this
+      { path: "/art/:id", element: <ArtworkDetail /> },
     ],
   },
 ]);
