@@ -33,8 +33,11 @@ import CreateChooser from "./routes/studio/CreateChooser";
 import DeployCollection from "./routes/studio/DeployCollection";
 import Deploying from "./routes/studio/Deploying";
 
-// ✅ Checkout success page
+// Checkout success page
 import CheckoutSuccess from "./routes/checkout/Success";
+
+// ✅ Discover page
+import Discover from "./routes/discover/Discover";
 
 function Layout() {
   return (
@@ -55,12 +58,13 @@ const router = createBrowserRouter([
     children: [
       // Public
       { path: "/", element: <Home /> },
+      { path: "/discover", element: <Discover /> },   // ✅ added
       { path: "/explore", element: <Explore /> },
       { path: "/contracts", element: <Contracts /> },
       { path: "/u/:handle", element: <PublicProfile /> },
       { path: "/art/:id", element: <ArtworkDetail /> },
 
-      // ✅ Stripe success routes (both paths supported)
+      // Stripe success routes
       { path: "/checkout/success", element: <CheckoutSuccess /> },
       { path: "/orders/success", element: <CheckoutSuccess /> },
 

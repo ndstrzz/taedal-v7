@@ -25,9 +25,7 @@ function RailLink({ to, label, iconSrc, alt }: NavItem) {
       className={({ isActive }) =>
         [
           "group/item w-full flex items-center gap-3 h-11 px-3 rounded-xl transition-colors",
-          // no bg highlight anymore; only text color changes on hover
           "text-white/75 hover:text-white",
-          // keep keyboard accessibility
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
         ].join(" ")
       }
@@ -38,7 +36,6 @@ function RailLink({ to, label, iconSrc, alt }: NavItem) {
             <img
               src={iconSrc}
               alt={alt || label}
-              // 👇 active page gets a soft pulse glow; otherwise just crisp icon
               className={[
                 "h-5 w-5 transition-transform",
                 isActive ? "tae-glow-icon" : "group-hover/item:scale-105",
@@ -113,8 +110,9 @@ export default function Sidebar() {
   );
   const profileUrl = user?.username ? `/u/${user.username}` : "/account";
 
+  // ✅ Discover now points to /discover
   const mainNav: NavItem[] = [
-    { to: "/", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Home" },
+    { to: "/discover", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Discover" },
     { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
     { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
     { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
