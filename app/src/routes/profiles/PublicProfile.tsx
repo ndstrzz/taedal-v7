@@ -10,6 +10,14 @@ type Artwork = {
   image_url: string | null;
 };
 
+type ArtworkRow = {
+  id: string;
+  title: string | null;
+  image_url: string | null;
+  creator_id: string;
+  created_at: string;
+};
+
 type Profile = {
   id: string;
   username: string | null;
@@ -119,45 +127,47 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // PURCHASED: ownerships -> artworks (explicit FK), sorted by ownerships.updated_at
-          const { data: own, error: ownErr } = await supabase
+          // PURCHASED (two-step: IDs -> artworks), sorted by ownerships.updated_at
+          const { data: ownIds, error: idsErr } = await supabase
             .from("ownerships")
-            .select(
-              `
-              artwork_id,
-              updated_at,
-              artworks:artworks!ownerships_artwork_id_fkey (
-                id, title, image_url, creator_id, created_at
-              )
-            `
-            )
+            .select("artwork_id, updated_at")
             .eq("owner_id", p.id)
             .order("updated_at", { ascending: false })
             .limit(200);
-          if (ownErr) throw ownErr;
+          if (idsErr) throw idsErr;
 
-          type Row = { artwork_id: string; updated_at: string; artworks: any | any[] };
-          const rows = (own || []) as Row[];
+          const ids = (ownIds ?? []).map((r) => r.artwork_id);
+          if (!ids.length) {
+            if (alive) setPurchased([]);
+            return;
+          }
 
-          // flatten, de-dupe, hide self-created
-          const seen = new Set<string>();
-          const viaOwnerships: Artwork[] = [];
-          for (const r of rows) {
-            const a = Array.isArray(r.artworks) ? r.artworks[0] : r.artworks;
-            if (!a || a.creator_id === p.id) continue;
-            if (seen.has(a.id)) continue;
-            seen.add(a.id);
-            viaOwnerships.push({
+          const { data: artsRaw, error: artsErr } = await supabase
+            .from("artworks")
+            .select("id,title,image_url,creator_id,created_at")
+            .in("id", ids);
+          if (artsErr) throw artsErr;
+
+          const arts = (artsRaw ?? []) as ArtworkRow[];
+          const byId = new Map<string, ArtworkRow>(arts.map((a) => [a.id, a]));
+
+          // Keep order from ownerships; hide self-created
+          const ordered: Artwork[] = [];
+          for (const id of ids) {
+            const a = byId.get(id);
+            if (!a) continue;
+            if (a.creator_id === p.id) continue;
+            ordered.push({
               id: a.id,
               title: a.title ?? null,
               image_url: a.image_url ?? null,
             });
           }
 
-          if (alive) setPurchased(viaOwnerships);
+          if (alive) setPurchased(ordered);
 
-          // Fallback (legacy) if nothing found
-          if (!viaOwnerships.length) {
+          // Fallback (legacy) if nothing found via ownerships
+          if (!ordered.length) {
             const { data: owned, error: fallbackErr } = await supabase
               .from("artworks")
               .select(ARTWORK_COLS)

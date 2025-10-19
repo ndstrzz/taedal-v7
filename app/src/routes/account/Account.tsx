@@ -191,51 +191,37 @@ export default function Account() {
   }
 
   async function loadPurchased(uid: string) {
-    // Pull from ownerships → artworks. Sort by ownerships.updated_at for recency.
-    const { data, error } = await supabase
+    // 1) Get the user’s owned artwork IDs (newest first)
+    const { data: ownIds, error: idsErr } = await supabase
       .from("ownerships")
-      .select(
-        `
-        artwork_id,
-        updated_at,
-        artworks:artworks!ownerships_artwork_id_fkey (
-          id, title, image_url, creator_id, created_at
-        )
-      `
-      )
+      .select("artwork_id, updated_at")
       .eq("owner_id", uid)
-      .order("updated_at", { ascending: false }) // ⬅️ new: surface latest purchases
-      .limit(120);
+      .order("updated_at", { ascending: false })
+      .limit(200);
 
-    if (error) throw error;
+    if (idsErr) throw idsErr;
 
-    type Row = {
-      artwork_id: string;
-      updated_at: string;
-      artworks: ArtworkThumb | ArtworkThumb[];
-    };
-    const rows = (data ?? []) as Row[];
-
-    const mapped: ArtworkThumb[] = rows
-      .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
-      .filter((a): a is ArtworkThumb => !!a && a.creator_id !== uid);
-
-    // Fallback (legacy schemas or strict RLS)
-    if (!mapped.length) {
-      const { data: owned, error: fbErr } = await supabase
-        .from("artworks")
-        .select("id,title,image_url,creator_id,created_at")
-        .eq("owner_id", uid)
-        .order("created_at", { ascending: false })
-        .limit(120);
-      if (!fbErr) {
-        const filtered = (owned ?? []).filter((a) => a.creator_id !== uid);
-        setPurchased(filtered as ArtworkThumb[]);
-        return;
-      }
+    const ids = (ownIds ?? []).map((r) => r.artwork_id);
+    if (ids.length === 0) {
+      setPurchased([]);
+      return;
     }
 
-    setPurchased(mapped);
+    // 2) Fetch artworks by those IDs
+    const { data: arts, error: artsErr } = await supabase
+      .from("artworks")
+      .select("id,title,image_url,creator_id,created_at")
+      .in("id", ids);
+
+    if (artsErr) throw artsErr;
+
+    // 3) Hide self-created items and keep ownership order
+    const byId = new Map(arts!.map((a) => [a.id, a]));
+    const ordered = ids
+      .map((id) => byId.get(id))
+      .filter((a): a is ArtworkThumb => !!a && a.creator_id !== uid);
+
+    setPurchased(ordered);
   }
 
   useEffect(() => {
