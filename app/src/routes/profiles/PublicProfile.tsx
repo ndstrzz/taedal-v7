@@ -8,14 +8,8 @@ type Artwork = {
   id: string;
   title: string | null;
   image_url: string | null;
-};
-
-type ArtworkRow = {
-  id: string;
-  title: string | null;
-  image_url: string | null;
-  creator_id: string;
-  created_at: string;
+  creator_id?: string;       // optional here; we only use it when filtering
+  created_at?: string | null;
 };
 
 type Profile = {
@@ -111,6 +105,8 @@ export default function PublicProfile() {
         id: r.id,
         title: r.title ?? null,
         image_url: r.image_url ?? null,
+        creator_id: r.creator_id,
+        created_at: r.created_at ?? null,
       }));
 
     const load = async () => {
@@ -127,56 +123,61 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // PURCHASED (two-step: IDs -> artworks), sorted by ownerships.updated_at
-          const { data: ownIds, error: idsErr } = await supabase
+          // PURCHASED: union of (ownerships with qty>0) and legacy artworks.owner_id
+          const { data: ownRows, error: ownErr } = await supabase
             .from("ownerships")
             .select("artwork_id, updated_at")
             .eq("owner_id", p.id)
+            .gt("quantity", 0)
             .order("updated_at", { ascending: false })
-            .limit(200);
-          if (idsErr) throw idsErr;
+            .limit(300);
+          if (ownErr) throw ownErr;
 
-          const ids = (ownIds ?? []).map((r) => r.artwork_id);
-          if (!ids.length) {
-            if (alive) setPurchased([]);
+          const ownIds = (ownRows ?? []).map((r) => r.artwork_id);
+
+          const { data: legacyArts, error: legacyErr } = await supabase
+            .from("artworks")
+            .select("id, creator_id, created_at")
+            .eq("owner_id", p.id)
+            .limit(300);
+          if (legacyErr) throw legacyErr;
+
+          // combine rank: ownerships first, legacy next (by created_at)
+          const rank = new Map<string, number>();
+          let i = 0;
+          for (const id of ownIds) rank.set(id, i++);
+          const legacySorted = (legacyArts ?? []).sort((a: any, b: any) =>
+            (b.created_at ?? "").localeCompare(a.created_at ?? "")
+          );
+          for (const a of legacySorted) {
+            if (!rank.has(a.id)) rank.set(a.id, i++);
+          }
+
+          const allIds = Array.from(rank.keys());
+          if (!allIds.length) {
+            setPurchased([]);
             return;
           }
 
-          const { data: artsRaw, error: artsErr } = await supabase
+          const { data: arts, error: artsErr } = await supabase
             .from("artworks")
             .select("id,title,image_url,creator_id,created_at")
-            .in("id", ids);
+            .in("id", allIds);
           if (artsErr) throw artsErr;
 
-          const arts = (artsRaw ?? []) as ArtworkRow[];
-          const byId = new Map<string, ArtworkRow>(arts.map((a) => [a.id, a]));
-
-          // Keep order from ownerships; hide self-created
-          const ordered: Artwork[] = [];
-          for (const id of ids) {
-            const a = byId.get(id);
-            if (!a) continue;
-            if (a.creator_id === p.id) continue;
-            ordered.push({
+          const byId = new Map((arts ?? []).map((a) => [a.id, a]));
+          const ordered = allIds
+            .map((id) => byId.get(id))
+            .filter((a): a is any => !!a && a.creator_id !== p.id) // hide self-created
+            .map((a) => ({
               id: a.id,
               title: a.title ?? null,
               image_url: a.image_url ?? null,
-            });
-          }
+              creator_id: a.creator_id,
+              created_at: a.created_at ?? null,
+            })) as Artwork[];
 
           if (alive) setPurchased(ordered);
-
-          // Fallback (legacy) if nothing found via ownerships
-          if (!ordered.length) {
-            const { data: owned, error: fallbackErr } = await supabase
-              .from("artworks")
-              .select(ARTWORK_COLS)
-              .eq("owner_id", p.id)
-              .order("created_at", { ascending: false });
-            if (fallbackErr) throw fallbackErr;
-            const filtered = (owned || []).filter((r: any) => r.creator_id !== p.id);
-            if (alive) setPurchased(mapArt(filtered));
-          }
         }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artworks.");
@@ -225,7 +226,11 @@ export default function PublicProfile() {
         style={{ height: "clamp(12rem, 48vh, 52rem)" }}
       >
         {coverUrl ? (
-          <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
+          <img
+            src={coverUrl}
+            alt="cover"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
         )}
@@ -250,23 +255,33 @@ export default function PublicProfile() {
             />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
-              {usernameText && <p className="text-neutral-400">{usernameText}</p>}
+              {usernameText && (
+                <p className="text-neutral-400">{usernameText}</p>
+              )}
               <div className="mt-1">
                 <Socials p={p} />
               </div>
             </div>
           </div>
-          <div className="pb-1">{isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}</div>
+          <div className="pb-1">
+            {isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>
+          <TabButton
+            active={activeTab === "created"}
+            onClick={() => setTab("created")}
+          >
             Created
           </TabButton>
-          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
+          <TabButton
+            active={activeTab === "purchased"}
+            onClick={() => setTab("purchased")}
+          >
             Purchased
           </TabButton>
         </div>
@@ -303,7 +318,9 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active
+          ? "border-white text-white"
+          : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -311,7 +328,13 @@ function TabButton({
   );
 }
 
-function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string }) {
+function ArtworkGrid({
+  items,
+  emptyText,
+}: {
+  items: Artwork[];
+  emptyText: string;
+}) {
   if (!items?.length) {
     return <div className="card text-sm text-neutral-400">{emptyText}</div>;
   }
@@ -334,7 +357,9 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
+            <div className="truncate font-medium group-hover:text-white">
+              {a.title || "Untitled"}
+            </div>
           </div>
         </Link>
       ))}
@@ -346,7 +371,10 @@ function GridSkeleton() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse">
+        <div
+          key={i}
+          className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse"
+        >
           <div className="aspect-square bg-neutral-800/70" />
           <div className="p-3 h-5 bg-neutral-800/70" />
         </div>
@@ -358,14 +386,28 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
-  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
+  if (p.instagram)
+    items.push({
+      label: "IG",
+      href: `https://instagram.com/${p.instagram.replace(/^@/, "")}`,
+    });
+  if (p.x_handle)
+    items.push({
+      label: "X",
+      href: `https://x.com/${p.x_handle.replace(/^@/, "")}`,
+    });
   if (p.youtube)
     items.push({
       label: "YT",
-      href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}`,
+      href: p.youtube.startsWith("http")
+        ? p.youtube
+        : `https://youtube.com/${p.youtube}`,
     });
-  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
+  if (p.telegram)
+    items.push({
+      label: "TG",
+      href: `https://t.me/${p.telegram.replace(/^@/, "")}`,
+    });
   if (!items.length) return null;
   return (
     <div className="flex items-center gap-2">

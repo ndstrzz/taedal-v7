@@ -88,7 +88,7 @@ type ArtworkThumb = {
   title: string | null;
   image_url: string | null;
   creator_id: string;
-  created_at: string;
+  created_at: string | null;
 };
 
 export default function Account() {
@@ -190,34 +190,52 @@ export default function Account() {
     setCreated((data ?? []) as ArtworkThumb[]);
   }
 
+  // Purchased = UNION(ownerships with qty>0, legacy artworks.owner_id), ordered newest-first
   async function loadPurchased(uid: string) {
-    // 1) Get the user’s owned artwork IDs (newest first)
-    const { data: ownIds, error: idsErr } = await supabase
+    // 1) ownerships (source of truth for new purchases)
+    const { data: ownRows, error: ownErr } = await supabase
       .from("ownerships")
       .select("artwork_id, updated_at")
       .eq("owner_id", uid)
+      .gt("quantity", 0)
       .order("updated_at", { ascending: false })
-      .limit(200);
+      .limit(300);
+    if (ownErr) throw ownErr;
+    const ownIds = (ownRows ?? []).map((r) => r.artwork_id);
 
-    if (idsErr) throw idsErr;
+    // 2) legacy (historical)
+    const { data: legacyArts, error: legacyErr } = await supabase
+      .from("artworks")
+      .select("id, created_at")
+      .eq("owner_id", uid)
+      .limit(300);
+    if (legacyErr) throw legacyErr;
 
-    const ids = (ownIds ?? []).map((r) => r.artwork_id);
-    if (ids.length === 0) {
+    // Build a combined ranking: ownerships first (by updated_at), then legacy (by created_at)
+    const rank = new Map<string, number>();
+    let i = 0;
+    for (const id of ownIds) rank.set(id, i++);
+    const legacySorted = (legacyArts ?? []).sort((a: any, b: any) =>
+      (b.created_at ?? "").localeCompare(a.created_at ?? "")
+    );
+    for (const a of legacySorted) {
+      if (!rank.has(a.id)) rank.set(a.id, i++);
+    }
+    const allIds = Array.from(rank.keys());
+    if (allIds.length === 0) {
       setPurchased([]);
       return;
     }
 
-    // 2) Fetch artworks by those IDs
+    // Fetch artworks and keep that order; hide self-created
     const { data: arts, error: artsErr } = await supabase
       .from("artworks")
       .select("id,title,image_url,creator_id,created_at")
-      .in("id", ids);
-
+      .in("id", allIds);
     if (artsErr) throw artsErr;
 
-    // 3) Hide self-created items and keep ownership order
-    const byId = new Map(arts!.map((a) => [a.id, a]));
-    const ordered = ids
+    const byId = new Map((arts ?? []).map((a) => [a.id, a]));
+    const ordered = allIds
       .map((id) => byId.get(id))
       .filter((a): a is ArtworkThumb => !!a && a.creator_id !== uid);
 
