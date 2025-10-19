@@ -1,3 +1,4 @@
+// app/src/routes/profiles/PublicProfile.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -25,7 +26,6 @@ type Profile = {
 export default function PublicProfile() {
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
-
   const activeTab = (sp.get("tab") as "created" | "purchased") || "created";
 
   const [viewerId, setViewerId] = useState<string | null>(null);
@@ -38,10 +38,9 @@ export default function PublicProfile() {
   const [created, setCreated] = useState<Artwork[]>([]);
   const [purchased, setPurchased] = useState<Artwork[]>([]);
 
-  // use a single source of truth for artwork selects (no legacy `image` here)
   const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
 
-  /* ---------- read viewer session (for "Edit profile") ---------- */
+  /* read viewer session (for "Edit profile") */
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -49,14 +48,13 @@ export default function PublicProfile() {
     })();
   }, []);
 
-  /* ---------- load profile by username (fallback: id) ---------- */
+  /* load profile by username (fallback: id) */
   useEffect(() => {
     let alive = true;
     (async () => {
       setLoadingProfile(true);
       setMsg(null);
       try {
-        // by username
         let { data, error } = await supabase
           .from("profiles")
           .select(
@@ -65,7 +63,6 @@ export default function PublicProfile() {
           .eq("username", handle!)
           .maybeSingle();
 
-        // fallback: treat handle as id
         if (!data) {
           const r = await supabase
             .from("profiles")
@@ -91,13 +88,12 @@ export default function PublicProfile() {
         if (alive) setLoadingProfile(false);
       }
     })();
-
     return () => {
       alive = false;
     };
   }, [handle]);
 
-  /* ---------- load artworks for the active tab ---------- */
+  /* load artworks for the active tab */
   useEffect(() => {
     if (!p?.id) return;
     let alive = true;
@@ -114,7 +110,6 @@ export default function PublicProfile() {
       setMsg(null);
       try {
         if (activeTab === "created") {
-          // artworks created by this user
           const { data, error } = await supabase
             .from("artworks")
             .select(ARTWORK_COLS)
@@ -124,44 +119,47 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // PURCHASED: first try purchases join; if unavailable/empty, fallback to owner_id
-          try {
-            const { data, error } = await supabase
-              .from("purchases")
-              .select(`artworks(id,title,image_url,created_at)`)
-              .eq("owner_id", p.id)
-              .order("created_at", { ascending: false });
-            if (error) throw error;
+          // ✅ PURCHASED: prefer ownerships→artworks join (same as Account.tsx)
+          const { data: own, error: ownErr } = await supabase
+            .from("ownerships")
+            .select(
+              `
+              artwork_id,
+              artworks!inner (
+                id, title, image_url, creator_id, created_at
+              )
+            `
+            )
+            .eq("owner_id", p.id)
+            .order("created_at", { foreignTable: "artworks", ascending: false })
+            .limit(100);
+          if (ownErr) throw ownErr;
 
-            if (alive && data && data.length) {
-              const arts = (data as any[]).map((row) => ({
-                id: row.artworks?.id,
-                title: row.artworks?.title ?? null,
-                image_url: row.artworks?.image_url ?? null,
-              })) as Artwork[];
-              if (arts.length) {
-                setPurchased(arts);
-                setLoadingGrid(false);
-                return;
-              }
-            }
-          } catch {
-            // ignore and use fallback
+          type Row = { artwork_id: string; artworks: any | any[] };
+          const rows = (own || []) as Row[];
+
+          const viaOwnerships: Artwork[] = rows
+            .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+            .filter((a) => !!a && a.creator_id !== p.id)
+            .map((a) => ({ id: a.id, title: a.title, image_url: a.image_url }));
+
+          if (viaOwnerships.length) {
+            if (alive) setPurchased(viaOwnerships);
+            return;
           }
 
-          // fallback: artworks owned by user but not created by them
-          const { data: owned, error: ownErr } = await supabase
+          // Fallback (legacy): artworks whose owner_id is the user but not created by them
+          const { data: owned, error: fallbackErr } = await supabase
             .from("artworks")
             .select(ARTWORK_COLS)
             .eq("owner_id", p.id)
             .order("created_at", { ascending: false });
-          if (ownErr) throw ownErr;
-          if (!alive) return;
+          if (fallbackErr) throw fallbackErr;
 
           const filtered = (owned || []).filter(
             (r: any) => r.creator_id !== p.id
           );
-          setPurchased(mapArt(filtered));
+          if (alive) setPurchased(mapArt(filtered));
         }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artworks.");
@@ -176,15 +174,13 @@ export default function PublicProfile() {
     };
   }, [p?.id, activeTab]);
 
-  /* ---------- page title ---------- */
+  /* page title */
   useEffect(() => {
     if (!p) return;
-    document.title = `${
-      p.display_name?.trim() || p.username || "Profile"
-    } — taedal`;
+    document.title = `${p.display_name?.trim() || p.username || "Profile"} — taedal`;
   }, [p]);
 
-  /* ---------- derived UI bits ---------- */
+  /* derived UI bits */
   const isMe = useMemo(
     () => Boolean(viewerId && p?.id && viewerId === p.id),
     [viewerId, p?.id]
@@ -206,79 +202,40 @@ export default function PublicProfile() {
 
   return (
     <div className="min-h-[100dvh]">
-      {/* Cover with vignette + bottom fade (now responsive height via clamp) */}
-      <div
-        className="relative border-b border-neutral-800 overflow-hidden"
-        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
-      >
+      {/* Cover */}
+      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
         {coverUrl ? (
-          <img
-            src={coverUrl}
-            alt="cover"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
         )}
-        {/* Soft radial vignette to darken edges */}
-        <div
-          className="absolute inset-0 pointer-events-none"
-          style={{
-            backgroundImage:
-              "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
-          }}
-        />
-        {/* Bottom fade to black for text contrast */}
+        <div className="absolute inset-0 pointer-events-none" style={{
+          backgroundImage:
+            "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
+        }} />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-b from-transparent to-black/70 pointer-events-none" />
       </div>
 
-      {/* Header row (avatar floats over the cover) */}
+      {/* Header */}
       <div className="max-w-6xl mx-auto px-4 -mt-12 md:-mt-14 relative z-10 pb-2">
         <div className="flex items-end justify-between">
           <div className="flex items-end gap-4">
-            <div className="shrink-0">
-              <img
-                src={avatarUrl}
-                alt="avatar"
-                className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900"
-              />
-            </div>
+            <img src={avatarUrl} alt="avatar" className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900" />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
-              {usernameText && (
-                <p className="text-neutral-400">{usernameText}</p>
-              )}
-              <div className="mt-1">
-                <Socials p={p} />
-              </div>
+              {usernameText && <p className="text-neutral-400">{usernameText}</p>}
+              <div className="mt-1"><Socials p={p} /></div>
             </div>
           </div>
-
-          <div className="pb-1">
-            {isMe ? (
-              <Link to="/account" className="btn">
-                Edit profile
-              </Link>
-            ) : null}
-          </div>
+          <div className="pb-1">{isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}</div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton
-            active={activeTab === "created"}
-            onClick={() => setTab("created")}
-          >
-            Created
-          </TabButton>
-          <TabButton
-            active={activeTab === "purchased"}
-            onClick={() => setTab("purchased")}
-          >
-            Purchased
-          </TabButton>
+          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>Created</TabButton>
+          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>Purchased</TabButton>
         </div>
       </div>
 
@@ -297,7 +254,7 @@ export default function PublicProfile() {
   );
 }
 
-/* ---------- UI pieces ---------- */
+/* ---------- UI pieces (unchanged) ---------- */
 
 function TabButton({
   active,
@@ -313,9 +270,7 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active
-          ? "border-white text-white"
-          : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -323,17 +278,10 @@ function TabButton({
   );
 }
 
-function ArtworkGrid({
-  items,
-  emptyText,
-}: {
-  items: Artwork[];
-  emptyText: string;
-}) {
+function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string; }) {
   if (!items?.length) {
     return <div className="card text-sm text-neutral-400">{emptyText}</div>;
   }
-
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {items.map((a) => (
@@ -344,18 +292,11 @@ function ArtworkGrid({
         >
           <div className="aspect-square bg-neutral-800">
             {a.image_url ? (
-              <img
-                src={a.image_url}
-                alt={a.title ?? "Artwork"}
-                className="w-full h-full object-cover"
-                loading="lazy"
-              />
+              <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" loading="lazy" />
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">
-              {a.title || "Untitled"}
-            </div>
+            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
           </div>
         </Link>
       ))}
@@ -367,10 +308,7 @@ function GridSkeleton() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse"
-        >
+        <div key={i} className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse">
           <div className="aspect-square bg-neutral-800/70" />
           <div className="p-3 h-5 bg-neutral-800/70" />
         </div>
@@ -382,42 +320,15 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-
-  if (p.instagram)
-    items.push({
-      label: "IG",
-      href: `https://instagram.com/${p.instagram.replace(/^@/, "")}`,
-    });
-  if (p.x_handle)
-    items.push({
-      label: "X",
-      href: `https://x.com/${p.x_handle.replace(/^@/, "")}`,
-    });
-  if (p.youtube)
-    items.push({
-      label: "YT",
-      href: p.youtube.startsWith("http")
-        ? p.youtube
-        : `https://youtube.com/${p.youtube}`,
-    });
-  if (p.telegram)
-    items.push({
-      label: "TG",
-      href: `https://t.me/${p.telegram.replace(/^@/, "")}`,
-    });
-
+  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
+  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
+  if (p.youtube) items.push({ label: "YT", href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}` });
+  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
   if (!items.length) return null;
-
   return (
     <div className="flex items-center gap-2">
       {items.map((it) => (
-        <a
-          key={it.label}
-          href={it.href}
-          target="_blank"
-          rel="noreferrer"
-          className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700"
-        >
+        <a key={it.label} href={it.href} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700">
           {it.label}
         </a>
       ))}
