@@ -272,7 +272,7 @@ export default function CircularGallery({
   textColor = '#ffffff',
   borderRadius = 0.05,
   font = 'bold 30px Figtree',
-  scrollSpeed = 2,
+  scrollSpeed = 6,
   scrollEase = 0.05
 }: {
   items?: { image: string; text: string }[];
