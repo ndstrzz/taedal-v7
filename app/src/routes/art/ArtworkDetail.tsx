@@ -18,8 +18,7 @@ import {
 /* ------------------------------ config ------------------------------ */
 
 // Wallet to receive ETH on Sepolia during testing
-const FALLBACK_PAYTO =
-  (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
+const FALLBACK_PAYTO = (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
 
 // Sepolia chain params (MetaMask)
 const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
@@ -88,7 +87,11 @@ function Pill({
   children,
   tone = "neutral",
   className = "",
-}: { children: React.ReactNode; tone?: "neutral" | "success" | "warning"; className?: string }) {
+}: {
+  children: React.ReactNode;
+  tone?: "neutral" | "success" | "warning";
+  className?: string;
+}) {
   const toneCls =
     tone === "success"
       ? "bg-emerald-400 text-black"
@@ -96,7 +99,7 @@ function Pill({
       ? "bg-amber-300 text-black"
       : "bg-white/10 text-white";
   return (
-    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${toneCls} ${className}`} >
+    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${toneCls} ${className}`}>
       {children}
     </span>
   );
@@ -111,7 +114,12 @@ function StatBox({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function Card({ title, right, children, className = "" }: {
+function Card({
+  title,
+  right,
+  children,
+  className = "",
+}: {
   title?: React.ReactNode;
   right?: React.ReactNode;
   children?: React.ReactNode;
@@ -160,9 +168,7 @@ function Countdown({
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/8 border border-white/10 text-center">
-      <div className="text-sm font-semibold tabular-nums">
-        {v.toString().padStart(2, "0")}
-      </div>
+      <div className="text-sm font-semibold tabular-nums">{v.toString().padStart(2, "0")}</div>
       <div className="text-[10px] text-white/70">{label}</div>
     </div>
   );
@@ -178,22 +184,13 @@ function Countdown({
 }
 
 /* ------------------------------ icons ------------------------------ */
+
 function HeartIcon(props: any) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" {...props}>
       <path
         fill="currentColor"
         d="M12 21s-7.2-4.6-9.6-8.1C.7 10.1 2.1 6 6 6c2 0 3.2 1.1 4 2.2.8-1.1 2-2.2 4-2.2 3.9 0 5.3 4.1 3.6 6.9C19.2 16.4 12 21 12 21z"
-      />
-    </svg>
-  );
-}
-function ShareIcon(props: any) {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" {...props}>
-      <path
-        fill="currentColor"
-        d="M18 8a3 3 0 1 0-2.7-4.1L8.9 7.2a3 3 0 0 0 0 5.6l6.4 3.3A3 3 0 1 0 16 18l-6.4-3.3a3 3 0 0 0 0-5.4L16 6a3 3 0 0 0 2 .8z"
       />
     </svg>
   );
@@ -498,26 +495,28 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ Buy handlers ------------------------------ */
 
+  // Stripe flow for fiat currencies — invokes our Edge Function that creates the Checkout Session
   async function onBuy() {
     if (!activeListing || !art) return;
-    const ccy = (activeListing.sale_currency || "").toUpperCase();
 
+    const ccy = (activeListing.sale_currency || "").toUpperCase();
     if (ccy === "ETH") {
+      // ETH path goes to MetaMask instead
       setMsg(null);
       setWalletOpen(true);
       return;
     }
 
-    // Any fiat currency goes to Stripe
     try {
       setMsg("Redirecting to Stripe…");
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
+          // optional, used only for display on Stripe
           title: art.title ?? "Artwork purchase",
-          // ✅ send the route that actually exists in your app
+          // these must be valid routes in your app
           success_url: `${location.origin}/checkout/success`,
-          cancel_url: `${location.origin}${location.pathname}`,
+          cancel_url: location.href,
         },
       });
       if (error) throw error;
@@ -571,8 +570,7 @@ export default function ArtworkDetail() {
         throw new Error("Invalid price for listing.");
       }
 
-      const to =
-        (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
+      const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
       if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
 
       const value = toHex(parseEther(priceEth));
@@ -626,21 +624,13 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ computed ------------------------------ */
 
-  const isAuction =
-    (activeListing as any)?.type === "auction" &&
-    !!(activeListing as any)?.end_at;
+  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username
-    ? `/u/${creator.username}`
-    : creator
-    ? `/u/${creator.id}`
-    : "#";
-  const ownerHandle =
-    owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
+  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
+  const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
-  const isSeller =
-    !!activeListing && viewerId === (activeListing as any).seller_id;
+  const isSeller = !!activeListing && viewerId === (activeListing as any).seller_id;
   const canBuy = !!activeListing && !!viewerId && !isSeller;
 
   const minNextBid = useMemo(() => {
@@ -681,10 +671,10 @@ export default function ArtworkDetail() {
     );
   }
 
-  // (Optional) USD approximation helper — replace with real FX later
+  // (Optional) USD approximation helper — left blank to avoid FX
   const usdApprox =
     activeListing && activeListing.sale_currency?.toUpperCase() === "ETH" && activeListing.fixed_price
-      ? "" // intentionally blank for now to avoid hitting any FX APIs here
+      ? ""
       : "";
 
   return (
@@ -700,9 +690,7 @@ export default function ArtworkDetail() {
                 className="w-full h-full object-contain bg-neutral-950"
               />
             ) : (
-              <div className="aspect-square grid place-items-center text-neutral-400">
-                No image
-              </div>
+              <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
             )}
           </div>
 
@@ -727,19 +715,16 @@ export default function ArtworkDetail() {
         <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
-          {/* Header line: title, owner tools, social icons */}
+          {/* Header line */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-3xl font-semibold leading-tight truncate">
                 {art.title || "Untitled"}
               </h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-                {/* Collection / creator */}
+                {/* Creator */}
                 {creator?.avatar_url ? (
-                  <img
-                    src={creator.avatar_url}
-                    className="h-5 w-5 rounded-full object-cover"
-                  />
+                  <img src={creator.avatar_url} className="h-5 w-5 rounded-full object-cover" />
                 ) : (
                   <div className="h-5 w-5 rounded-full bg-white/10" />
                 )}
@@ -751,16 +736,15 @@ export default function ArtworkDetail() {
                     >
                       {creator.display_name || creator.username || "Creator"}
                     </Link>
-                  ) : "—"}
+                  ) : (
+                    "—"
+                  )}
                 </span>
                 <span className="text-white/40">•</span>
                 <span className="text-white/80">
                   Owned by{" "}
                   {owner ? (
-                    <Link
-                      to={ownerHandle ?? "#"}
-                      className="underline"
-                    >
+                    <Link to={ownerHandle ?? "#"} className="underline">
                       {owner.display_name || owner.username || "Collector"}
                     </Link>
                   ) : (
@@ -769,7 +753,7 @@ export default function ArtworkDetail() {
                 </span>
               </div>
 
-              {/* Chips row */}
+              {/* Chips */}
               <div className="mt-2 flex flex-wrap gap-2">
                 <Pill>ERC721</Pill>
                 <Pill>ETHEREUM</Pill>
@@ -802,18 +786,21 @@ export default function ArtworkDetail() {
           {/* Stats strip */}
           <Card>
             <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
-              <StatBox label="Top offer" value={topBid ? `${topBid.amount} ${activeListing?.sale_currency || "ETH"}` : "—"} />
-              <StatBox label="Collection floor" value={activeListing ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}` : "—"} />
+              <StatBox
+                label="Top offer"
+                value={topBid ? `${topBid.amount} ${activeListing?.sale_currency || "ETH"}` : "—"}
+              />
+              <StatBox
+                label="Collection floor"
+                value={activeListing ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}` : "—"}
+              />
               <StatBox label="Rarity" value={"—"} />
               <StatBox label="Last sale" value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"} />
             </div>
           </Card>
 
           {/* Listing / Buy card */}
-          <Card
-            title="Listing"
-            right={isAuction ? <Pill tone="warning">AUCTION</Pill> : null}
-          >
+          <Card title="Listing" right={isAuction ? <Pill tone="warning">AUCTION</Pill> : null}>
             {activeListing ? (
               <>
                 <div className="flex items-start justify-between gap-3">
@@ -821,18 +808,12 @@ export default function ArtworkDetail() {
                     <div className="text-sm">
                       <div className="text-white/60">Highest bid</div>
                       <div className="text-2xl font-semibold mt-0.5">
-                        {topBid
-                          ? `${topBid.amount} ${activeListing.sale_currency}`
-                          : "—"}
+                        {topBid ? `${topBid.amount} ${activeListing.sale_currency}` : "—"}
                       </div>
                       {(activeListing as any).reserve_price && (
                         <div className="text-[11px] text-white/60 mt-1">
-                          Reserve: {(activeListing as any).reserve_price}{" "}
-                          {activeListing.sale_currency}
-                          {!topBid ||
-                          topBid.amount < (activeListing as any).reserve_price
-                            ? " (not met)"
-                            : ""}
+                          Reserve: {(activeListing as any).reserve_price} {activeListing.sale_currency}
+                          {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
                         </div>
                       )}
                     </div>
@@ -841,10 +822,7 @@ export default function ArtworkDetail() {
                       <div className="text-3xl font-semibold">
                         {activeListing.fixed_price} {activeListing.sale_currency}
                       </div>
-                      {/* muted USD approximation placeholder */}
-                      {usdApprox && (
-                        <div className="text-xs text-white/60">{usdApprox}</div>
-                      )}
+                      {usdApprox && <div className="text-xs text-white/60">{usdApprox}</div>}
                     </div>
                   )}
 
@@ -902,10 +880,7 @@ export default function ArtworkDetail() {
                 {/* Owner shortcut to Seller Console */}
                 {isOwner && (
                   <div className="mt-3">
-                    <button
-                      className="btn w-full"
-                      onClick={() => setSellerOpen(true)}
-                    >
+                    <button className="btn w-full" onClick={() => setSellerOpen(true)}>
                       {activeListing ? "Edit listing" : "List this artwork"}
                     </button>
                   </div>
@@ -937,7 +912,9 @@ export default function ArtworkDetail() {
           <Card title="IPFS">
             {art.token_uri ? (
               <div className="text-xs space-y-1">
-                <div><Pill tone="success">Pinned</Pill></div>
+                <div>
+                  <Pill tone="success">Pinned</Pill>
+                </div>
                 {art.ipfs_image_cid && (
                   <div>
                     Image CID: <code>{art.ipfs_image_cid}</code>
@@ -966,15 +943,10 @@ export default function ArtworkDetail() {
                   className="btn"
                   onClick={handlePin}
                   disabled={
-                    pinLoading ||
-                    !(
-                      viewerId &&
-                      (viewerId === art.creator_id || viewerId === art.owner_id)
-                    )
+                    pinLoading || !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
                   }
                   title={
-                    viewerId &&
-                    (viewerId === art.creator_id || viewerId === art.owner_id)
+                    viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
                       ? ""
                       : "Only the creator/owner can pin"
                   }
@@ -992,7 +964,7 @@ export default function ArtworkDetail() {
           </Card>
         </div>
 
-        {/* Tabs wide area (OpenSea-style) */}
+        {/* Tabs wide area */}
         <div className="lg:col-span-12">
           <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
             {/* Tabs header */}
@@ -1002,9 +974,7 @@ export default function ArtworkDetail() {
                   key={t}
                   onClick={() => setTab(t)}
                   className={`px-2 pb-3 text-sm border-b-2 ${
-                    tab === t
-                      ? "border-white text-white"
-                      : "border-transparent text-white/70 hover:text-white"
+                    tab === t ? "border-white text-white" : "border-transparent text-white/70 hover:text-white"
                   }`}
                 >
                   {t === "details" ? "Details" : t === "orders" ? "Orders" : "Activity"}
@@ -1025,15 +995,19 @@ export default function ArtworkDetail() {
                   }
                   right={
                     <div className="flex gap-1">
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">▦</button>
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">☰</button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
+                        ▦
+                      </button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
+                        ☰
+                      </button>
                     </div>
                   }
                 >
                   <div className="text-sm text-white/70">Traits UI coming soon.</div>
                 </Card>
 
-                {/* Price history (your placeholder retained) */}
+                {/* Price history (placeholder) */}
                 <Card title={<span className="text-base font-semibold">Price history</span>}>
                   <p className="text-sm text-white/70">
                     Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
@@ -1056,7 +1030,9 @@ export default function ArtworkDetail() {
                           <div className="font-medium flex items-center gap-2">
                             {creator.avatar_url ? (
                               <img src={creator.avatar_url} className="h-6 w-6 rounded-full object-cover" />
-                            ) : <div className="h-6 w-6 rounded-full bg-white/10" />}
+                            ) : (
+                              <div className="h-6 w-6 rounded-full bg-white/10" />
+                            )}
                             <span>
                               A collection by{" "}
                               <Link to={creatorHandle} className="underline">
@@ -1064,9 +1040,7 @@ export default function ArtworkDetail() {
                               </Link>
                             </span>
                           </div>
-                          <div className="mt-1 text-sm text-white/70">
-                            Creator bio coming soon.
-                          </div>
+                          <div className="mt-1 text-sm text-white/70">Creator bio coming soon.</div>
                         </div>
                       </>
                     )}
@@ -1080,9 +1054,13 @@ export default function ArtworkDetail() {
                     <div className="truncate">
                       {art.token_uri ? (
                         <a className="underline" href={art.token_uri} target="_blank" rel="noreferrer">
-                          {art.token_uri.length > 20 ? `${art.token_uri.slice(0, 10)}…${art.token_uri.slice(-8)}` : art.token_uri}
+                          {art.token_uri.length > 20
+                            ? `${art.token_uri.slice(0, 10)}…${art.token_uri.slice(-8)}`
+                            : art.token_uri}
                         </a>
-                      ) : "—"}
+                      ) : (
+                        "—"
+                      )}
                     </div>
                     <div className="text-white/60">Token ID</div>
                     <div>{art.id}</div>
@@ -1109,7 +1087,7 @@ export default function ArtworkDetail() {
               </div>
             )}
 
-            {/* ACTIVITY (uses your sales) */}
+            {/* ACTIVITY (sales history) */}
             {tab === "activity" && (
               <div className="p-4">
                 {sales.length === 0 ? (
@@ -1153,9 +1131,7 @@ export default function ArtworkDetail() {
 
           <div className="flex gap-2 mt-4">
             <Link to="/" className="btn">Back</Link>
-            {creator && (
-              <Link to={creatorHandle} className="btn">View creator</Link>
-            )}
+            {creator && <Link to={creatorHandle} className="btn">View creator</Link>}
           </div>
         </div>
       </div>
@@ -1235,11 +1211,7 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select
-          className="input w-28"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
+        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
           <option value="ETH">ETH</option>
           <option value="USD">USD</option>
         </select>
@@ -1275,18 +1247,12 @@ function SellerConsole({
   return (
     <div className="fixed inset-0 z-[60]">
       {/* backdrop */}
-      <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={onClose}
-      />
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       {/* drawer */}
       <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Seller tools</h3>
-          <button
-            className="text-sm text-white/70 hover:text-white"
-            onClick={onClose}
-          >
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
             Close
           </button>
         </div>
@@ -1310,9 +1276,7 @@ function SellerConsole({
         {/* PRICE TAB: reuses existing functionality */}
         {tab === "price" && (
           <div className="space-y-3">
-            <div className="text-sm text-white/70">
-              Create or update a fixed-price listing.
-            </div>
+            <div className="text-sm text-white/70">Create or update a fixed-price listing.</div>
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
               <OwnerListPanel artworkId={artworkId} onUpdated={onListingUpdated} />
             </div>
@@ -1321,11 +1285,9 @@ function SellerConsole({
 
         {/* AUCTION TAB: UI shell only, disabled controls */}
         {tab === "auction" && (
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-            <div className="text-sm text-white/70">
-              Configure an auction (UI only for now).
-            </div>
-            <div className="grid grid-cols-2 gap-3 opacity-60 pointer-events-none select-none">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 opacity-60 pointer-events-none select-none">
+            <div className="text-sm text-white/70">Configure an auction (UI only for now).</div>
+            <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm">Reserve price</label>
                 <input className="input" placeholder="e.g. 0.2" />
@@ -1346,23 +1308,17 @@ function SellerConsole({
               </div>
             </div>
             <div className="text-xs text-white/60">
-              (Disabled to keep backend unchanged. When you’re ready, we’ll wire this to your auction
-              listing endpoints.)
+              (Disabled to keep backend unchanged. When you’re ready, wire this to auction endpoints.)
             </div>
           </div>
         )}
 
-        {/* DETAILS TAB: link out to a (future) edit page */}
+        {/* DETAILS TAB */}
         {tab === "details" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-            <div className="text-sm text-white/70">
-              Update artwork metadata (title/description, tags, etc.).
-            </div>
+            <div className="text-sm text-white/70">Update artwork metadata (title/description, tags, etc.).</div>
             <div className="flex gap-2">
-              <a
-                href={`/art/${artworkId}/edit`}
-                className="btn"
-              >
+              <a href={`/art/${artworkId}/edit`} className="btn">
                 Go to edit page
               </a>
               <span className="text-xs text-white/60 self-center">

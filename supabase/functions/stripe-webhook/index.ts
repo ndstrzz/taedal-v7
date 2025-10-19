@@ -8,12 +8,11 @@ const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
 const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
 
-function res(body: any, status = 200) {
-  return new Response(typeof body === "string" ? body : JSON.stringify(body), {
+const res = (body: any, status = 200) =>
+  new Response(typeof body === "string" ? body : JSON.stringify(body), {
     status,
     headers: { "Content-Type": typeof body === "string" ? "text/plain" : "application/json" },
   });
-}
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return res("Method not allowed", 405);
@@ -29,14 +28,46 @@ Deno.serve(async (req) => {
 
     if (event.type === "checkout.session.completed") {
       const session: any = event.data.object;
+      const db = createClient(SUPABASE_URL, SERVICE);
+
+      // Pull what we can from metadata
       const md = session.metadata || {};
-      const listingId = md.listing_id;
-      const artworkId = md.artwork_id;
-      const sellerId = md.seller_id;
-      const buyerId = md.buyer_id;
+      let listingId = md.listing_id || null;
+      let artworkId = md.artwork_id || null;
+      let sellerId  = md.seller_id  || null;
+      let buyerId   = md.buyer_id   || null;
       const quantity = Number(md.quantity || 1);
 
+      // Fallback: if we have listing_id but missing artwork/seller, fetch them
+      if (listingId && (!artworkId || !sellerId)) {
+        const { data: listing, error } = await db
+          .from("listings")
+          .select("artwork_id, seller_id, status")
+          .eq("id", listingId)
+          .maybeSingle();
+        if (error) console.error("lookup listing error", error.message);
+        if (listing) {
+          artworkId = artworkId || listing.artwork_id;
+          sellerId  = sellerId  || listing.seller_id;
+        }
+      }
+
+      // Optional fallback: parse client_reference_id if present (format buyer:listing:artwork:seller)
+      if ((!listingId || !artworkId || !sellerId || !buyerId) && session.client_reference_id) {
+        try {
+          const [b, l, a, s] = String(session.client_reference_id).split(":");
+          buyerId   = buyerId   || b;
+          listingId = listingId || l;
+          artworkId = artworkId || a;
+          sellerId  = sellerId  || s;
+        } catch {}
+      }
+
       if (!listingId || !artworkId || !sellerId || !buyerId) {
+        console.error("stripe-webhook: missing ids", {
+          listingId, artworkId, sellerId, buyerId,
+          meta: session.metadata, client_reference_id: session.client_reference_id,
+        });
         return res({ error: "Missing metadata" }, 400);
       }
 
@@ -44,12 +75,10 @@ Deno.serve(async (req) => {
       const currency: string = (session.currency || "").toUpperCase();
       const price = ["JPY", "KRW"].includes(currency) ? amountTotal : amountTotal / 100;
 
-      const db = createClient(SUPABASE_URL, SERVICE);
-
-      // End listing (idempotent)
+      // 1) End listing (idempotent)
       await db.from("listings").update({ status: "ended" }).eq("id", listingId).eq("status", "active");
 
-      // Record sale
+      // 2) Record sale
       await db.from("sales").insert({
         artwork_id: artworkId,
         buyer_id: buyerId,
@@ -58,27 +87,35 @@ Deno.serve(async (req) => {
         currency,
         sold_at: new Date().toISOString(),
         tx_hash: null,
-      });
+      }).then(({ error }) => error && console.error("sales insert error", error.message));
 
-      // Transfer ownership (single-edition simple flow)
-      await db.from("artworks").update({ owner_id: buyerId }).eq("id", artworkId);
+      // 3) Transfer ownership
+      await db.from("artworks").update({ owner_id: buyerId }).eq("id", artworkId)
+        .then(({ error }) => error && console.error("artworks update error", error.message));
 
-      // Ownership bookkeeping
+      // 4) Ownership bookkeeping (+ buyer)
       await db.from("ownerships").upsert({
         artwork_id: artworkId,
         owner_id: buyerId,
-        quantity: 1,
+        quantity: quantity > 0 ? quantity : 1,
         updated_at: new Date().toISOString(),
-      }, { onConflict: "artwork_id,owner_id" });
+      }, { onConflict: "artwork_id,owner_id" })
+        .then(({ error }) => error && console.error("ownerships upsert error", error.message));
 
-      // Optional: decrement seller quantity
-      await db.rpc("decrement_ownership_if_exists", { p_artwork_id: artworkId, p_owner_id: sellerId }).catch(() => {});
+      // 5) Optional: decrement seller qty if you support editions
+      try {
+        await db.rpc("decrement_ownership_if_exists", { p_artwork_id: artworkId, p_owner_id: sellerId });
+      } catch (e) {
+        console.warn("RPC decrement_ownership_if_exists not present or failed", (e as any)?.message ?? e);
+      }
 
+      console.log("stripe-webhook ✔ processed", { listingId, artworkId, buyerId, sellerId, price, currency });
       return res({ ok: true });
     }
 
     return res({ received: true });
   } catch (e: any) {
+    console.error("stripe-webhook fatal", e?.message || e);
     return res({ error: e?.message || "Webhook error" }, 400);
   }
 });

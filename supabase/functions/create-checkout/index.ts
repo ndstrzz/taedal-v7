@@ -5,20 +5,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
-const SERVICE = Deno.env.get("SERVICE_ROLE_KEY")!;
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
-const FALLBACK_SITE = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
+const SITE = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
-function j(body: any, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
-}
-function t(body = "ok", status = 200) {
-  return new Response(body, { status, headers: cors });
-}
+const j = (body: any, status = 200) =>
+  new Response(JSON.stringify(body), { status, headers: { ...cors, "Content-Type": "application/json" } });
+const t = (body = "ok", status = 200) => new Response(body, { status, headers: cors });
 
 type Listing = {
   id: string;
@@ -26,13 +22,12 @@ type Listing = {
   fixed_price: number | null;
   seller_id: string;
   artwork_id: string;
-  status: string;
+  status: "active" | "ended";
 };
 
 const ZERO_DEC = new Set(["JPY", "KRW"]);
-function toStripeAmount(amount: number, currency: string) {
-  return Math.round(amount * (ZERO_DEC.has(currency.toUpperCase()) ? 1 : 100));
-}
+const toStripeAmount = (amount: number, currency: string) =>
+  Math.round(amount * (ZERO_DEC.has(currency.toUpperCase()) ? 1 : 100));
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return t();
@@ -45,16 +40,18 @@ Deno.serve(async (req) => {
     if (!auth) return t("Missing Authorization", 401);
 
     const { listing_id, quantity = 1, success_url, cancel_url } = await req.json();
-
     if (!listing_id) return t("listing_id required", 400);
 
-    const userClient = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
+    // Auth’d client (uses caller’s JWT)
+    const sb = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
 
-    const { data: me } = await userClient.auth.getUser();
-    if (!me?.user) return t("Unauthorized", 401);
+    // Who’s buying?
+    const { data: me } = await sb.auth.getUser();
+    if (!me?.user?.id) return t("Unauthorized", 401);
     const buyerId = me.user.id;
 
-    const { data: listing, error } = await userClient
+    // Fetch listing & artwork (trusted server-side)
+    const { data: listing, error } = await sb
       .from("listings")
       .select("id, sale_currency, fixed_price, seller_id, artwork_id, status")
       .eq("id", listing_id)
@@ -64,47 +61,49 @@ Deno.serve(async (req) => {
     if (listing.status !== "active") return t("Listing is not active", 400);
     if (!listing.fixed_price || !listing.sale_currency) return t("Listing missing price/currency", 400);
 
-    const { data: art } = await userClient
+    const { data: art } = await sb
       .from("artworks")
       .select("title,image_url")
       .eq("id", listing.artwork_id)
       .maybeSingle();
 
+    // Stripe session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, { httpClient: Stripe.createFetchHttpClient() });
 
     const currency = listing.sale_currency.toLowerCase();
-    const amount = toStripeAmount(listing.fixed_price, currency);
+    const unit_amount = toStripeAmount(listing.fixed_price, currency);
 
-    const success = (success_url || `${FALLBACK_SITE}/checkout/success?listing=${listing.id}`).replace(/\/$/, "");
-    const cancel = (cancel_url || `${FALLBACK_SITE}/art/${listing.artwork_id}?cancelled=1`).replace(/\/$/, "");
+    const success = (success_url || `${SITE}/checkout/success?listing=${listing.id}`).replace(/\/$/, "");
+    const cancel = (cancel_url || `${SITE}/art/${listing.artwork_id}?cancelled=1`).replace(/\/$/, "");
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
       success_url: success,
       cancel_url: cancel,
-      line_items: [{
-        quantity,
-        price_data: {
-          currency,
-          unit_amount: amount,
-          product_data: {
-            name: art?.title || "Artwork",
-            images: art?.image_url ? [art.image_url] : [],
+      line_items: [
+        {
+          quantity,
+          price_data: {
+            currency,
+            unit_amount,
+            product_data: {
+              name: art?.title || "Artwork",
+              images: art?.image_url ? [art.image_url] : [],
+            },
           },
         },
-      }],
+      ],
+      // 👇 critical metadata for webhook
       metadata: {
         listing_id: listing.id,
-        artwork_id: listing.artwork_id,
-        seller_id: listing.seller_id,
         buyer_id: buyerId,
-        quantity: String(quantity),
       },
     });
 
     return j({ url: session.url });
   } catch (e: any) {
+    console.error("create-checkout error:", e);
     return j({ error: e?.message || "Server error" }, 500);
   }
 });
