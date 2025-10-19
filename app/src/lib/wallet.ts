@@ -20,10 +20,10 @@ export function getWalletKit() {
     metadata: {
       name: "taedal",
       description: "Collect and sell digital artworks",
-      url: window.location.origin, // must be allow-listed in Reown Dashboard → Domain
+      url: window.location.origin, // must be allow-listed in Reown → Domain
       icons: [`${window.location.origin}/images/taedal-logo.svg`],
     },
-    // NOTE: new AppKit uses `networks`, not `chains`
+    // AppKit expects `networks` (not `chains`)
     networks: [sepolia],
     enableInjected: true,
     enableWalletConnect: true,
@@ -79,29 +79,61 @@ export async function ensureSepolia(): Promise<void> {
  * Minimal ethers-like signer shim:
  *  - getAddress(): Promise<string>
  *  - provider: EIP-1193 provider
- *  - sendTransaction(tx): Promise<{ hash: string }>
+ *  - sendTransaction(tx): Promise<TransactionResponse-ish>
+ *    returns { hash, wait() } where wait() polls for a receipt and resolves.
  */
-export async function getSignerAsync(): Promise<{
-  address: string;
-  getAddress: () => Promise<string>;
-  provider: any;
-  sendTransaction: (tx: { to: string; value: string; data?: string }) => Promise<{ hash: string }>;
-}> {
+export async function getSignerAsync(): Promise<any> {
   const ethereum = getEthereum();
   const [from] = await requestAccounts();
   if (!from) throw new Error("No authorized account.");
+
+  // tiny helper for wait()
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   return {
     address: from,
     getAddress: async () => from,
     provider: ethereum,
-    sendTransaction: async (tx) => {
+    sendTransaction: async (tx: { to: string; value: string; data?: string }) => {
       const hash: string = await ethereum.request({
         method: "eth_sendTransaction",
         params: [{ from, ...tx }],
       });
-      // ethers v5 returns a TransactionResponse that has `.hash`
-      return { hash };
+
+      // ethers v5 TransactionResponse usually exposes `.hash` and `.wait()`
+      const txResponse: any = {
+        hash,
+        from,
+        to: tx.to,
+        // lightweight wait() that polls for a receipt
+        wait: async (confs?: number) => {
+          let receipt: any = null;
+          // simple poll loop
+          for (;;) {
+            receipt = await ethereum.request({
+              method: "eth_getTransactionReceipt",
+              params: [hash],
+            });
+            if (receipt && receipt.blockNumber) break;
+            await sleep(1500);
+          }
+          // optionally simulate confirmations wait (noop)
+          if (confs && confs > 1) {
+            // you could add additional block polling here if needed
+          }
+          // normalize a bit like ethers v5 receipt
+          return {
+            ...receipt,
+            transactionHash: hash,
+            status:
+              typeof receipt.status === "string"
+                ? parseInt(receipt.status, 16)
+                : receipt.status ?? 1,
+          };
+        },
+      };
+
+      return txResponse; // satisfies code that does `const tx = await sendTransaction(...); await tx.wait()`
     },
   };
 }
