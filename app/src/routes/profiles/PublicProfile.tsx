@@ -26,7 +26,7 @@ type Profile = {
 export default function PublicProfile() {
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
-  const activeTab = (sp.get("tab") as "created" | "purchased") || "created";
+  const tabParam = sp.get("tab") as "created" | "purchased" | "hidden" | null;
 
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [p, setP] = useState<Profile | null>(null);
@@ -37,6 +37,7 @@ export default function PublicProfile() {
 
   const [created, setCreated] = useState<Artwork[]>([]);
   const [purchased, setPurchased] = useState<Artwork[]>([]);
+  const [hidden, setHidden] = useState<Artwork[]>([]);
 
   const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
 
@@ -93,6 +94,15 @@ export default function PublicProfile() {
     };
   }, [handle]);
 
+  const isMe = useMemo(
+    () => Boolean(viewerId && p?.id && viewerId === p.id),
+    [viewerId, p?.id]
+  );
+
+  // resolve active tab (hidden is only meaningful for self)
+  const activeTab: "created" | "purchased" | "hidden" =
+    tabParam && (tabParam !== "hidden" || isMe) ? tabParam : "created";
+
   /* load artworks for the active tab */
   useEffect(() => {
     if (!p?.id) return;
@@ -118,28 +128,26 @@ export default function PublicProfile() {
           if (error) throw error;
           if (!alive) return;
           setCreated(mapArt(data as any[]));
-        } else {
-          // PURCHASED: via ownerships (sorted by ownerships.updated_at)
+        } else if (activeTab === "purchased") {
+          // PURCHASED: show only visible ones (hidden = false) to everyone
           const { data: own, error: ownErr } = await supabase
             .from("ownerships")
             .select(
               `
               artwork_id,
+              hidden,
               updated_at,
-              artworks:artworks!ownerships_artwork_id_fkey (
-                id, title, image_url, creator_id, created_at
-              )
+              artworks:artworks!ownerships_artwork_id_fkey (id, title, image_url, creator_id, created_at)
             `
             )
             .eq("owner_id", p.id)
+            .eq("hidden", false)
             .order("updated_at", { ascending: false })
             .limit(200);
           if (ownErr) throw ownErr;
 
-          type Row = { artwork_id: string; updated_at: string; artworks: any | any[] };
+          type Row = { artwork_id: string; artworks: any | any[] };
           const rows = (own || []) as Row[];
-
-          // flatten + de-dupe (NO longer hiding self-created)
           const seen = new Set<string>();
           const viaOwnerships: Artwork[] = [];
           for (const r of rows) {
@@ -147,16 +155,11 @@ export default function PublicProfile() {
             if (!a) continue;
             if (seen.has(a.id)) continue;
             seen.add(a.id);
-            viaOwnerships.push({
-              id: a.id,
-              title: a.title ?? null,
-              image_url: a.image_url ?? null,
-            });
+            viaOwnerships.push({ id: a.id, title: a.title ?? null, image_url: a.image_url ?? null });
           }
-
           if (alive) setPurchased(viaOwnerships);
 
-          // Fallback (legacy) if nothing found
+          // fallback (legacy) if none found
           if (!viaOwnerships.length) {
             const { data: owned, error: fallbackErr } = await supabase
               .from("artworks")
@@ -165,6 +168,33 @@ export default function PublicProfile() {
               .order("created_at", { ascending: false });
             if (fallbackErr) throw fallbackErr;
             if (alive) setPurchased(mapArt((owned || []) as any[]));
+          }
+        } else {
+          // HIDDEN: only for self
+          if (!isMe) {
+            setHidden([]);
+          } else {
+            const { data: own, error } = await supabase
+              .from("ownerships")
+              .select(
+                `
+                artwork_id,
+                hidden,
+                updated_at,
+                artworks:artworks!ownerships_artwork_id_fkey (id, title, image_url, creator_id, created_at)
+              `
+              )
+              .eq("owner_id", p.id)
+              .eq("hidden", true)
+              .order("updated_at", { ascending: false })
+              .limit(200);
+            if (error) throw error;
+            const items: Artwork[] = [];
+            for (const r of (own || []) as any[]) {
+              const a = Array.isArray(r.artworks) ? r.artworks[0] : r.artworks;
+              if (a) items.push({ id: a.id, title: a.title ?? null, image_url: a.image_url ?? null });
+            }
+            if (alive) setHidden(items);
           }
         }
       } catch (e: any) {
@@ -178,7 +208,7 @@ export default function PublicProfile() {
     return () => {
       alive = false;
     };
-  }, [p?.id, activeTab]);
+  }, [p?.id, activeTab, isMe]);
 
   /* page title */
   useEffect(() => {
@@ -187,17 +217,12 @@ export default function PublicProfile() {
   }, [p]);
 
   /* derived UI bits */
-  const isMe = useMemo(
-    () => Boolean(viewerId && p?.id && viewerId === p.id),
-    [viewerId, p?.id]
-  );
-
   const coverUrl = p?.cover_url || "";
   const avatarUrl = p?.avatar_url || "/images/taedal-logo.svg";
   const displayName = p?.display_name?.trim() || p?.username || "Profile";
   const usernameText = p?.username ? `@${p.username}` : null;
 
-  const setTab = (t: "created" | "purchased") =>
+  const setTab = (t: "created" | "purchased" | "hidden") =>
     setSp((cur) => {
       const copy = new URLSearchParams(cur);
       copy.set("tab", t);
@@ -258,6 +283,11 @@ export default function PublicProfile() {
           <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
             Purchased
           </TabButton>
+          {isMe && (
+            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>
+              Hidden
+            </TabButton>
+          )}
         </div>
       </div>
 
@@ -268,8 +298,10 @@ export default function PublicProfile() {
           <GridSkeleton />
         ) : activeTab === "created" ? (
           <ArtworkGrid items={created} emptyText="No artworks yet." />
-        ) : (
+        ) : activeTab === "purchased" ? (
           <ArtworkGrid items={purchased} emptyText="No purchased pieces yet." />
+        ) : (
+          <ArtworkGrid items={hidden} emptyText="Nothing hidden." />
         )}
       </div>
     </div>

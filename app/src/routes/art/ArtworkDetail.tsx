@@ -310,6 +310,10 @@ export default function ArtworkDetail() {
   // seller console (UI-only)
   const [sellerOpen, setSellerOpen] = useState(false);
 
+  // 👇 per-owner visibility (ownerships.hidden)
+  const [myHidden, setMyHidden] = useState<boolean | null>(null);
+  const [hideBusy, setHideBusy] = useState(false);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -374,6 +378,17 @@ export default function ArtworkDetail() {
           const tb = await fetchTopBid((l as any).id);
           if (alive) setTopBid(tb);
         }
+
+        // fetch ownership visibility for current viewer (if they own it)
+        if (viewerId) {
+          const { data: own } = await supabase
+            .from("ownerships")
+            .select("hidden")
+            .eq("artwork_id", (data as Artwork).id)
+            .eq("owner_id", viewerId)
+            .maybeSingle();
+          if (alive) setMyHidden(own ? Boolean(own.hidden) : null);
+        }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artwork.");
       } finally {
@@ -383,7 +398,8 @@ export default function ArtworkDetail() {
     return () => {
       alive = false;
     };
-  }, [id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, viewerId]);
 
   useEffect(() => {
     if (!activeListing || (activeListing as any).type !== "auction") return;
@@ -493,15 +509,57 @@ export default function ArtworkDetail() {
     }
   }
 
+  /* ------------------------------ visibility toggle ------------------------------ */
+
+  async function ensureOwnershipRow() {
+    if (!viewerId || !art?.id) return;
+    const { data } = await supabase
+      .from("ownerships")
+      .select("owner_id")
+      .eq("artwork_id", art.id)
+      .eq("owner_id", viewerId)
+      .maybeSingle();
+
+    if (!data) {
+      // make a lightweight row so the owner can manage visibility
+      await supabase.from("ownerships").upsert({
+        artwork_id: art.id,
+        owner_id: viewerId,
+        quantity: 1,
+        hidden: false,
+        updated_at: new Date().toISOString(),
+      });
+    }
+  }
+
+  async function toggleHidden(next: boolean) {
+    if (!viewerId || !art?.id) return;
+    setHideBusy(true);
+    setMsg(null);
+    try {
+      await ensureOwnershipRow();
+      const { error } = await supabase
+        .from("ownerships")
+        .update({ hidden: next, updated_at: new Date().toISOString() })
+        .eq("artwork_id", art.id)
+        .eq("owner_id", viewerId);
+      if (error) throw error;
+      setMyHidden(next);
+    } catch (e) {
+      setMsg(asMsg(e));
+    } finally {
+      setHideBusy(false);
+    }
+  }
+
   /* ------------------------------ Buy handlers ------------------------------ */
 
-  // Stripe flow for fiat currencies — invokes our Edge Function that creates the Checkout Session
+  // Stripe flow for fiat currencies
   async function onBuy() {
     if (!activeListing || !art) return;
 
     const ccy = (activeListing.sale_currency || "").toUpperCase();
     if (ccy === "ETH") {
-      // ETH path goes to MetaMask instead
       setMsg(null);
       setWalletOpen(true);
       return;
@@ -512,9 +570,7 @@ export default function ArtworkDetail() {
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
-          // optional, used only for display on Stripe
           title: art.title ?? "Artwork purchase",
-          // these must be valid routes in your app
           success_url: `${location.origin}/checkout/success`,
           cancel_url: location.href,
         },
@@ -602,25 +658,26 @@ export default function ArtworkDetail() {
       setPayBusy(false);
     }
   }
+  // ------------------------------ bids ------------------------------
+async function onPlaceBid() {
+  if (!activeListing) return;
+  setBidBusy(true);
+  setBidMsg(null);
+  try {
+    const amt = Number(bidInput || 0);
+    if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
 
-  /* ------------------------------ bids ------------------------------ */
-  async function onPlaceBid() {
-    if (!activeListing) return;
-    setBidBusy(true);
-    setBidMsg(null);
-    try {
-      const amt = Number(bidInput || 0);
-      if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
-      const b = await placeBid(activeListing.id, amt);
-      setTopBid(b);
-      setBidMsg("Bid placed ✅");
-      setBidInput("");
-    } catch (e: any) {
-      setBidMsg(e?.message || "Bid failed");
-    } finally {
-      setBidBusy(false);
-    }
+    const b = await placeBid(activeListing.id, amt);
+    setTopBid(b);
+    setBidMsg("Bid placed ✅");
+    setBidInput("");
+  } catch (e: any) {
+    setBidMsg(e?.message || "Bid failed");
+  } finally {
+    setBidBusy(false);
   }
+}
+
 
   /* ------------------------------ computed ------------------------------ */
 
@@ -763,13 +820,24 @@ export default function ArtworkDetail() {
 
             <div className="flex items-center gap-1 shrink-0">
               {isOwner && (
-                <button
-                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                  title="Seller tools"
-                  onClick={() => setSellerOpen(true)}
-                >
-                  ✏️ Edit
-                </button>
+                <>
+                  <button
+                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                    title="Seller tools"
+                    onClick={() => setSellerOpen(true)}
+                  >
+                    ✏️ Edit
+                  </button>
+                  {/* Hide/Unhide toggle */}
+                  <button
+                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                    onClick={() => toggleHidden(!myHidden)}
+                    disabled={hideBusy || myHidden === null}
+                    title="Hide from your public profile"
+                  >
+                    {hideBusy ? "…" : myHidden ? "Unhide" : "Hide"}
+                  </button>
+                </>
               )}
               <button className="rounded-lg p-2 hover:bg-white/10" title="Copy link">
                 ⧉
@@ -1273,7 +1341,7 @@ function SellerConsole({
           ))}
         </div>
 
-        {/* PRICE TAB: reuses existing functionality */}
+        {/* PRICE TAB */}
         {tab === "price" && (
           <div className="space-y-3">
             <div className="text-sm text-white/70">Create or update a fixed-price listing.</div>
@@ -1283,7 +1351,7 @@ function SellerConsole({
           </div>
         )}
 
-        {/* AUCTION TAB: UI shell only, disabled controls */}
+        {/* AUCTION TAB (disabled) */}
         {tab === "auction" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 opacity-60 pointer-events-none select-none">
             <div className="text-sm text-white/70">Configure an auction (UI only for now).</div>
