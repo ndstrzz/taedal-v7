@@ -147,8 +147,7 @@ function Countdown({
 
   useEffect(() => {
     if (ms === 0 && onElapsed) onElapsed();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ms]);
+  }, [ms, onElapsed]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/8 border border-white/10 text-center">
@@ -301,6 +300,9 @@ export default function ArtworkDetail() {
   // wallet modal
   const [walletOpen, setWalletOpen] = useState(false);
   const [payBusy, setPayBusy] = useState(false);
+
+  // seller console (UI-only)
+  const [sellerOpen, setSellerOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -717,12 +719,28 @@ export default function ArtworkDetail() {
         <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
+          {/* header with owner-only edit */}
           <div className="space-y-1">
             <div className="text-[11px] text-white/60 flex items-center gap-2">
               <Pill>Artwork</Pill>
               <span>Minted {new Date(art.created_at).toLocaleDateString()}</span>
             </div>
-            <h1 className="text-3xl font-semibold leading-tight">{art.title || "Untitled"}</h1>
+
+            <div className="flex items-start gap-2">
+              <h1 className="text-3xl font-semibold leading-tight flex-1">
+                {art.title || "Untitled"}
+              </h1>
+
+              {isOwner && (
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="Seller tools"
+                  onClick={() => setSellerOpen(true)}
+                >
+                  ✏️ Edit
+                </button>
+              )}
+            </div>
           </div>
 
           <Card>
@@ -857,7 +875,7 @@ export default function ArtworkDetail() {
             )}
           </Card>
 
-          {/* Owner tools */}
+          {/* Owner tools shown publicly as before (kept) */}
           {isOwner && (
             <div id="owner-panel">
               <OwnerListPanel
@@ -1089,6 +1107,18 @@ export default function ArtworkDetail() {
         onMetaMask={onBuyWithMetaMask}
         disabledText="Coming soon"
       />
+
+      {/* Seller Console (owner-only, UI only) */}
+      {isOwner && (
+        <SellerConsole
+          open={sellerOpen}
+          onClose={() => setSellerOpen(false)}
+          artworkId={art.id}
+          onListingUpdated={async () =>
+            setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)
+          }
+        />
+      )}
     </>
   );
 }
@@ -1162,5 +1192,126 @@ function OwnerListPanel({
         (Creates/updates a fixed-price listing visible on Explore.)
       </div>
     </Card>
+  );
+}
+
+/* ------------------------------ Seller Console (UI only) ------------------------------ */
+
+function SellerConsole({
+  open,
+  onClose,
+  artworkId,
+  onListingUpdated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  artworkId: string;
+  onListingUpdated: () => Promise<void> | void;
+}) {
+  const [tab, setTab] = useState<"price" | "auction" | "details">("price");
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[60]">
+      {/* backdrop */}
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      {/* drawer */}
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold">Seller tools</h3>
+          <button
+            className="text-sm text-white/70 hover:text-white"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="flex gap-2 mb-3">
+          {(["price", "auction", "details"] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-3 py-1.5 rounded-lg text-sm transition ${
+                tab === t
+                  ? "bg-white text-black font-medium"
+                  : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
+              }`}
+            >
+              {t === "price" ? "Price" : t === "auction" ? "Auction" : "Details"}
+            </button>
+          ))}
+        </div>
+
+        {/* PRICE TAB: reuses existing functionality */}
+        {tab === "price" && (
+          <div className="space-y-3">
+            <div className="text-sm text-white/70">
+              Create or update a fixed-price listing.
+            </div>
+            <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <OwnerListPanel artworkId={artworkId} onUpdated={onListingUpdated} />
+            </div>
+          </div>
+        )}
+
+        {/* AUCTION TAB: UI shell only, disabled controls */}
+        {tab === "auction" && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
+            <div className="text-sm text-white/70">
+              Configure an auction (UI only for now).
+            </div>
+            <div className="grid grid-cols-2 gap-3 opacity-60 pointer-events-none select-none">
+              <div>
+                <label className="block text-sm">Reserve price</label>
+                <input className="input" placeholder="e.g. 0.2" />
+              </div>
+              <div>
+                <label className="block text-sm">Currency</label>
+                <select className="input">
+                  <option>ETH</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm">Start time</label>
+                <input className="input" type="datetime-local" />
+              </div>
+              <div>
+                <label className="block text-sm">End time</label>
+                <input className="input" type="datetime-local" />
+              </div>
+            </div>
+            <div className="text-xs text-white/60">
+              (Disabled to keep backend unchanged. When you’re ready, we’ll wire this to your auction
+              listing endpoints.)
+            </div>
+          </div>
+        )}
+
+        {/* DETAILS TAB: link out to a (future) edit page */}
+        {tab === "details" && (
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
+            <div className="text-sm text-white/70">
+              Update artwork metadata (title/description, tags, etc.).
+            </div>
+            <div className="flex gap-2">
+              <a
+                href={`/art/${artworkId}/edit`}
+                className="btn"
+              >
+                Go to edit page
+              </a>
+              <span className="text-xs text-white/60 self-center">
+                (If you don’t have an edit route yet, we can add a read-only preview here.)
+              </span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
