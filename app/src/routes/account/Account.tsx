@@ -198,7 +198,7 @@ export default function Account() {
       .select(
         `
       artwork_id,
-      artworks!inner (
+      artworks:artworks!ownerships_artwork_id_fkey (
         id, title, image_url, creator_id, created_at
       )
     `

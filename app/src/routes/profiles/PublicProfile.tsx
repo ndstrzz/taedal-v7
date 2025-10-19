@@ -119,31 +119,26 @@ export default function PublicProfile() {
           if (!alive) return;
           setCreated(mapArt(data as any[]));
         } else {
-          // ✅ PURCHASED: read from ownerships→artworks (and sort by most recent sale if present)
+          // PURCHASED: ownerships -> artworks (explicit FK hint)
           const { data: own, error: ownErr } = await supabase
             .from("ownerships")
             .select(
               `
               artwork_id,
-              artworks!inner (
+              artworks:artworks!ownerships_artwork_id_fkey (
                 id, title, image_url, creator_id, created_at
-              ),
-              sales:sales!left (sold_at, tx_hash)
+              )
             `
             )
             .eq("owner_id", p.id)
-            .order("sold_at", { foreignTable: "sales", ascending: false })
             .order("created_at", { foreignTable: "artworks", ascending: false })
             .limit(200);
           if (ownErr) throw ownErr;
 
-          type Row = {
-            artwork_id: string;
-            artworks: any | any[];
-          };
+          type Row = { artwork_id: string; artworks: any | any[] };
           const rows = (own || []) as Row[];
 
-          // Flatten / de-dupe per artwork id, hide self-created pieces
+          // flatten, de-dupe, hide self-created
           const seen = new Set<string>();
           const viaOwnerships: Artwork[] = [];
           for (const r of rows) {
@@ -158,23 +153,21 @@ export default function PublicProfile() {
             });
           }
 
-          if (viaOwnerships.length) {
-            if (alive) setPurchased(viaOwnerships);
-            return;
+          if (alive) setPurchased(viaOwnerships);
+
+          // Fallback (legacy) if nothing found
+          if (!viaOwnerships.length) {
+            const { data: owned, error: fallbackErr } = await supabase
+              .from("artworks")
+              .select(ARTWORK_COLS)
+              .eq("owner_id", p.id)
+              .order("created_at", { ascending: false });
+            if (fallbackErr) throw fallbackErr;
+            const filtered = (owned || []).filter(
+              (r: any) => r.creator_id !== p.id
+            );
+            if (alive) setPurchased(mapArt(filtered));
           }
-
-          // Fallback (legacy): artworks with owner_id = user (useful for old data or one-off updates)
-          const { data: owned, error: fallbackErr } = await supabase
-            .from("artworks")
-            .select(ARTWORK_COLS)
-            .eq("owner_id", p.id)
-            .order("created_at", { ascending: false });
-          if (fallbackErr) throw fallbackErr;
-
-          const filtered = (owned || []).filter(
-            (r: any) => r.creator_id !== p.id
-          );
-          if (alive) setPurchased(mapArt(filtered));
         }
       } catch (e: any) {
         setMsg(e?.message || "Failed to load artworks.");
