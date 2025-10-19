@@ -236,8 +236,9 @@ export default function Account() {
 
     const byId = new Map((arts ?? []).map((a) => [a.id, a]));
     const ordered = allIds
-      .map((id) => byId.get(id))
-      .filter((a): a is ArtworkThumb => !!a && a.creator_id !== uid);
+  .map(id => byId.get(id))
+  .filter((a): a is ArtworkThumb => !!a);
+
 
     setPurchased(ordered);
   }
