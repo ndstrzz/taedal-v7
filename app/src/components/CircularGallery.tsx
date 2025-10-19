@@ -268,7 +268,7 @@ class App {
 /* ---------------- exported React wrapper ---------------- */
 export default function CircularGallery({
   items,
-  bend = 0,
+  bend = -2,
   textColor = '#ffffff',
   borderRadius = 0.05,
   font = 'bold 30px Figtree',
