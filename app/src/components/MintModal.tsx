@@ -25,6 +25,15 @@ export default function MintModal({ artworkId, tokenURI, onDone }: Props) {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [minting, setMinting] = useState<boolean>(false);
 
+  // Prevent background scroll when this modal is mounted
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -154,16 +163,31 @@ export default function MintModal({ artworkId, tokenURI, onDone }: Props) {
 
   return (
     <>
-      {/* Full-screen 3D coin overlay */}
-      <MintingOverlay
-        open={minting}
-        message={msg}
-        backdropAlpha={0.92}
-        spinSpeed={1.8}
-      />
+      {/* ===== Full-bleed wrapper to eliminate any top/bottom gap & brighten coin ===== */}
+      {minting && (
+        <div className="fixed inset-0 z-[1300] bg-black">
+          {/* Your existing overlay (kept exactly as-is) */}
+          <MintingOverlay
+            open={minting}
+            message={msg}
+            backdropAlpha={0.92}
+            spinSpeed={1.8}
+          />
+
+          {/* Gentle radial highlight to "lighten" the coin without touching MintingOverlay */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{
+              background:
+                "radial-gradient(closest-side at 50% 48%, rgba(255,255,255,0.16), rgba(255,255,255,0.0) 60%)",
+              mixBlendMode: "screen",
+            }}
+          />
+        </div>
+      )}
 
       {/* Modal shell (kept so user can see account + link) */}
-      <div className="fixed inset-0 bg-black/60 grid place-items-center z-50">
+      <div className="fixed inset-0 bg-black/60 grid place-items-center z-[1100]">
         <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-5 w-[420px] space-y-3">
           <h3 className="text-lg font-semibold">Minting on Sepolia</h3>
           {account && (
