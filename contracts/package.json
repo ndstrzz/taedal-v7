@@ -1,0 +1,21 @@
+{
+  "name": "taedal-contracts",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "compile": "hardhat compile",
+    "clean": "hardhat clean",
+    "deploy:sepolia": "hardhat run scripts/deploy.js --network sepolia",
+    "verify:sepolia": "hardhat verify --network sepolia",
+    "abi": "node scripts/export-abi.js"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-toolbox": "^5.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "dotenv": "^16.4.5",
+    "hardhat": "^2.26.0"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.2"
+  }
+}
