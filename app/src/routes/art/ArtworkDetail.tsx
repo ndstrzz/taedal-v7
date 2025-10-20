@@ -50,14 +50,17 @@ type Artwork = {
   creator_id: string;
   owner_id: string | null;
   created_at: string;
-  // IPFS/mint fields
+
+  // IPFS fields
   ipfs_image_cid?: string | null;
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
-  // NEW: fill blockchain details
+
+  // On-chain fields
   contract_address?: string | null;
-  token_id?: string | null | number;
+  token_id?: string | null;
   tx_hash?: string | null;
+  chain?: string | null;
 };
 
 type ArtworkFile = {
@@ -336,8 +339,7 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            // 🔽 include blockchain fields so we can display them
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash"
+            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash,chain"
           )
           .eq("id", id!)
           .maybeSingle();
@@ -489,7 +491,7 @@ export default function ArtworkDetail() {
       const fresh = await supabase
         .from("artworks")
         .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash"
+          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash,chain"
         )
         .eq("id", art.id)
         .maybeSingle();
@@ -687,9 +689,14 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ computed ------------------------------ */
 
-  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction =
+    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
+  const creatorHandle = creator?.username
+    ? `/u/${creator.username}`
+    : creator
+    ? `/u/${creator.id}`
+    : "#";
   const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
@@ -742,8 +749,7 @@ export default function ArtworkDetail() {
 
   return (
     <>
-      {/* NOTE: items-start + sticky on right keeps the rail 'anchored' as you scroll */}
-      <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12 lg:items-start">
+      <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
         {/* Left: Media & thumbs */}
         <div className="lg:col-span-7 space-y-3">
           <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
@@ -775,8 +781,8 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Right: details & actions rail (sticky) */}
-        <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 h-fit self-start">
+        {/* Right: details & actions */}
+        <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
           {/* Header line */}
@@ -867,10 +873,17 @@ export default function ArtworkDetail() {
               />
               <StatBox
                 label="Collection floor"
-                value={activeListing ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}` : "—"}
+                value={
+                  activeListing
+                    ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}`
+                    : "—"
+                }
               />
               <StatBox label="Rarity" value={"—"} />
-              <StatBox label="Last sale" value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"} />
+              <StatBox
+                label="Last sale"
+                value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"}
+              />
             </div>
           </Card>
 
@@ -887,8 +900,11 @@ export default function ArtworkDetail() {
                       </div>
                       {(activeListing as any).reserve_price && (
                         <div className="text-[11px] text-white/60 mt-1">
-                          Reserve: {(activeListing as any).reserve_price} {activeListing.sale_currency}
-                          {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
+                          Reserve: {(activeListing as any).reserve_price}{" "}
+                          {activeListing.sale_currency}
+                          {!topBid || topBid.amount < (activeListing as any).reserve_price
+                            ? " (not met)"
+                            : ""}
                         </div>
                       )}
                     </div>
@@ -1004,7 +1020,7 @@ export default function ArtworkDetail() {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      Open metadata
+                      Open
                     </a>
                   </div>
                 )}
@@ -1037,51 +1053,9 @@ export default function ArtworkDetail() {
               </div>
             )}
           </Card>
-
-          {/* Blockchain details (stays in the rail) */}
-          <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
-            <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-              <div className="text-white/60">Contract Address</div>
-              <div className="truncate">
-                {art.contract_address ? (
-                  <a
-                    className="underline"
-                    href={`https://sepolia.etherscan.io/address/${art.contract_address}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {art.contract_address}
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </div>
-              <div className="text-white/60">Token ID</div>
-              <div>{art.token_id ?? "—"}</div>
-              <div className="text-white/60">Token Standard</div>
-              <div>ERC721</div>
-              <div className="text-white/60">Chain</div>
-              <div>Ethereum (Sepolia)</div>
-              <div className="text-white/60">Transaction</div>
-              <div className="truncate">
-                {art.tx_hash ? (
-                  <a
-                    className="underline break-all"
-                    href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    {art.tx_hash}
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </div>
-            </div>
-          </Card>
         </div>
 
-        {/* Tabs wide area (left column grows; right rail stays sticky) */}
+        {/* Tabs wide area */}
         <div className="lg:col-span-12">
           <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
             {/* Tabs header */}
@@ -1161,6 +1135,57 @@ export default function ArtworkDetail() {
                         </div>
                       </>
                     )}
+                  </div>
+                </Card>
+
+                {/* Blockchain details */}
+                <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
+                  <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
+                    {/* Contract Address */}
+                    <div className="text-white/60">Contract Address</div>
+                    <div className="truncate">
+                      {art.contract_address ? (
+                        <a
+                          className="underline"
+                          href={`https://sepolia.etherscan.io/address/${art.contract_address}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {art.contract_address.slice(0, 8)}…{art.contract_address.slice(-6)}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
+
+                    {/* Token ID */}
+                    <div className="text-white/60">Token ID</div>
+                    <div>{art.token_id ?? "—"}</div>
+
+                    {/* Token Standard */}
+                    <div className="text-white/60">Token Standard</div>
+                    <div>ERC721</div>
+
+                    {/* Chain */}
+                    <div className="text-white/60">Chain</div>
+                    <div>Ethereum (Sepolia)</div>
+
+                    {/* Transaction */}
+                    <div className="text-white/60">Transaction</div>
+                    <div className="truncate">
+                      {art.tx_hash ? (
+                        <a
+                          className="underline"
+                          href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {art.tx_hash.slice(0, 10)}…{art.tx_hash.slice(-8)}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </div>
                   </div>
                 </Card>
 
