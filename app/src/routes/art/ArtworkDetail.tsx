@@ -50,17 +50,9 @@ type Artwork = {
   creator_id: string;
   owner_id: string | null;
   created_at: string;
-
-  // IPFS fields
   ipfs_image_cid?: string | null;
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
-
-  // On-chain fields
-  contract_address?: string | null;
-  token_id?: string | null;
-  tx_hash?: string | null;
-  chain?: string | null;
 };
 
 type ArtworkFile = {
@@ -339,7 +331,7 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash,chain"
+            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
           )
           .eq("id", id!)
           .maybeSingle();
@@ -491,7 +483,7 @@ export default function ArtworkDetail() {
       const fresh = await supabase
         .from("artworks")
         .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,contract_address,token_id,tx_hash,chain"
+          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
         )
         .eq("id", art.id)
         .maybeSingle();
@@ -689,14 +681,9 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ computed ------------------------------ */
 
-  const isAuction =
-    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username
-    ? `/u/${creator.username}`
-    : creator
-    ? `/u/${creator.id}`
-    : "#";
+  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
   const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
@@ -781,7 +768,7 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Right: details & actions */}
+        {/* Right: details & actions (OpenSea-style) */}
         <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
@@ -873,17 +860,10 @@ export default function ArtworkDetail() {
               />
               <StatBox
                 label="Collection floor"
-                value={
-                  activeListing
-                    ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}`
-                    : "—"
-                }
+                value={activeListing ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}` : "—"}
               />
               <StatBox label="Rarity" value={"—"} />
-              <StatBox
-                label="Last sale"
-                value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"}
-              />
+              <StatBox label="Last sale" value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"} />
             </div>
           </Card>
 
@@ -900,11 +880,8 @@ export default function ArtworkDetail() {
                       </div>
                       {(activeListing as any).reserve_price && (
                         <div className="text-[11px] text-white/60 mt-1">
-                          Reserve: {(activeListing as any).reserve_price}{" "}
-                          {activeListing.sale_currency}
-                          {!topBid || topBid.amount < (activeListing as any).reserve_price
-                            ? " (not met)"
-                            : ""}
+                          Reserve: {(activeListing as any).reserve_price} {activeListing.sale_currency}
+                          {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
                         </div>
                       )}
                     </div>
@@ -1020,7 +997,7 @@ export default function ArtworkDetail() {
                       target="_blank"
                       rel="noreferrer"
                     >
-                      Open
+                      Open metadata
                     </a>
                   </div>
                 )}
@@ -1079,7 +1056,7 @@ export default function ArtworkDetail() {
                 {/* Traits (placeholder) */}
                 <Card
                   title={
-                    <div className="flex items-center gap-2">
+                    <div className="flex items一起 gap-2">
                       <span className="text-base font-semibold">Traits</span>
                       <Pill className="ml-1">Soon</Pill>
                     </div>
@@ -1089,7 +1066,7 @@ export default function ArtworkDetail() {
                       <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
                         ▦
                       </button>
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
+                      <button className="px-2 py-1 rounded-lg hover:bg白/10" title="List">
                         ☰
                       </button>
                     </div>
@@ -1110,19 +1087,19 @@ export default function ArtworkDetail() {
                   <div className="space-y-4">
                     <div>
                       <div className="font-medium">About {art.title || "this artwork"}</div>
-                      <div className="mt-1 text-sm text-white/80 whitespace-pre-wrap">
+                      <div className="mt-1 text-sm text白/80 whitespace-pre-wrap">
                         {art.description || "No description provided."}
                       </div>
                     </div>
                     {creator && (
                       <>
-                        <div className="h-px bg-white/10" />
+                        <div className="h-px bg白/10" />
                         <div>
                           <div className="font-medium flex items-center gap-2">
                             {creator.avatar_url ? (
                               <img src={creator.avatar_url} className="h-6 w-6 rounded-full object-cover" />
                             ) : (
-                              <div className="h-6 w-6 rounded-full bg-white/10" />
+                              <div className="h-6 w-6 rounded-full bg白/10" />
                             )}
                             <span>
                               A collection by{" "}
@@ -1131,7 +1108,7 @@ export default function ArtworkDetail() {
                               </Link>
                             </span>
                           </div>
-                          <div className="mt-1 text-sm text-white/70">Creator bio coming soon.</div>
+                          <div className="mt-1 text-sm text白/70">Creator bio coming soon.</div>
                         </div>
                       </>
                     )}
@@ -1141,57 +1118,30 @@ export default function ArtworkDetail() {
                 {/* Blockchain details */}
                 <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
                   <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-                    {/* Contract Address */}
-                    <div className="text-white/60">Contract Address</div>
+                    <div className="text白/60">Contract Address</div>
                     <div className="truncate">
-                      {art.contract_address ? (
-                        <a
-                          className="underline"
-                          href={`https://sepolia.etherscan.io/address/${art.contract_address}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {art.contract_address.slice(0, 8)}…{art.contract_address.slice(-6)}
+                      {art.token_uri ? (
+                        <a className="underline" href={art.token_uri} target="_blank" rel="noreferrer">
+                          {art.token_uri.length > 20
+                            ? `${art.token_uri.slice(0, 10)}…${art.token_uri.slice(-8)}`
+                            : art.token_uri}
                         </a>
                       ) : (
                         "—"
                       )}
                     </div>
-
-                    {/* Token ID */}
-                    <div className="text-white/60">Token ID</div>
-                    <div>{art.token_id ?? "—"}</div>
-
-                    {/* Token Standard */}
-                    <div className="text-white/60">Token Standard</div>
+                    <div className="text白/60">Token ID</div>
+                    <div>{art.id}</div>
+                    <div className="text白/60">Token Standard</div>
                     <div>ERC721</div>
-
-                    {/* Chain */}
-                    <div className="text-white/60">Chain</div>
+                    <div className="text白/60">Chain</div>
                     <div>Ethereum (Sepolia)</div>
-
-                    {/* Transaction */}
-                    <div className="text-white/60">Transaction</div>
-                    <div className="truncate">
-                      {art.tx_hash ? (
-                        <a
-                          className="underline"
-                          href={`https://sepolia.etherscan.io/tx/${art.tx_hash}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {art.tx_hash.slice(0, 10)}…{art.tx_hash.slice(-8)}
-                        </a>
-                      ) : (
-                        "—"
-                      )}
-                    </div>
                   </div>
                 </Card>
 
                 {/* More from this collection (placeholder) */}
                 <Card title={<span className="text-base font-semibold">More from this collection</span>}>
-                  <div className="text-sm text-white/70">Collection grid coming soon.</div>
+                  <div className="text-sm text白/70">Collection grid coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1200,7 +1150,7 @@ export default function ArtworkDetail() {
             {tab === "orders" && (
               <div className="p-4">
                 <Card>
-                  <div className="text-sm text-white/70">Orders UI coming soon.</div>
+                  <div className="text-sm text白/70">Orders UI coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1209,16 +1159,16 @@ export default function ArtworkDetail() {
             {tab === "activity" && (
               <div className="p-4">
                 {sales.length === 0 ? (
-                  <div className="text-sm text-white/70">No activity yet.</div>
+                  <div className="text-sm text白/70">No activity yet.</div>
                 ) : (
                   <ul className="space-y-3">
                     {sales.map((s) => (
-                      <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
+                      <li key={s.id} className="p-3 rounded-xl bg白/[0.04] border border白/10">
                         <div className="text-sm">
                           Sale • <b>{s.price} {s.currency}</b>{" "}
                           on {new Date(s.sold_at).toLocaleString()}
                         </div>
-                        <div className="text-xs text-white/70">
+                        <div className="text-xs text白/70">
                           From{" "}
                           {s.seller ? (
                             <Link
