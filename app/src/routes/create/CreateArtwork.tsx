@@ -9,7 +9,7 @@ import { CreateArtworkSchema, type CreateArtworkInput } from "../../schemas/artw
 import { uploadToArtworksBucket } from "../../lib/upload";
 import { sha256File } from "../../lib/hashFile";
 import MintModal from "../../components/MintModal";
-import SimilarityOverlay from "../../components/SimilarityOverlay";
+// import SimilarityOverlay from "../../components/SimilarityOverlay"; // (not used now)
 import useMinBusy from "../../hooks/useMinBusy";
 import CropModal from "../../components/CropModal";
 
@@ -63,7 +63,7 @@ function Stepper({ step }: { step: 1 | 2 | 3 }) {
               <span
                 className={`grid place-items-center w-5 h-5 text-[11px] rounded-full
                   ${active ? "bg-black text-white" : "bg-white/15 text-white"}`}
-                >
+              >
                 {i + 1}
               </span>
               <span className="text-xs">{label}</span>
@@ -94,8 +94,68 @@ function InfoBar({ tone = "default", children }: { tone?: "default" | "warning" 
     warning: "bg-amber-400/10 border-amber-300/30 text-amber-200",
     success: "bg-emerald-400/10 border-emerald-300/30 text-emerald-200",
   };
+  return <div className={`text-xs rounded-lg px-3 py-2 border ${tones[tone]}`}>{children}</div>;
+}
+
+/* -------- Video Overlay (new): uses your loading video + THICCCBOI font -------- */
+
+function VideoOverlay({
+  open,
+  message,
+}: {
+  open: boolean;
+  message: "scan" | "pin";
+}) {
+  if (!open) return null;
+
+  // NOTE: file path contains a space; using %20 for safe URL.
+  const videoSrc = "/images/laoding%20video.mp4";
+
+  const text =
+    message === "pin"
+      ? "We are pinning your unique art, please wait"
+      : "We are finding any possible similar artwork in our database, please wait";
+
   return (
-    <div className={`text-xs rounded-lg px-3 py-2 border ${tones[tone]}`}>{children}</div>
+    <>
+      {/* Local font face just for the overlay text */}
+      <style>{`
+        @font-face {
+          font-family: 'THICCCBOI-BOLD';
+          src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype');
+          font-weight: bold;
+          font-style: normal;
+          font-display: swap;
+        }
+        .thicccboi {
+          font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+          letter-spacing: 0.2px;
+        }
+      `}</style>
+
+      <div
+        aria-live="polite"
+        className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center"
+      >
+        <div className="relative w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
+          <video
+            src={videoSrc}
+            autoPlay
+            muted
+            loop
+            playsInline
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+          <div className="absolute inset-0 bg-black/30" />
+          <div className="absolute inset-x-4 bottom-4">
+            <div className="thicccboi text-base md:text-lg text-white drop-shadow-sm">
+              {text}
+            </div>
+            <div className="text-[11px] text-white/70 mt-1">This may take a few moments.</div>
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -163,9 +223,7 @@ export default function CreateArtworkWizard() {
   const showDupeOverlay = useMinBusy(anyChecking, 5000);
   const showPinOverlay = useMinBusy(pinning, 5000);
   const overlayOpen = showDupeOverlay || showPinOverlay;
-  const overlayMessage = showPinOverlay
-    ? "Pinning to IPFS…"
-    : "Scanning for visually similar artworks…";
+  // (We keep these booleans; message selection happens in our new overlay.)
 
   // Require login
   useEffect(() => {
@@ -399,9 +457,7 @@ export default function CreateArtworkWizard() {
       <div className="max-w-4xl mx-auto p-8">
         <Breadcrumb step={1} />
         <div className="mt-4 text-xl font-semibold">Create artwork</div>
-        <InfoBar tone="warning" >
-          Sign in to create an artwork.
-        </InfoBar>
+        <InfoBar tone="warning">Sign in to create an artwork.</InfoBar>
       </div>
     );
   }
@@ -420,19 +476,14 @@ export default function CreateArtworkWizard() {
         <Stepper step={step} />
       </div>
 
-      {globalMsg && (
-        <InfoBar tone="warning">{globalMsg}</InfoBar>
-      )}
+      {globalMsg && <InfoBar tone="warning">{globalMsg}</InfoBar>}
 
       {/* ── STEP 1: MEDIA ───────────────────────────────────────────────────── */}
       {step === 1 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
             {/* Upload panel */}
-            <Section
-              title="Upload media"
-              desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5."
-            >
+            <Section title="Upload media" desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5.">
               <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
                 <div className="h-12 w-12 rounded-full bg-white/8 grid place-items-center border border-white/10">
                   <span className="text-xl">⤴</span>
@@ -523,9 +574,7 @@ export default function CreateArtworkWizard() {
                     checked={ackOriginal}
                     onChange={(e) => setAckOriginal(e.target.checked)}
                   />
-                  <span className="text-sm">
-                    I am the original creator and have the rights to mint this artwork.
-                  </span>
+                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
                 </label>
               </Section>
             )}
@@ -549,9 +598,7 @@ export default function CreateArtworkWizard() {
                   {images[0] ? (
                     <img src={images[0].previewUrl} className="h-full w-full object-cover" />
                   ) : (
-                    <div className="grid h-full place-items-center text-neutral-500 text-sm">
-                      No image
-                    </div>
+                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
                   )}
                 </div>
                 <div className="mt-3 space-y-1">
@@ -590,11 +637,7 @@ export default function CreateArtworkWizard() {
               <div className="grid md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm">Medium</label>
-                  <input
-                    className="input"
-                    {...register("medium")}
-                    placeholder="Oil on canvas / Digital"
-                  />
+                  <input className="input" {...register("medium")} placeholder="Oil on canvas / Digital" />
                 </div>
                 <div>
                   <label className="block text-sm">Year created</label>
@@ -686,9 +729,7 @@ export default function CreateArtworkWizard() {
                     checked={ackOriginal}
                     onChange={(e) => setAckOriginal(e.target.checked)}
                   />
-                  <span className="text-sm">
-                    I am the original creator and have the rights to mint this artwork.
-                  </span>
+                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
                 </label>
               </InfoBar>
             )}
@@ -702,15 +743,11 @@ export default function CreateArtworkWizard() {
                   {images[0] ? (
                     <img src={images[0].previewUrl} className="h-full w-full object-cover" />
                   ) : (
-                    <div className="grid h-full place-items-center text-neutral-500 text-sm">
-                      No image
-                    </div>
+                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
                   )}
                 </div>
                 <div className="mt-3 space-y-1">
-                  <div className="text-lg font-semibold truncate">
-                    {watch("title") || "Untitled"}
-                  </div>
+                  <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
                   <div className="text-xs text-white/60">By you • Not listed</div>
                 </div>
                 {images.length > 1 && (
@@ -736,20 +773,14 @@ export default function CreateArtworkWizard() {
           <div className="lg:col-span-7 space-y-4">
             <Section title="Preview">
               <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
-                {images[0] ? (
-                  <img src={images[0].previewUrl} className="h-full w-full object-cover" />
-                ) : null}
+                {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : null}
               </div>
             </Section>
           </div>
 
           <div className="lg:col-span-5 space-y-3">
             <Section title="Status">
-              {pinning ? (
-                <InfoBar>Pinning to IPFS…</InfoBar>
-              ) : (
-                <InfoBar tone="success">Ready to mint</InfoBar>
-              )}
+              {pinning ? <InfoBar>Pinning to IPFS…</InfoBar> : <InfoBar tone="success">Ready to mint</InfoBar>}
               {pinMsg && <div className="text-xs text-neutral-200 mt-2">{pinMsg}</div>}
               {pinData && (
                 <div className="text-xs space-y-1 mt-2">
@@ -791,8 +822,8 @@ export default function CreateArtworkWizard() {
         />
       )}
 
-      {/* Overlays */}
-      <SimilarityOverlay open={overlayOpen} message={overlayMessage} />
+      {/* Overlays: replaced SimilarityOverlay with THICCCBOI video overlay */}
+      <VideoOverlay open={overlayOpen} message={showPinOverlay ? "pin" : "scan"} />
 
       {/* Crop modal */}
       {cropTargetIdx != null && currentCropFile && (
@@ -807,11 +838,9 @@ export default function CreateArtworkWizard() {
             const existing = images[idx];
             if (!existing) return setCropTargetIdx(null);
 
-            const nextFile = new File(
-              [blob],
-              existing.original.name.replace(/\.\w+$/, "") + ".jpg",
-              { type: "image/jpeg" }
-            );
+            const nextFile = new File([blob], existing.original.name.replace(/\.\w+$/, "") + ".jpg", {
+              type: "image/jpeg",
+            });
             const nextPreview = URL.createObjectURL(nextFile);
 
             // Update state
