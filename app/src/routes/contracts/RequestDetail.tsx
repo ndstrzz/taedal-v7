@@ -141,7 +141,7 @@ export default function RequestDetail() {
     return () => { alive = false; };
   }, [id]);
 
-  // Realtime: new messages (already had)
+  // Realtime: new messages
   useEffect(() => {
     if (!id) return;
     const channel = supabase
@@ -153,6 +153,27 @@ export default function RequestDetail() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [id]);
+
+  // Fallback poller: fetch latest if realtime misses
+  useEffect(() => {
+    if (!id) return;
+    const interval = setInterval(async () => {
+      try {
+        const lastAt = msgs.length ? msgs[msgs.length - 1].created_at : null;
+        let q = supabase
+          .from("license_threads")
+          .select("*")
+          .eq("request_id", id)
+          .order("created_at", { ascending: true });
+
+        const { data, error } = lastAt ? await q.gt("created_at", lastAt) : await q;
+        if (!error && data && data.length) {
+          setMsgs((cur) => [...cur, ...data as any]);
+        }
+      } catch { /* ignore */ }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [id, msgs]);
 
   // Realtime: typing + seen presence/broadcast
   useEffect(() => {
@@ -184,7 +205,7 @@ export default function RequestDetail() {
         setSeenBy((cur) => ({ ...cur, [from]: { msgId, ts: Number(ts) || Date.now() } }));
       });
 
-      const status = await chan.subscribe((s) => {
+      await chan.subscribe((s) => {
         if (s === "SUBSCRIBED") {
           chan?.track({ user_id: uid, ts: Date.now() });
         }
@@ -227,9 +248,7 @@ export default function RequestDetail() {
   async function sendSeenIfNeeded() {
     if (!id || !me || msgs.length === 0) return;
     const last = msgs[msgs.length - 1];
-    // only send seen if the last message is NOT mine
-    if (last.author_id === me) return;
-
+    if (last.author_id === me) return; // only send seen if last is NOT mine
     await supabase.channel(`lr-${id}-rt`).send({
       type: "broadcast",
       event: "seen",
@@ -275,7 +294,7 @@ export default function RequestDetail() {
     } catch (e: any) {
       setMsg(e?.message || "Failed to apply changes.");
     } finally {
-      setBusy(false);
+           setBusy(false);
     }
   }
 
@@ -313,6 +332,7 @@ export default function RequestDetail() {
 
   async function onGeneratePdf() {
     if (!req) return;
+    // Open tab synchronously to avoid popup blockers
     const w = window.open("about:blank", "_blank");
     if (!w) {
       setMsg("Please allow pop-ups to preview the contract.");
@@ -587,7 +607,7 @@ function ChatPane({
 
   const hasSeen = (msgId: string) => {
     // if any other user seen this message id
-    return Object.entries(seenBy || {}).some(([uid, s]: any) => s?.msgId === msgId);
+    return Object.entries(seenBy || {}).some(([_, s]: any) => s?.msgId === msgId);
   };
 
   return (
@@ -641,7 +661,7 @@ function ChatPane({
                   {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
                 </div>
 
-                {/* per-message seen tick (optional): show only for last sent? keeping minimal */}
+                {/* per-message seen tick (only on the latest) */}
                 {mine && i === msgs.length - 1 && hasSeen(m.id) && (
                   <div className="text-[10px] mt-1 text-black/60 text-right">Seen</div>
                 )}
@@ -685,7 +705,7 @@ function EditTermsModal({
 
   const handleBulletEnter = (ref: React.RefObject<HTMLTextAreaElement>, key: "deliverables" | "usage_notes") => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || !ref.current) return;
-    // allow Shift+Enter to insert newline always (still handle bullets)
+    // Shift+Enter still enters newline (we also handle bullets)
     const sel = ref.current.selectionStart;
     const res = continueBullet(ref.current.value, sel);
     if (res) {

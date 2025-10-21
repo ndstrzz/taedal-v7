@@ -19,6 +19,50 @@ function json(status: number, body: unknown) {
 const LEFT_BAR = "https://taedal-v7.vercel.app/images/left-contract.svg";
 const KURO     = "https://taedal-v7.vercel.app/images/taedal-static.svg";
 
+/* ---------- helpers: escape + line/list handling ---------- */
+function esc(s: unknown): string {
+  const str = String(s ?? "");
+  return str
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+function lines(s: string) { return s.split(/\r?\n/); }
+
+/** Converts text to <ul>/<ol> if it looks like bullets/numbers; otherwise keeps \n as <br/>. */
+function listify(s?: string): string {
+  if (!s) return "";
+  const ls = lines(s.trim());
+  const bulletRe = /^\s*(?:-|\u2022|•)\s+(.*)$/;
+  const numRe = /^\s*(\d+)\.\s+(.*)$/;
+
+  const bullets = ls.filter((l) => bulletRe.test(l)).length;
+  const numbers = ls.filter((l) => numRe.test(l)).length;
+
+  if (bullets > 0 && bullets >= numbers) {
+    const items = ls
+      .map((l) => {
+        const m = l.match(bulletRe);
+        return m ? `<li>${esc(m[1])}</li>` : (l.trim() ? `<li>${esc(l)}</li>` : "");
+      })
+      .filter(Boolean)
+      .join("");
+    return `<ul>${items}</ul>`;
+  }
+  if (numbers > 0) {
+    const items = ls
+      .map((l) => {
+        const m = l.match(numRe);
+        return m ? `<li>${esc(m[2])}</li>` : (l.trim() ? `<li>${esc(l)}</li>` : "");
+      })
+      .filter(Boolean)
+      .join("");
+    return `<ol>${items}</ol>`;
+  }
+  return esc(s).replaceAll("\n", "<br/>");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -61,12 +105,8 @@ serve(async (req) => {
     const spec = (d?: any) => {
       if (!d) return "—";
       const dims = (d.width && d.height) ? `${d.width}×${d.height}` : "";
-      const parts = [
-        d.format || null,
-        dims || null,
-        d.color || null,
-        d.dpi ? `${d.dpi} dpi` : null
-      ].filter(Boolean);
+      const parts = [ d.format || null, dims || null, d.color || null, d.dpi ? `${d.dpi} dpi` : null ]
+        .filter(Boolean);
       return parts.length ? parts.join(" · ") : "—";
     };
     const liability = (cap?: any) => {
@@ -82,6 +122,10 @@ serve(async (req) => {
       return "—";
     };
 
+    // NEW: preserve newlines/bullets for these text fields
+    const deliverablesHTML = t.deliverables ? listify(t.deliverables) : "";
+    const notesHTML = t.usage_notes ? listify(t.usage_notes) : "";
+
     const html = `<!doctype html>
 <html>
 <head>
@@ -89,9 +133,7 @@ serve(async (req) => {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Artwork License Agreement</title>
 <style>
-  :root{
-    --bg:#0b0b0b; --fg:#fafafa; --muted:#d8d8d8; --rule:rgba(255,255,255,.8);
-  }
+  :root{ --bg:#0b0b0b; --fg:#fafafa; --muted:#d8d8d8; --rule:rgba(255,255,255,.8); }
   *{box-sizing:border-box}
   html,body{margin:0;background:var(--bg);color:var(--fg)}
   body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";padding:40px}
@@ -105,6 +147,8 @@ serve(async (req) => {
   .lb{color:var(--muted)} .v{color:var(--fg)}
   .section{margin-top:26px}
   .section h3{margin:14px 0 10px;font-size:16px;font-weight:700;color:#fff}
+  ul,ol{margin:6px 0 6px 1.25rem}
+  li{margin:4px 0}
   @media print { body{padding:0} .sheet{border:none} .rule{opacity:1} }
 </style>
 </head>
@@ -120,29 +164,29 @@ serve(async (req) => {
 
     <!-- Basics -->
     <div class="section grid">
-      <div class="lb">Artwork</div><div class="v">${art?.title ?? "Untitled"}</div>
-      <div class="lb">Requester</div><div class="v">${nameOf(rq)}</div>
-      <div class="lb">Owner</div><div class="v">${nameOf(ow)}</div>
-      <div class="lb">Purpose</div><div class="v">${t.purpose}</div>
-      <div class="lb">Term</div><div class="v">${t.term_months} months</div>
-      <div class="lb">Territory</div><div class="v">${territory}</div>
-      <div class="lb">Media</div><div class="v">${media}</div>
-      <div class="lb">Exclusivity</div><div class="v">${t.exclusivity}</div>
+      <div class="lb">Artwork</div><div class="v">${esc(art?.title ?? "Untitled")}</div>
+      <div class="lb">Requester</div><div class="v">${esc(nameOf(rq))}</div>
+      <div class="lb">Owner</div><div class="v">${esc(nameOf(ow))}</div>
+      <div class="lb">Purpose</div><div class="v">${esc(t.purpose)}</div>
+      <div class="lb">Term</div><div class="v">${esc(t.term_months)} months</div>
+      <div class="lb">Territory</div><div class="v">${esc(territory)}</div>
+      <div class="lb">Media</div><div class="v">${esc(media)}</div>
+      <div class="lb">Exclusivity</div><div class="v">${esc(t.exclusivity)}</div>
       <div class="lb">Fee</div><div class="v">${fee}</div>
-      ${t.deliverables ? `<div class="lb">Deliverables</div><div class="v">${t.deliverables}</div>` : ""}
-      ${t.usage_notes ? `<div class="lb">Notes</div><div class="v">${t.usage_notes}</div>` : ""}
-      ${t.credit_required ? `<div class="lb">Attribution</div><div class="v">${yesno(t.credit_required)}${t.credit_line ? ` — ${t.credit_line}` : ""}</div>` : ""}
-      ${t.start_date ? `<div class="lb">Start Date</div><div class="v">${t.start_date}</div>` : ""}
-      ${t.effective_date ? `<div class="lb">Effective Date</div><div class="v">${t.effective_date}</div>` : ""}
+      ${t.deliverables ? `<div class="lb">Deliverables</div><div class="v">${deliverablesHTML}</div>` : ""}
+      ${t.usage_notes ? `<div class="lb">Notes</div><div class="v">${notesHTML}</div>` : ""}
+      ${t.credit_required ? `<div class="lb">Attribution</div><div class="v">${yesno(t.credit_required)}${t.credit_line ? ` — ${esc(t.credit_line)}` : ""}</div>` : ""}
+      ${t.start_date ? `<div class="lb">Start Date</div><div class="v">${esc(t.start_date)}</div>` : ""}
+      ${t.effective_date ? `<div class="lb">Effective Date</div><div class="v">${esc(t.effective_date)}</div>` : ""}
     </div>
 
     <!-- Payment & Admin -->
     ${
       (t.payment_terms || t.tax || t.invoicing)
         ? `<div class="section"><h3>Payment & Admin</h3><div class="grid">
-            ${t.payment_terms ? `<div class="lb">Payment</div><div class="v">Net ${t.payment_terms.due_days}${t.payment_terms.late_fee_pct ? ` · Late fee ${t.payment_terms.late_fee_pct}%` : ""}${t.payment_terms.method ? ` · ${t.payment_terms.method}` : ""}</div>` : ""}
-            ${t.tax ? `<div class="lb">Taxes</div><div class="v">${t.tax.responsible_party} responsible${t.tax.vat_registered ? " · VAT registered" : ""}</div>` : ""}
-            ${t.invoicing ? `<div class="lb">Invoicing</div><div class="v">${t.invoicing.entity_name}${t.invoicing.email ? ` · ${t.invoicing.email}` : ""}${t.invoicing.address ? ` · ${t.invoicing.address}` : ""}</div>` : ""}
+            ${t.payment_terms ? `<div class="lb">Payment</div><div class="v">Net ${esc(t.payment_terms.due_days)}${t.payment_terms.late_fee_pct ? ` · Late fee ${esc(t.payment_terms.late_fee_pct)}%` : ""}${t.payment_terms.method ? ` · ${esc(t.payment_terms.method)}` : ""}</div>` : ""}
+            ${t.tax ? `<div class="lb">Taxes</div><div class="v">${esc(t.tax.responsible_party)} responsible${t.tax.vat_registered ? " · VAT registered" : ""}</div>` : ""}
+            ${t.invoicing ? `<div class="lb">Invoicing</div><div class="v">${esc(t.invoicing.entity_name)}${t.invoicing.email ? ` · ${esc(t.invoicing.email)}` : ""}${t.invoicing.address ? ` · ${esc(t.invoicing.address)}` : ""}</div>` : ""}
           </div></div>`
         : ""
     }
@@ -151,11 +195,11 @@ serve(async (req) => {
     ${
       (t.brand_guidelines_url || t.preapproval_required || t.approval_sla_days || t.prohibited_uses || t.usage_restrictions || t.delivery_specs)
         ? `<div class="section"><h3>Brand & Approvals</h3><div class="grid">
-            ${t.brand_guidelines_url ? `<div class="lb">Guidelines</div><div class="v">${t.brand_guidelines_url}</div>` : ""}
-            ${typeof t.preapproval_required === "boolean" ? `<div class="lb">Pre-approval</div><div class="v">${yesno(t.preapproval_required)}${t.approval_sla_days ? ` · SLA ${t.approval_sla_days} days` : ""}</div>` : ""}
-            ${t.prohibited_uses ? `<div class="lb">Prohibited Uses</div><div class="v">${list(t.prohibited_uses)}</div>` : ""}
-            ${t.usage_restrictions ? `<div class="lb">Usage Restrictions</div><div class="v">${list(t.usage_restrictions)}</div>` : ""}
-            ${t.delivery_specs ? `<div class="lb">Delivery Specs</div><div class="v">${spec(t.delivery_specs)}</div>` : ""}
+            ${t.brand_guidelines_url ? `<div class="lb">Guidelines</div><div class="v">${esc(t.brand_guidelines_url)}</div>` : ""}
+            ${typeof t.preapproval_required === "boolean" ? `<div class="lb">Pre-approval</div><div class="v">${yesno(t.preapproval_required)}${t.approval_sla_days ? ` · SLA ${esc(t.approval_sla_days)} days` : ""}</div>` : ""}
+            ${t.prohibited_uses ? `<div class="lb">Prohibited Uses</div><div class="v">${esc(list(t.prohibited_uses))}</div>` : ""}
+            ${t.usage_restrictions ? `<div class="lb">Usage Restrictions</div><div class="v">${esc(list(t.usage_restrictions))}</div>` : ""}
+            ${t.delivery_specs ? `<div class="lb">Delivery Specs</div><div class="v">${esc(spec(t.delivery_specs))}</div>` : ""}
           </div></div>`
         : ""
     }
@@ -165,9 +209,9 @@ serve(async (req) => {
       (t.confidentiality_term_months || t.liability_cap || t.sublicense != null || t.derivative_edits || t.injunctive_relief)
         ? `<div class="section"><h3>Legal Terms</h3><div class="grid">
             ${t.sublicense != null ? `<div class="lb">Sublicensing</div><div class="v">${yesno(t.sublicense)}</div>` : ""}
-            ${t.derivative_edits ? `<div class="lb">Permitted Edits</div><div class="v">${list(t.derivative_edits)}</div>` : ""}
-            ${t.confidentiality_term_months ? `<div class="lb">Confidentiality</div><div class="v">${t.confidentiality_term_months} months</div>` : ""}
-            ${t.liability_cap ? `<div class="lb">Liability Cap</div><div class="v">${liability(t.liability_cap)}</div>` : ""}
+            ${t.derivative_edits ? `<div class="lb">Permitted Edits</div><div class="v">${esc(list(t.derivative_edits))}</div>` : ""}
+            ${t.confidentiality_term_months ? `<div class="lb">Confidentiality</div><div class="v">${esc(t.confidentiality_term_months)} months</div>` : ""}
+            ${t.liability_cap ? `<div class="lb">Liability Cap</div><div class="v">${esc(liability(t.liability_cap))}</div>` : ""}
             ${t.injunctive_relief ? `<div class="lb">Equitable Relief</div><div class="v">Injunctive relief available</div>` : ""}
           </div></div>`
         : ""
@@ -178,9 +222,9 @@ serve(async (req) => {
       t.termination
         ? `<div class="section"><h3>Termination</h3><div class="grid">
             ${typeof t.termination.for_convenience === "boolean" ? `<div class="lb">For Convenience</div><div class="v">${yesno(t.termination.for_convenience)}</div>` : ""}
-            ${t.termination.notice_days ? `<div class="lb">Notice</div><div class="v">${t.termination.notice_days} days</div>` : ""}
-            ${t.termination.breach_cure_days ? `<div class="lb">Cure Period</div><div class="v">${t.termination.breach_cure_days} days</div>` : ""}
-            ${t.termination.takedown_days ? `<div class="lb">Post-Term Takedown</div><div class="v">${t.termination.takedown_days} days</div>` : ""}
+            ${t.termination.notice_days ? `<div class="lb">Notice</div><div class="v">${esc(t.termination.notice_days)} days</div>` : ""}
+            ${t.termination.breach_cure_days ? `<div class="lb">Cure Period</div><div class="v">${esc(t.termination.breach_cure_days)} days</div>` : ""}
+            ${t.termination.takedown_days ? `<div class="lb">Post-Term Takedown</div><div class="v">${esc(t.termination.takedown_days)} days</div>` : ""}
           </div></div>`
         : ""
     }
@@ -189,7 +233,7 @@ serve(async (req) => {
     ${
       t.disputes
         ? `<div class="section"><h3>Governing Law & Disputes</h3><div class="grid">
-            <div class="lb">Framework</div><div class="v">${disputes(t.disputes)}</div>
+            <div class="lb">Framework</div><div class="v">${esc(disputes(t.disputes))}</div>
           </div></div>`
         : ""
     }
@@ -198,12 +242,12 @@ serve(async (req) => {
     ${
       (t.onchain || t.royalties || t.metadata)
         ? `<div class="section"><h3>On-chain</h3><div class="grid">
-            ${t.onchain ? `<div class="lb">Chain</div><div class="v">${t.onchain.chain || "—"}</div>` : ""}
-            ${t.onchain?.contract_address ? `<div class="lb">Contract</div><div class="v">${t.onchain.contract_address}</div>` : ""}
-            ${t.onchain?.token_id ? `<div class="lb">Token ID</div><div class="v">${t.onchain.token_id}</div>` : ""}
-            ${t.onchain?.pay_gas_party ? `<div class="lb">Gas</div><div class="v">${t.onchain.pay_gas_party} pays gas</div>` : ""}
-            ${t.royalties ? `<div class="lb">Royalties</div><div class="v">${(t.royalties.rate_bps/100).toFixed(2)}%${t.royalties.receiver ? ` · ${t.royalties.receiver}` : ""}</div>` : ""}
-            ${t.metadata ? `<div class="lb">Storage</div><div class="v">${t.metadata.image_cid ? `image ${t.metadata.image_cid}` : ""}${t.metadata.metadata_cid ? ` · meta ${t.metadata.metadata_cid}` : ""}${t.metadata.mutable != null ? ` · mutable ${yesno(t.metadata.mutable)}` : ""}</div>` : ""}
+            ${t.onchain ? `<div class="lb">Chain</div><div class="v">${esc(t.onchain.chain || "—")}</div>` : ""}
+            ${t.onchain?.contract_address ? `<div class="lb">Contract</div><div class="v">${esc(t.onchain.contract_address)}</div>` : ""}
+            ${t.onchain?.token_id ? `<div class="lb">Token ID</div><div class="v">${esc(t.onchain.token_id)}</div>` : ""}
+            ${t.onchain?.pay_gas_party ? `<div class="lb">Gas</div><div class="v">${esc(t.onchain.pay_gas_party)} pays gas</div>` : ""}
+            ${t.royalties ? `<div class="lb">Royalties</div><div class="v">${(t.royalties.rate_bps/100).toFixed(2)}%${t.royalties.receiver ? ` · ${esc(t.royalties.receiver)}` : ""}</div>` : ""}
+            ${t.metadata ? `<div class="lb">Storage</div><div class="v">${t.metadata.image_cid ? `image ${esc(t.metadata.image_cid)}` : ""}${t.metadata.metadata_cid ? ` · meta ${esc(t.metadata.metadata_cid)}` : ""}${t.metadata.mutable != null ? ` · mutable ${yesno(t.metadata.mutable)}` : ""}</div>` : ""}
           </div></div>`
         : ""
     }
