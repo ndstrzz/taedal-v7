@@ -27,7 +27,7 @@ export type LicenseRequest = {
   status: "open" | "negotiating" | "accepted" | "declined" | "withdrawn";
   accepted_terms: LicenseTerms | null;
 
-  // NEW: execution record
+  // execution record (optional)
   executed_pdf_url: string | null;
   executed_pdf_sha256: string | null;
   signed_at: string | null;
@@ -120,8 +120,49 @@ export function stringifyTerritory(t: LicenseTerms["territory"]) {
   return Array.isArray(t) ? t.join(", ") : (t ?? "");
 }
 
-/* ------------------------------- Queries ------------------------------ */
+export function formatMoney(f?: { amount: number; currency: string }) {
+  return f ? `${f.amount.toLocaleString()} ${f.currency}` : "—";
+}
 
+/* ------------------------------- CRUD ------------------------------- */
+
+/** Create a license request (requester = current user) */
+export async function createLicenseRequest(params: {
+  artwork_id: string;
+  owner_id: string;        // artwork creator/rights holder
+  requested: LicenseTerms;
+}): Promise<LicenseRequest> {
+  const { data: session } = await supabase.auth.getSession();
+  const uid = session.session?.user?.id;
+  if (!uid) throw new Error("Not signed in");
+
+  const { data, error } = await supabase
+    .from("license_requests")
+    .insert({
+      artwork_id: params.artwork_id,
+      owner_id: params.owner_id,
+      requester_id: uid,                 // IMPORTANT: satisfy RLS insert check
+      requested: params.requested as any,
+    })
+    .select("*")
+    .single<LicenseRequest>();
+
+  if (error) throw error;
+  return data!;
+}
+
+/** List requests visible to the current user (by artwork) */
+export async function listRequestsForArtwork(artworkId: string) {
+  const { data, error } = await supabase
+    .from("license_requests")
+    .select("*")
+    .eq("artwork_id", artworkId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as LicenseRequest[];
+}
+
+/** Get a single request + its thread */
 export async function getRequestWithThread(requestId: string) {
   const { data: req, error: e1 } = await supabase
     .from("license_requests")
@@ -140,6 +181,7 @@ export async function getRequestWithThread(requestId: string) {
   return { request: req!, messages: (msgs ?? []) as LicenseThreadMsg[] };
 }
 
+/** Post a thread message (optional structured patch) */
 export async function postLicenseMessage(requestId: string, body: string, patch?: Partial<LicenseTerms> | null) {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
@@ -153,6 +195,7 @@ export async function postLicenseMessage(requestId: string, body: string, patch?
   return data!;
 }
 
+/** Apply an incoming patch to the request's working terms */
 export async function acceptPatch(requestId: string, patch: Partial<LicenseTerms>) {
   const { data: cur, error: e1 } = await supabase
     .from("license_requests")
@@ -172,6 +215,7 @@ export async function acceptPatch(requestId: string, patch: Partial<LicenseTerms
   return data!;
 }
 
+/** Accept the working offer into accepted_terms */
 export async function acceptOffer(requestId: string) {
   const { data: cur, error: e1 } = await supabase
     .from("license_requests")
@@ -190,6 +234,7 @@ export async function acceptOffer(requestId: string) {
   return data!;
 }
 
+/** Generic update */
 export async function updateLicenseRequest(
   requestId: string,
   patch: Partial<Pick<LicenseRequest, "status" | "accepted_terms" | "requested" | "executed_pdf_url" | "executed_pdf_sha256" | "signed_at" | "signer_name" | "signer_title">>
@@ -202,6 +247,62 @@ export async function updateLicenseRequest(
     .single<LicenseRequest>();
   if (error) throw error;
   return data!;
+}
+
+/* --------------------- Approvals (internal, optional) --------------------- */
+
+/** List approvals for a request */
+export async function listApprovals(requestId: string): Promise<LicenseApproval[]> {
+  const { data, error } = await supabase
+    .from("license_approvals")
+    .select("*")
+    .eq("request_id", requestId)
+    .order("created_at", { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as LicenseApproval[];
+}
+
+/** Create/update your approval for a stage */
+export async function upsertApproval(requestId: string, stage: LicenseApproval["stage"], decision: LicenseApproval["decision"], note?: string) {
+  const { data: session } = await supabase.auth.getSession();
+  const uid = session.session?.user?.id;
+  if (!uid) throw new Error("Not signed in");
+
+  // Since we don't have a UNIQUE constraint, do a manual upsert.
+  const { data: existing, error: e1 } = await supabase
+    .from("license_approvals")
+    .select("*")
+    .eq("request_id", requestId)
+    .eq("approver_id", uid)
+    .eq("stage", stage)
+    .maybeSingle<LicenseApproval>();
+  if (e1) throw e1;
+
+  if (existing) {
+    const { data, error } = await supabase
+      .from("license_approvals")
+      .update({ decision, note: note ?? null, decided_at: new Date().toISOString() })
+      .eq("id", existing.id)
+      .select("*")
+      .single<LicenseApproval>();
+    if (error) throw error;
+    return data!;
+  } else {
+    const { data, error } = await supabase
+      .from("license_approvals")
+      .insert({
+        request_id: requestId,
+        approver_id: uid,
+        stage,
+        decision,
+        note: note ?? null,
+        decided_at: decision === "pending" ? null : new Date().toISOString(),
+      })
+      .select("*")
+      .single<LicenseApproval>();
+    if (error) throw error;
+    return data!;
+  }
 }
 
 /* ------------------------- PDF generation & upload ------------------------- */
@@ -234,7 +335,6 @@ export async function uploadExecutedPdf(requestId: string, file: File, signer: {
 
   const { data: pub } = await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
 
-  // store execution record
   const updated = await updateLicenseRequest(requestId, {
     executed_pdf_url: pub?.signedUrl ?? null,
     executed_pdf_sha256: hash,
@@ -260,10 +360,4 @@ export async function uploadAttachment(requestId: string, file: File, kind?: str
     kind: kind ?? null,
   }).select("*");
   return data;
-}
-
-/* -------------------------- Small helpers for UI -------------------------- */
-
-export function formatMoney(f?: { amount: number; currency: string }) {
-  return f ? `${f.amount.toLocaleString()} ${f.currency}` : "—";
 }
