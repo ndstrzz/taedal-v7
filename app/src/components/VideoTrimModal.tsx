@@ -5,11 +5,11 @@ import { fetchFile, toBlobURL } from "@ffmpeg/util";
 
 type Props = {
   file: File;
-  aspect?: number; // preview mask only; output sizing is via dropdown
+  aspect?: number; // preview mask only
   defaultMaxSeconds?: number;
   defaultMaxSize?: "720p" | "1080p";
   onCancel(): void;
-  onDone(blob: Blob): void; // processed .webm
+  onDone(blob: Blob): void; // processed video/webm
 };
 
 /** Safe Uint8Array -> Blob */
@@ -18,7 +18,7 @@ function u8ToBlob(u8: Uint8Array, mime: string) {
   return new Blob([copy], { type: mime });
 }
 
-/** Load ffmpeg core (this build ships only js+wasm; no worker). */
+/** Load ffmpeg core (this build ships js+wasm only; no worker file). */
 async function loadFromBase(ffmpeg: FFmpeg, base: string) {
   const coreJs = `${base}/ffmpeg-core.js`;
   const coreWasm = `${base}/ffmpeg-core.wasm`;
@@ -27,7 +27,7 @@ async function loadFromBase(ffmpeg: FFmpeg, base: string) {
   await ffmpeg.load({ coreURL, wasmURL });
 }
 
-/** Try local /ffmpeg, then CDNs. */
+/** Try local /ffmpeg first, then CDNs. */
 async function loadFfmpeg(ffmpeg: FFmpeg, logs: string[]) {
   const version = "0.12.4";
   const localBase = `${import.meta.env.BASE_URL || "/"}ffmpeg`;
@@ -76,7 +76,7 @@ export default function VideoTrimModal({
   const blobUrl = useMemo(() => URL.createObjectURL(file), [file]);
   useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
 
-  // metadata
+  // load metadata
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -107,10 +107,10 @@ export default function VideoTrimModal({
     setEstText(`${secs.toFixed(1)}s • ~${mb} MB`);
   }, [start, end, maxSize]);
 
-  async function runWithArgs(ffmpeg: FFmpeg, args: string[]) {
+  async function run(ffmpeg: FFmpeg, args: string[]) {
     await ffmpeg.exec(args);
     const outU8 = (await ffmpeg.readFile("out.webm")) as unknown as Uint8Array;
-    if (!outU8 || outU8.length < 1024) {
+    if (!outU8 || outU8.length < 2048) {
       throw new Error("Output too small — likely no frames encoded.");
     }
     return outU8;
@@ -136,91 +136,122 @@ export default function VideoTrimModal({
         );
       }
 
-      // Give the input a real extension for reliable probing.
+      // Give the input a proper extension so demuxer detection is reliable.
       const inputName = "input.mp4";
       const data = await fetchFile(file);
       await ffmpeg.writeFile(inputName, data);
 
-      // Clamp the window so we never run past EOF.
+      // Clamp times so we never exceed duration (common zero-frame cause).
       const safeStart = Math.max(0, Math.min(start, Math.max(0, duration - 0.05)));
       const safeEnd = Math.max(safeStart + 0.1, Math.min(end, duration - 0.001));
       const secs = Math.max(0.1, safeEnd - safeStart);
 
-      const outH = maxSize === "1080p" ? 1080 : 720;
+      // Prefer requested height, but we will downshift to 720 if OOM.
+      const targetH = maxSize === "1080p" ? 1080 : 720;
+      const fallbackH = 720;
 
-      // We’ll try VP9 first, then fall back to VP8 if wasm build/flags disagree.
-      const argVariants: string[][] = [
-        // Variant A: VP9, accurate seek (-ss AFTER -i), force 30fps/yuv420p
-        [
-          "-y",
-          "-i", inputName,
-          "-ss", `${safeStart}`,
-          "-t", `${secs}`,
-          "-vf", `scale=-2:${outH}`,
-          "-r", "30",
-          "-pix_fmt", "yuv420p",
-          "-c:v", "libvpx-vp9",
-          "-b:v", outH === 1080 ? "2000k" : "1000k",
-          "-deadline", "good",
-          "-cpu-used", "4",
-          "-an",
-          "out.webm",
-        ],
-        // Variant B: VP9, keyframe seek (-ss BEFORE -i) — sometimes better for short clips
-        [
-          "-y",
-          "-ss", `${safeStart}`,
-          "-i", inputName,
-          "-t", `${secs}`,
-          "-vf", `scale=-2:${outH}`,
-          "-r", "30",
-          "-pix_fmt", "yuv420p",
-          "-c:v", "libvpx-vp9",
-          "-b:v", outH === 1080 ? "2000k" : "1000k",
-          "-deadline", "good",
-          "-cpu-used", "4",
-          "-an",
-          "out.webm",
-        ],
-        // Variant C: VP8 fallback (much more permissive in ffmpeg.wasm)
-        [
-          "-y",
-          "-i", inputName,
-          "-ss", `${safeStart}`,
-          "-t", `${secs}`,
-          "-vf", `scale=-2:${outH}`,
-          "-r", "30",
-          "-pix_fmt", "yuv420p",
-          "-c:v", "libvpx",
-          "-b:v", outH === 1080 ? "2000k" : "1000k",
-          "-quality", "good",
-          "-cpu-used", "4",
-          "-an",
-          "out.webm",
-        ],
+      // Try a sequence of variants (seek style × codec × size) until one works.
+      const variants: Array<{ desc: string; args: string[] }> = [
+        {
+          desc: "VP9, accurate seek, targetH",
+          args: [
+            "-y",
+            "-i", inputName,
+            "-ss", `${safeStart}`,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx-vp9",
+            "-b:v", targetH === 1080 ? "2000k" : "1000k",
+            "-row-mt", "1",
+            "-deadline", "good",
+            "-cpu-used", "4",
+            "-an",
+            "out.webm",
+          ],
+        },
+        {
+          desc: "VP9, keyframe seek, targetH",
+          args: [
+            "-y",
+            "-ss", `${safeStart}`,
+            "-i", inputName,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx-vp9",
+            "-b:v", targetH === 1080 ? "2000k" : "1000k",
+            "-row-mt", "1",
+            "-deadline", "good",
+            "-cpu-used", "4",
+            "-an",
+            "out.webm",
+          ],
+        },
+        {
+          desc: "VP8, accurate seek, targetH",
+          args: [
+            "-y",
+            "-i", inputName,
+            "-ss", `${safeStart}`,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx",
+            "-b:v", targetH === 1080 ? "2000k" : "1000k",
+            "-quality", "good",
+            "-cpu-used", "4",
+            "-an",
+            "out.webm",
+          ],
+        },
+        {
+          desc: "VP8, accurate seek, fallbackH=720",
+          args: [
+            "-y",
+            "-i", inputName,
+            "-ss", `${safeStart}`,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${fallbackH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx",
+            "-b:v", "1000k",
+            "-quality", "good",
+            "-cpu-used", "4",
+            "-an",
+            "out.webm",
+          ],
+        },
       ];
 
-      let outU8: Uint8Array | null = null;
+      let out: Uint8Array | null = null;
       let lastErr: unknown = null;
-      for (const args of argVariants) {
+
+      for (const v of variants) {
         try {
-          // remove any previous output before retrying
           try { await ffmpeg.deleteFile("out.webm"); } catch {}
-          outU8 = await runWithArgs(ffmpeg, args);
+          logs.push(`[ffmpeg] trying variant: ${v.desc}`);
+          out = await run(ffmpeg, v.args);
+          logs.push(`[ffmpeg] success with: ${v.desc}`);
           break;
         } catch (e) {
           lastErr = e;
-          logs.push(`[ffmpeg] variant failed: ${e instanceof Error ? e.message : String(e)}`);
+          logs.push(`[ffmpeg] variant failed (${v.desc}): ${e instanceof Error ? e.message : String(e)}`);
+          // If memory OOB happened, immediately drop to the 720p VP8 variant next.
         }
       }
-      if (!outU8) {
+
+      if (!out) {
         throw lastErr || new Error("All encoding variants failed.");
       }
 
-      const blob = u8ToBlob(outU8, "video/webm");
-      onDone(blob);
+      onDone(u8ToBlob(out, "video/webm"));
     } catch (e: any) {
-      const last = logs.slice(-30).join("\n");
+      const last = logs.slice(-40).join("\n");
       const msg = e?.message || "Failed to process video";
       setErr(last ? `${msg}\n\n${last}` : msg);
     } finally {
