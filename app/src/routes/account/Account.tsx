@@ -34,19 +34,12 @@ function isVideoFile(f: File | Blob) {
   const type = (f as File).type || "";
   if (type.startsWith("video/")) return true;
   const name = (f as File).name?.toLowerCase?.() || "";
-  return (
-    !!name &&
-    (name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".webm"))
-  );
+  return !!name && (name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".webm"));
 }
 function isVideoUrl(u?: string | null) {
   if (!u) return false;
   const qless = u.split("?")[0].toLowerCase();
-  return (
-    qless.endsWith(".webm") ||
-    qless.endsWith(".mp4") ||
-    qless.endsWith(".mov")
-  );
+  return qless.endsWith(".webm") || qless.endsWith(".mp4") || qless.endsWith(".mov");
 }
 
 /* ---------- tiny inline brand icons ---------- */
@@ -135,8 +128,7 @@ export default function Account() {
   // gallery data
   const [created, setCreated] = useState<ArtworkThumb[]>([]);
   const [purchased, setPurchased] = useState<ArtworkThumb[]>([]);
-  const [activeTab, setActiveTab] =
-    useState<"created" | "purchased">("created");
+  const [activeTab, setActiveTab] = useState<"created" | "purchased">("created");
 
   // local, post-crop/processed files
   const [avatarFile, setAvatarFile] = useState<Blob | null>(null);
@@ -144,12 +136,10 @@ export default function Account() {
   const [coverMime, setCoverMime] = useState<string | null>(null);
 
   // which modal is open?
-  const [cropTarget, setCropTarget] = useState<null | {
-    kind: "avatar" | "cover";
-    file: File;
-  }>(null);
-  const [videoTarget, setVideoTarget] =
-    useState<null | { file: File }>(null);
+  const [cropTarget, setCropTarget] = useState<null | { kind: "avatar" | "cover"; file: File }>(
+    null
+  );
+  const [videoTarget, setVideoTarget] = useState<null | { file: File }>(null);
 
   const avatarPreview = useMemo(
     () =>
@@ -166,10 +156,8 @@ export default function Account() {
 
   useEffect(
     () => () => {
-      if (avatarPreview?.startsWith("blob:"))
-        URL.revokeObjectURL(avatarPreview);
-      if (coverPreview?.startsWith("blob:"))
-        URL.revokeObjectURL(coverPreview);
+      if (avatarPreview?.startsWith("blob:")) URL.revokeObjectURL(avatarPreview);
+      if (coverPreview?.startsWith("blob:")) URL.revokeObjectURL(coverPreview);
     },
     [avatarPreview, coverPreview]
   );
@@ -234,9 +222,7 @@ export default function Account() {
       .gt("quantity", 0)
       .in("artwork_id", ids);
     if (hErr) throw hErr;
-    const hiddenIds = new Set(
-      (hiddenRows ?? []).map((r: any) => r.artwork_id)
-    );
+    const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
 
     setCreated(createdArts.filter((a) => !hiddenIds.has(a.id)));
   }
@@ -266,9 +252,7 @@ export default function Account() {
     if (artsErr) throw artsErr;
 
     const byId = new Map(arts!.map((a) => [a.id, a]));
-    const ordered = ids
-      .map((id) => byId.get(id))
-      .filter((a): a is ArtworkThumb => !!a);
+    const ordered = ids.map((id) => byId.get(id)).filter((a): a is ArtworkThumb => !!a);
 
     setPurchased(ordered);
   }
@@ -282,11 +266,7 @@ export default function Account() {
         const uid = s?.session?.user?.id ?? null;
         setUserId(uid);
         if (!uid) return;
-        await Promise.all([
-          loadProfile(uid),
-          loadCreated(uid),
-          loadPurchased(uid),
-        ]);
+        await Promise.all([loadProfile(uid), loadCreated(uid), loadPurchased(uid)]);
       } catch (e: any) {
         setMsg(e?.message || "Failed to load account");
       } finally {
@@ -312,122 +292,123 @@ export default function Account() {
     }
   };
 
+  /** Instrumented save with explicit session refresh and precise error reporting */
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaving(true);
     setMsg(null);
 
-    try {
-      // Refresh/confirm session right before writing (FFmpeg processing can be long)
-      let { data: s } = await supabase.auth.getSession();
-      if (!s.session) {
-        await supabase.auth.refreshSession().catch(() => {});
-        const again = await supabase.auth.getSession();
-        s = again.data;
+    const fail = (where: string, err: unknown) => {
+      console.error(`[profile-save] ${where} failed:`, err);
+      const m = (err as any)?.message?.toLowerCase?.() || "";
+      if (m.includes("row-level security") || m.includes("permission")) {
+        setMsg(`${where} failed due to permissions. Please sign in again and try.`);
+      } else {
+        setMsg(`${where} failed: ${(err as any)?.message || "Unknown error"}`);
       }
-      const uid = s.session?.user?.id;
+    };
+
+    try {
+      // 1) Ensure authenticated NOW (sessions can expire during long video processing)
+      let { data: u0 } = await supabase.auth.getUser();
+      if (!u0?.user) {
+        await supabase.auth.refreshSession().catch(() => {});
+        const u1 = await supabase.auth.getUser();
+        u0 = u1.data;
+      }
+      const uid = u0.user?.id;
       if (!uid) {
-        setMsg("Save failed due to permissions. Please sign in again and try.");
+        setMsg("You’re signed out. Please sign in again and try.");
         return;
       }
 
+      // 2) Uploads
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
-      const stamp = `v=${Date.now()}`; // cache buster
+      const stamp = `v=${Date.now()}`;
 
       if (avatarFile) {
-        const resized = await resizeImage(avatarFile, 512, 512);
-        const path = `avatars/${uid}.jpg`;
-        const { error: upErr } = await supabase.storage
-          .from("avatars")
-          .upload(path, resized, {
-            upsert: true,
-            cacheControl: "0",
-            contentType: "image/jpeg",
-          });
-        if (upErr) throw upErr;
-        const { data: pub } =
-          supabase.storage.from("avatars").getPublicUrl(path);
-        avatar_url = `${pub.publicUrl}${
-          pub.publicUrl.includes("?") ? "&" : "?"
-        }${stamp}`;
-      }
-
-      if (coverFile) {
-        const isVid = coverMime?.startsWith("video/");
-        if (isVid) {
-          const path = `covers/${uid}.webm`;
+        try {
+          const resized = await resizeImage(avatarFile, 512, 512);
+          const path = `avatars/${uid}.jpg`;
           const { error: upErr } = await supabase.storage
-            .from("covers")
-            .upload(path, coverFile, {
-              upsert: true,
-              cacheControl: "0",
-              contentType: "video/webm",
-            });
-          if (upErr) throw upErr;
-          const { data: pub } =
-            supabase.storage.from("covers").getPublicUrl(path);
-          cover_url = `${pub.publicUrl}${
-            pub.publicUrl.includes("?") ? "&" : "?"
-          }${stamp}`;
-        } else {
-          const resized = await resizeImage(coverFile, 1600, 500);
-          const path = `covers/${uid}.jpg`;
-          const { error: upErr } = await supabase.storage
-            .from("covers")
+            .from("avatars")
             .upload(path, resized, {
               upsert: true,
               cacheControl: "0",
               contentType: "image/jpeg",
             });
           if (upErr) throw upErr;
-          const { data: pub } =
-            supabase.storage.from("covers").getPublicUrl(path);
-          cover_url = `${pub.publicUrl}${
-            pub.publicUrl.includes("?") ? "&" : "?"
-          }${stamp}`;
+          const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
+          avatar_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+        } catch (err) {
+          return fail("Avatar upload", err);
         }
       }
 
-      const payload = {
-        // include id to satisfy WITH CHECK (id = auth.uid())
-        id: uid,
-        username: form.username?.trim() || null,
-        display_name: form.display_name?.trim() || null,
-        bio: form.bio?.trim() || null,
-        avatar_url,
-        cover_url,
-        instagram: normalizeHandle(form.instagram),
-        x_handle: normalizeHandle(form.x_handle),
-        youtube: normalizeUrlOrHandle(form.youtube),
-        telegram: normalizeHandle(form.telegram),
-      };
+      if (coverFile) {
+        const isVid = coverMime?.startsWith("video/");
+        try {
+          if (isVid) {
+            const path = `covers/${uid}.webm`;
+            const { error: upErr } = await supabase.storage
+              .from("covers")
+              .upload(path, coverFile, {
+                upsert: true,
+                cacheControl: "0",
+                contentType: "video/webm",
+              });
+            if (upErr) throw upErr;
+            const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
+            cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+          } else {
+            const resized = await resizeImage(coverFile, 1600, 500);
+            const path = `covers/${uid}.jpg`;
+            const { error: upErr } = await supabase.storage
+              .from("covers")
+              .upload(path, resized, {
+                upsert: true,
+                cacheControl: "0",
+                contentType: "image/jpeg",
+              });
+            if (upErr) throw upErr;
+            const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
+            cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+          }
+        } catch (err) {
+          return fail("Cover upload", err);
+        }
+      }
 
-      // Single UPSERT (no RETURNING)
-      const { error } = await supabase
-        .from("profiles")
-        .upsert(payload, { onConflict: "id" });
-      if (error) throw error;
+      // 3) Save profile (include id to satisfy WITH CHECK (id = auth.uid()))
+      try {
+        const payload = {
+          id: uid,
+          username: form.username?.trim() || null,
+          display_name: form.display_name?.trim() || null,
+          bio: form.bio?.trim() || null,
+          avatar_url,
+          cover_url,
+          instagram: (form.instagram || "").trim().replace(/^@/, "") || null,
+          x_handle: (form.x_handle || "").trim().replace(/^@/, "") || null,
+          youtube: (form.youtube || "").trim() || null,
+          telegram: (form.telegram || "").trim().replace(/^@/, "") || null,
+        };
 
-      setForm((f) => ({
-        ...f,
-        avatar_url: avatar_url || "",
-        cover_url: cover_url || "",
-      }));
+        const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
+        if (error) throw error;
+      } catch (err) {
+        return fail("Profile save", err);
+      }
+
+      // 4) Local UI update
+      setForm((f) => ({ ...f, avatar_url: avatar_url || "", cover_url: cover_url || "" }));
       setAvatarFile(null);
       setCoverFile(null);
       setCoverMime(null);
       setMsg("Saved ✔");
-    } catch (e: any) {
-      console.error("Save profile failed:", e);
-      const m = (e?.message || "").toLowerCase();
-      if (m.includes("row-level security")) {
-        setMsg(
-          "Save failed due to permissions. Please sign in again and try."
-        );
-      } else {
-        setMsg(e?.message || "Save failed");
-      }
+    } catch (err) {
+      fail("Save", err);
     } finally {
       setSaving(false);
     }
@@ -453,9 +434,7 @@ export default function Account() {
       Icon = IconX;
     }
     if (kind === "yt") {
-      href = handle.startsWith("http")
-        ? handle
-        : `https://youtube.com/${handle}`;
+      href = handle.startsWith("http") ? handle : `https://youtube.com/${handle}`;
       Icon = IconYouTube;
     }
     if (kind === "tg") {
@@ -479,8 +458,7 @@ export default function Account() {
 
   // decide how to render cover
   const fromUrlIsVideo = isVideoUrl(form.cover_url || "");
-  const localIsVideo =
-    !!coverFile && (coverMime?.startsWith("video/") || isVideoFile(coverFile));
+  const localIsVideo = !!coverFile && (coverMime?.startsWith("video/") || isVideoFile(coverFile));
   const showVideo = localIsVideo || (!coverFile && fromUrlIsVideo);
 
   return (
@@ -511,7 +489,7 @@ export default function Account() {
           <div className="absolute inset-0 bg-neutral-900" />
         )}
 
-        {/* Vignette/gradients for readability (match PublicProfile) */}
+        {/* Vignette/gradients to keep text readable */}
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
@@ -543,7 +521,7 @@ export default function Account() {
         </div>
       </div>
 
-      {/* Content (ensure above cover) */}
+      {/* Content */}
       <div className="max-w-5xl mx-auto p-6 space-y-6 -mt-10 relative z-10">
         {msg && <p className="text-sm text-amber-300">{msg}</p>}
 
@@ -569,12 +547,8 @@ export default function Account() {
               </label>
             </div>
             <div className="pb-1">
-              <h1 className="text-2xl font-bold">
-                {form.display_name?.trim() || "Account"}
-              </h1>
-              {form.username ? (
-                <p className="text-neutral-400">@{form.username}</p>
-              ) : null}
+              <h1 className="text-2xl font-bold">{form.display_name?.trim() || "Account"}</h1>
+              {form.username ? <p className="text-neutral-400">@{form.username}</p> : null}
               <div className="mt-2 flex items-center gap-2">
                 <SocialLink kind="ig" handle={form.instagram} />
                 <SocialLink kind="x" handle={form.x_handle} />
@@ -584,7 +558,6 @@ export default function Account() {
             </div>
           </div>
 
-          {/* Actions: View profile + Sign out */}
           <div className="flex items-center gap-2">
             <Link
               to={`/profiles/${form.username?.trim() || form.id}`}
@@ -608,9 +581,7 @@ export default function Account() {
               <input
                 className="input"
                 value={form.username ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, username: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, username: e.target.value }))}
               />
             </div>
             <div>
@@ -618,9 +589,7 @@ export default function Account() {
               <input
                 className="input"
                 value={form.display_name ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, display_name: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, display_name: e.target.value }))}
               />
             </div>
             <div className="md:col-span-2">
@@ -628,9 +597,7 @@ export default function Account() {
               <textarea
                 className="input min-h-[96px]"
                 value={form.bio ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, bio: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, bio: e.target.value }))}
               />
             </div>
           </div>
@@ -643,22 +610,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. art.by.kuro"
                 value={form.instagram ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, instagram: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, instagram: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    instagram: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, instagram: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@”. Link shows as
-                instagram.com/<b>
-                  {(form.instagram || "").replace(/^@/, "")}
-                </b>
-                .
+                We store it without “@”. Link shows as instagram.com/<b>{(form.instagram || "").replace(/^@/, "")}</b>.
               </p>
             </div>
             <div>
@@ -667,19 +625,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. kuro_wolf"
                 value={form.x_handle ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, x_handle: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, x_handle: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    x_handle: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, x_handle: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@” → x.com/
-                <b>{(form.x_handle || "").replace(/^@/, "")}</b>.
+                We store it without “@” → x.com/<b>{(form.x_handle || "").replace(/^@/, "")}</b>.
               </p>
             </div>
             <div>
@@ -688,19 +640,13 @@ export default function Account() {
                 className="input"
                 placeholder="e.g. kurochannel"
                 value={form.telegram ?? ""}
-                onChange={(e) =>
-                  setForm((f) => ({ ...f, telegram: e.target.value }))
-                }
+                onChange={(e) => setForm((f) => ({ ...f, telegram: e.target.value }))}
                 onBlur={(e) =>
-                  setForm((f) => ({
-                    ...f,
-                    telegram: e.target.value.trim().replace(/^@/, ""),
-                  }))
+                  setForm((f) => ({ ...f, telegram: e.target.value.trim().replace(/^@/, "") }))
                 }
               />
               <p className="mt-1 text-xs text-neutral-400">
-                We store it without “@” → t.me/
-                <b>{(form.telegram || "").replace(/^@/, "")}</b>.
+                We store it without “@” → t.me/<b>{(form.telegram || "").replace(/^@/, "")}</b>.
               </p>
             </div>
           </div>
@@ -709,11 +655,9 @@ export default function Account() {
             <button className="btn" disabled={saving} type="submit">
               {saving ? "Saving…" : "Save"}
             </button>
-            {(avatarFile || coverFile) && (
-              <span className="text-sm text-neutral-400">
-                You have unsaved media changes.
-              </span>
-            )}
+            {avatarFile || coverFile ? (
+              <span className="text-sm text-neutral-400">You have unsaved media changes.</span>
+            ) : null}
           </div>
           {msg && <p className="text-sm text-amber-300">{msg}</p>}
         </form>
@@ -722,9 +666,7 @@ export default function Account() {
         <div className="flex gap-3">
           <button
             className={`px-3 py-1 rounded-lg ${
-              activeTab === "created"
-                ? "bg-neutral-800"
-                : "bg-neutral-900 border border-neutral-800"
+              activeTab === "created" ? "bg-neutral-800" : "bg-neutral-900 border border-neutral-800"
             }`}
             onClick={() => setActiveTab("created")}
           >
@@ -732,9 +674,7 @@ export default function Account() {
           </button>
           <button
             className={`px-3 py-1 rounded-lg ${
-              activeTab === "purchased"
-                ? "bg-neutral-800"
-                : "bg-neutral-900 border border-neutral-800"
+              activeTab === "purchased" ? "bg-neutral-800" : "bg-neutral-900 border border-neutral-800"
             }`}
             onClick={() => setActiveTab("purchased")}
           >
@@ -744,17 +684,9 @@ export default function Account() {
 
         {/* Galleries */}
         {activeTab === "created" ? (
-          <Gallery
-            title="Your Artworks"
-            subtitle="Uploads you created."
-            items={created}
-          />
+          <Gallery title="Your Artworks" subtitle="Uploads you created." items={created} />
         ) : (
-          <Gallery
-            title="Purchased"
-            subtitle="Pieces you currently own."
-            items={purchased}
-          />
+          <Gallery title="Purchased" subtitle="Pieces you currently own." items={purchased} />
         )}
       </div>
 
@@ -832,9 +764,7 @@ function Gallery({
                   <span className="text-neutral-500 text-xs">No image</span>
                 )}
               </div>
-              <div className="p-2 text-sm truncate">
-                {a.title || "Untitled"}
-              </div>
+              <div className="p-2 text-sm truncate">{a.title || "Untitled"}</div>
             </Link>
           ))}
         </div>
