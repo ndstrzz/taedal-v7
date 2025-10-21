@@ -1,4 +1,3 @@
-// app/src/routes/account/Account.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import CropModal from "../../components/CropModal";
@@ -31,14 +30,15 @@ async function resizeImage(
 
 /* --- helpers --- */
 function isVideoFile(f: File | Blob) {
-  // relies on MIME if available, fallback to extension
   const type = (f as File).type || "";
   if (type.startsWith("video/")) return true;
-  if ((f as File).name) {
-    const n = (f as File).name.toLowerCase();
-    if (n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".webm")) return true;
-  }
-  return false;
+  const name = (f as File).name?.toLowerCase?.() || "";
+  return !!name && (name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".webm"));
+}
+function isVideoUrl(u?: string | null) {
+  if (!u) return false;
+  const qless = u.split("?")[0].toLowerCase();
+  return qless.endsWith(".webm") || qless.endsWith(".mp4") || qless.endsWith(".mov");
 }
 
 /* ---------- tiny inline brand icons ---------- */
@@ -147,6 +147,7 @@ export default function Account() {
         : form.avatar_url || "/images/taedal-logo.svg",
     [avatarFile, form.avatar_url]
   );
+
   const coverPreview = useMemo(() => {
     if (coverFile) return URL.createObjectURL(coverFile);
     return form.cover_url || "";
@@ -299,7 +300,7 @@ export default function Account() {
     try {
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
-      const stamp = `v=${Date.now()}`;
+      const stamp = `v=${Date.now()}`; // cache buster for immediate profile refresh
 
       if (avatarFile) {
         const resized = await resizeImage(avatarFile, 512, 512);
@@ -313,7 +314,6 @@ export default function Account() {
       }
 
       if (coverFile) {
-        // detect video vs image by MIME
         const isVid = coverMime?.startsWith("video/");
         if (isVid) {
           const path = `covers/${userId}.webm`;
@@ -408,33 +408,51 @@ export default function Account() {
 
   if (loading) return <div className="p-6">loading…</div>;
 
+  // decide how to render cover
+  const fromUrlIsVideo = isVideoUrl(form.cover_url || "");
+  const localIsVideo = !!coverFile && (coverMime?.startsWith("video/") || isVideoFile(coverFile));
+  const showVideo = localIsVideo || (!coverFile && fromUrlIsVideo);
+
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
       <div
-        className="relative bg-neutral-900 border-b border-neutral-800"
+        className="relative border-b border-neutral-800 overflow-hidden"
         style={{ height: "clamp(12rem, 28vh, 24rem)" }}
       >
-        {coverPreview &&
-          (isVideoFile(coverFile || ({} as any)) || (form.cover_url || "").toLowerCase().match(/\.(webm|mp4|mov)(\?|$)/)) ? (
-          <video
-            src={coverPreview}
-            className="absolute inset-0 h-full w-full object-cover"
-            autoPlay
-            loop
-            muted
-            playsInline
-          />
-        ) : coverPreview ? (
-          <img
-            src={coverPreview}
-            alt="cover"
-            className="absolute inset-0 h-full w-full object-cover"
-          />
-        ) : null}
+        {coverPreview ? (
+          showVideo ? (
+            <video
+              src={coverPreview}
+              className="absolute inset-0 h-full w-full object-cover"
+              autoPlay
+              loop
+              muted
+              playsInline
+            />
+          ) : (
+            <img
+              src={coverPreview}
+              alt="cover"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          )
+        ) : (
+          <div className="absolute inset-0 bg-neutral-900" />
+        )}
 
-        <div className="absolute inset-0 bg-black/10 pointer-events-none" />
-        <div className="absolute right-4 bottom-4 flex gap-2">
+        {/* Vignette/gradients for readability (same as profile) */}
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage:
+              "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
+          }}
+        />
+        <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-b from-transparent to-black/70 pointer-events-none" />
+
+        {/* Change cover */}
+        <div className="absolute right-4 bottom-4 flex gap-2 z-10">
           <label className="btn cursor-pointer">
             <input
               type="file"
@@ -455,8 +473,8 @@ export default function Account() {
         </div>
       </div>
 
-      {/* Content */}
-      <div className="max-w-5xl mx-auto p-6 space-y-6 -mt-10">
+      {/* Content (ensure above cover) */}
+      <div className="max-w-5xl mx-auto p-6 space-y-6 -mt-10 relative z-10">
         {msg && <p className="text-sm text-amber-300">{msg}</p>}
 
         <div className="flex items-end justify-between">
@@ -636,7 +654,7 @@ export default function Account() {
       {videoTarget && (
         <VideoTrimModal
           file={videoTarget.file}
-          aspect={16 / 5} // match cover aspect feel
+          aspect={16 / 5}
           defaultMaxSize="1080p"
           defaultMaxSeconds={12}
           onCancel={() => setVideoTarget(null)}
