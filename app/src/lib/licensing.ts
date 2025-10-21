@@ -300,12 +300,11 @@ export async function generateContractPdf(requestId: string) {
   const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
     body: { request_id: requestId },
   });
-  if (error) {
-    const msg = (error as any)?.message || "Edge function error";
-    throw new Error(msg);
-  }
-  return data as { path: string; url?: string };
+  if (error) throw error;
+  // data: { path: string; url: string }  // url = signed inline URL
+  return data as { path: string; url: string };
 }
+
 
 export async function sha256(file: File): Promise<string> {
   const buf = await file.arrayBuffer();

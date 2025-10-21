@@ -1,6 +1,4 @@
 // supabase/functions/generate-contract-pdf/index.ts
-// Supabase Edge Function (Deno)
-
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
@@ -29,21 +27,18 @@ serve(async (req) => {
 
     const url = Deno.env.get("SUPABASE_URL");
     const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!url || !serviceKey) {
-      return json(500, { error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
-    }
+    if (!url || !serviceKey) return json(500, { error: "Missing Supabase env" });
 
     const admin = createClient(url, serviceKey);
 
-    // Load request
+    // Load request + participants
     const { data: reqRow, error: reqErr } = await admin
       .from("license_requests")
       .select("id, requested, requester_id, owner_id, artwork_id")
       .eq("id", request_id)
       .single();
-    if (reqErr) return json(404, { error: "license_request not found", details: reqErr.message });
+    if (reqErr) return json(404, { error: reqErr.message });
 
-    // Related
     const [{ data: art }, { data: rq }, { data: ow }] = await Promise.all([
       admin.from("artworks").select("title, image_url").eq("id", reqRow.artwork_id).maybeSingle(),
       admin.from("profiles").select("display_name, username, avatar_url").eq("id", reqRow.requester_id).maybeSingle(),
@@ -51,16 +46,13 @@ serve(async (req) => {
     ]);
 
     const nameOf = (p: any) => p?.display_name || p?.username || "—";
-    const t = reqRow.requested as {
-      purpose: string; term_months: number; territory: string | string[];
-      media: string[]; exclusivity: string; deliverables?: string;
-      usage_notes?: string; fee?: { amount: number; currency: string };
-    };
+    const t = reqRow.requested as any;
 
     const territory = Array.isArray(t.territory) ? t.territory.join(", ") : (t.territory ?? "");
     const media = (t.media || []).join(", ");
     const fee = t.fee ? `${t.fee.amount.toLocaleString()} ${t.fee.currency}` : "—";
 
+    // Simple, brand-forward contract HTML (black theme)
     const html = `<!doctype html>
 <html>
 <head>
@@ -74,7 +66,7 @@ serve(async (req) => {
   .brand{display:flex;gap:8px;align-items:center}
   .brand span{height:28px;width:28px;border-radius:50%;background:#fff}
   .title{font-size:44px;font-weight:800;text-transform:lowercase;letter-spacing:.5px}
-  .grid{display:grid;grid-template-columns:200px 1fr;gap:8px 16px}
+  .grid{display:grid;grid-template-columns:200px 1fr;gap:8px 16px;margin-top:20px}
   .lb{color:#d8d8d8}.v{color:#fff}
   .section{margin-top:28px}
 </style>
@@ -112,17 +104,27 @@ serve(async (req) => {
 </html>`;
 
     const path = `requests/${request_id}/contract.html`;
+
+    // Upload with the correct MIME so browsers can render it
     const up = await admin.storage
       .from("contracts")
-      .upload(path, new Blob([html], { type: "text/html" }), { upsert: true, contentType: "text/html" });
+      .upload(path, new Blob([html], { type: "text/html; charset=utf-8" }), {
+        upsert: true,
+        contentType: "text/html; charset=utf-8",
+        cacheControl: "public, max-age=31536000",
+      });
     if (up.error) return json(500, { error: up.error.message });
 
-    const signed = await admin.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+    // IMPORTANT: keep bucket PRIVATE; issue a signed URL that forces inline render
+    const signed = await admin
+      .storage
+      .from("contracts")
+      .createSignedUrl(path, 60 * 60 * 24 * 7, { download: "" }); // download:"" => Content-Disposition: inline
     if (signed.error) return json(500, { error: signed.error.message });
 
-    return json(200, { path, url: signed.data?.signedUrl });
+    return json(200, { path, url: signed.data.signedUrl });
   } catch (err) {
     console.error(err);
-    return json(500, { error: (err as Error)?.message ?? "Unknown error" });
+    return json(500, { error: (err as Error).message ?? "Unknown error" });
   }
 });
