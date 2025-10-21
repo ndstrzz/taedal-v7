@@ -162,59 +162,49 @@ export default function RequestDetail() {
     }
   }
 
-async function onGeneratePdf() {
-  if (!req) return;
+  async function onGeneratePdf() {
+    if (!req) return;
 
-  // 1) Open the tab RIGHT NOW (synchronous to the click)
-  const w = window.open("about:blank", "_blank");
-  if (!w) {
-    setMsg("Please allow pop-ups to preview the contract.");
-    return;
-  }
-  // Minimal placeholder while we wait
-  try {
-    w.document.write(`
-      <!doctype html><meta charset="utf-8">
-      <title>Generating…</title>
-      <style>html,body{background:#0b0b0b;color:#fff;font:14px system-ui;margin:0}
-      .c{display:grid;place-items:center;min-height:100dvh;opacity:.8}</style>
-      <div class="c">Generating contract…</div>
-    `);
-    w.document.close();
-  } catch {
-    // ignore—some extensions block document.write
-  }
-
-  setBusy(true);
-  setMsg(null);
-  try {
-    const res = await generateContractPdf(req.id);
-    await postLicenseMessage(req.id, `Generated contract document.`, null);
-    setMsg("Draft document generated ✔️");
-
-    // 2) Build a Blob URL so the browser definitely renders as HTML
-    const html = res?.html || "<p>Empty document.</p>";
-    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-
-    // 3) Navigate the already-open tab to the Blob URL
-    w.location.replace(url);
-
-    // (optional) you can keep res.url around if you want a shareable signed link later
-    // console.debug("Signed URL:", res?.url);
-  } catch (e: any) {
-    setMsg(e?.message || "Document generation failed");
+    // 1) Open a tab immediately (user-gesture)
+    const w = window.open("about:blank", "_blank");
+    if (!w) {
+      setMsg("Please allow pop-ups to preview the contract.");
+      return;
+    }
     try {
-      w.document.open();
-      w.document.write(`<pre style="padding:24px;color:#fff;background:#1a1a1a">Error: ${String(e?.message || e)}</pre>`);
+      w.document.write(`
+        <!doctype html><meta charset="utf-8">
+        <title>Generating…</title>
+        <style>html,body{background:#0b0b0b;color:#fff;font:14px system-ui;margin:0}
+        .c{display:grid;place-items:center;min-height:100dvh;opacity:.8}</style>
+        <div class="c">Generating contract…</div>
+      `);
       w.document.close();
     } catch {}
-  } finally {
-    setBusy(false);
-  }
-}
-// ...
 
+    setBusy(true);
+    setMsg(null);
+    try {
+      const res = await generateContractPdf(req.id);
+      await postLicenseMessage(req.id, `Generated contract document.`, null);
+      setMsg("Draft document generated ✔️");
+
+      const html = res?.html || "<p>Empty document.</p>";
+      const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+
+      w.location.replace(url);
+    } catch (e: any) {
+      setMsg(e?.message || "Document generation failed");
+      try {
+        w.document.open();
+        w.document.write(`<pre style="padding:24px;color:#fff;background:#1a1a1a">Error: ${String(e?.message || e)}</pre>`);
+        w.document.close();
+      } catch {}
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -274,6 +264,8 @@ async function onGeneratePdf() {
           <div className="overflow-y-auto p-4 space-y-3 border-r border-white/10">
             <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4 space-y-2">
               <div className="text-sm font-semibold mb-2">Contract Details</div>
+
+              {/* Basics */}
               <FieldRow label="Purpose">{working.purpose}</FieldRow>
               <FieldRow label="Term">{working.term_months} months</FieldRow>
               <FieldRow label="Territory">{stringifyTerritory(working.territory)}</FieldRow>
@@ -282,6 +274,154 @@ async function onGeneratePdf() {
               <FieldRow label="Fee">{formatMoney(working.fee || undefined)}</FieldRow>
               {working.deliverables && <FieldRow label="Deliverables">{working.deliverables}</FieldRow>}
               {working.usage_notes && <FieldRow label="Notes">{working.usage_notes}</FieldRow>}
+              {typeof working.credit_required === "boolean" && (
+                <FieldRow label="Attribution">
+                  {working.credit_required ? `yes${working.credit_line ? ` — ${working.credit_line}` : ""}` : "no"}
+                </FieldRow>
+              )}
+              {working.start_date && <FieldRow label="Start date">{working.start_date}</FieldRow>}
+              {working.effective_date && <FieldRow label="Effective date">{working.effective_date}</FieldRow>}
+
+              {/* Payment & Admin */}
+              {(working.payment_terms || working.tax || working.invoicing) && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">Payment & Admin</div>
+                  {working.payment_terms && (
+                    <FieldRow label="Payment">
+                      Net {working.payment_terms.due_days}
+                      {working.payment_terms.late_fee_pct ? ` · Late fee ${working.payment_terms.late_fee_pct}%` : ""}
+                      {working.payment_terms.method ? ` · ${working.payment_terms.method}` : ""}
+                    </FieldRow>
+                  )}
+                  {working.tax && (
+                    <FieldRow label="Taxes">
+                      {working.tax.responsible_party} responsible
+                      {working.tax.vat_registered ? " · VAT registered" : ""}
+                    </FieldRow>
+                  )}
+                  {working.invoicing && (
+                    <FieldRow label="Invoicing">
+                      {working.invoicing.entity_name}
+                      {working.invoicing.email ? ` · ${working.invoicing.email}` : ""}
+                      {working.invoicing.address ? ` · ${working.invoicing.address}` : ""}
+                    </FieldRow>
+                  )}
+                </>
+              )}
+
+              {/* Brand & Approvals */}
+              {(working.brand_guidelines_url || working.preapproval_required != null || working.approval_sla_days || working.prohibited_uses || working.usage_restrictions || working.delivery_specs) && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">Brand & Approvals</div>
+                  {working.brand_guidelines_url && <FieldRow label="Guidelines">{working.brand_guidelines_url}</FieldRow>}
+                  {working.preapproval_required != null && (
+                    <FieldRow label="Pre-approval">
+                      {working.preapproval_required ? "yes" : "no"}
+                      {working.approval_sla_days ? ` · SLA ${working.approval_sla_days} days` : ""}
+                    </FieldRow>
+                  )}
+                  {working.prohibited_uses && working.prohibited_uses.length > 0 && (
+                    <FieldRow label="Prohibited">{working.prohibited_uses.join(", ")}</FieldRow>
+                  )}
+                  {working.usage_restrictions && working.usage_restrictions.length > 0 && (
+                    <FieldRow label="Restrictions">{working.usage_restrictions.join(", ")}</FieldRow>
+                  )}
+                  {working.delivery_specs && (
+                    <FieldRow label="Delivery">
+                      {[
+                        working.delivery_specs.format,
+                        (working.delivery_specs.width && working.delivery_specs.height) ? `${working.delivery_specs.width}×${working.delivery_specs.height}` : null,
+                        working.delivery_specs.color,
+                        working.delivery_specs.dpi ? `${working.delivery_specs.dpi} dpi` : null
+                      ].filter(Boolean).join(" · ")}
+                    </FieldRow>
+                  )}
+                </>
+              )}
+
+              {/* Legal */}
+              {(working.confidentiality_term_months || working.liability_cap || working.sublicense != null || working.derivative_edits || working.injunctive_relief) && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">Legal</div>
+                  {working.sublicense != null && <FieldRow label="Sublicense">{working.sublicense ? "yes" : "no"}</FieldRow>}
+                  {working.derivative_edits && working.derivative_edits.length > 0 && (
+                    <FieldRow label="Edits">{working.derivative_edits.join(", ")}</FieldRow>
+                  )}
+                  {working.confidentiality_term_months && (
+                    <FieldRow label="Confidentiality">{working.confidentiality_term_months} months</FieldRow>
+                  )}
+                  {working.liability_cap && (
+                    <FieldRow label="Liability cap">
+                      {working.liability_cap.type === "fees_paid"
+                        ? "fees paid"
+                        : `USD ${Number(working.liability_cap.amount!).toLocaleString()}`}
+                    </FieldRow>
+                  )}
+                  {working.injunctive_relief && <FieldRow label="Equitable relief">Injunctive relief available</FieldRow>}
+                </>
+              )}
+
+              {/* Termination */}
+              {working.termination && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">Termination</div>
+                  {working.termination.for_convenience != null && (
+                    <FieldRow label="For convenience">{working.termination.for_convenience ? "yes" : "no"}</FieldRow>
+                  )}
+                  {working.termination.notice_days && <FieldRow label="Notice">{working.termination.notice_days} days</FieldRow>}
+                  {working.termination.breach_cure_days && (
+                    <FieldRow label="Cure period">{working.termination.breach_cure_days} days</FieldRow>
+                  )}
+                  {working.termination.takedown_days && (
+                    <FieldRow label="Post-term takedown">{working.termination.takedown_days} days</FieldRow>
+                  )}
+                </>
+              )}
+
+              {/* Disputes */}
+              {working.disputes && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">Governing Law & Disputes</div>
+                  <FieldRow label="Framework">
+                    {working.disputes.mode === "courts"
+                      ? `${working.disputes.law}${working.disputes.venue ? `, ${working.disputes.venue}` : ""}`
+                      : `${working.disputes.arb_rules || "Arbitration"} — seat ${working.disputes.seat || "TBD"} — law ${working.disputes.law}`}
+                  </FieldRow>
+                </>
+              )}
+
+              {/* On-chain */}
+              {(working.onchain || working.royalties || working.metadata) && (
+                <>
+                  <div className="h-px bg-white/10 my-2" />
+                  <div className="text-xs uppercase tracking-wide text-white/50">On-chain</div>
+                  {working.onchain?.chain && <FieldRow label="Chain">{working.onchain.chain}</FieldRow>}
+                  {working.onchain?.contract_address && <FieldRow label="Contract">{working.onchain.contract_address}</FieldRow>}
+                  {working.onchain?.token_id && <FieldRow label="Token ID">{working.onchain.token_id}</FieldRow>}
+                  {working.onchain?.pay_gas_party && <FieldRow label="Gas">{working.onchain.pay_gas_party} pays gas</FieldRow>}
+                  {working.royalties && (
+                    <FieldRow label="Royalties">
+                      {(working.royalties.rate_bps / 100).toFixed(2)}%
+                      {working.royalties.receiver ? ` · ${working.royalties.receiver}` : ""}
+                    </FieldRow>
+                  )}
+                  {working.metadata && (
+                    <FieldRow label="Storage">
+                      {[
+                        working.metadata.image_cid ? `image ${working.metadata.image_cid}` : null,
+                        working.metadata.metadata_cid ? `meta ${working.metadata.metadata_cid}` : null,
+                        working.metadata.mutable != null ? `mutable ${working.metadata.mutable ? "yes" : "no"}` : null
+                      ].filter(Boolean).join(" · ")}
+                    </FieldRow>
+                  )}
+                </>
+              )}
+
               <div className="text-[12px] text-white/60">Status: <span className="capitalize">{req.status}</span></div>
 
               <div className="mt-2 grid grid-cols-2 gap-2">

@@ -1,6 +1,69 @@
+// app/src/lib/licensing.ts
 import { supabase } from "./supabase";
 
 /* ------------------------------- Types ------------------------------- */
+
+export type PaymentTerms = {
+  due_days: number;
+  late_fee_pct?: number;
+  method?: "bank" | "card" | "crypto";
+};
+
+export type TaxTerms = {
+  responsible_party: "owner" | "licensee";
+  vat_registered?: boolean;
+};
+
+export type InvoicingInfo = {
+  entity_name: string;
+  email?: string;
+  address?: string;
+};
+
+export type DeliverySpecs = {
+  format: string;
+  width?: number;
+  height?: number;
+  color?: string; // e.g., "sRGB", "CMYK"
+  dpi?: number;
+};
+
+export type LiabilityCap =
+  | { type: "fees_paid" }
+  | { type: "fixed"; amount: number };
+
+export type TerminationTerms = {
+  for_convenience?: boolean;
+  notice_days?: number;
+  breach_cure_days?: number;
+  takedown_days?: number;
+};
+
+export type DisputesTerms = {
+  mode: "courts" | "arbitration";
+  law: string;      // e.g., "Singapore"
+  venue?: string;   // court venue
+  arb_rules?: string; // e.g., "SIAC", "AAA", "ICC"
+  seat?: string;      // arbitration seat
+};
+
+export type OnchainBlock = {
+  chain?: string;               // "Ethereum" | "Sepolia" | ...
+  contract_address?: string;
+  token_id?: string;
+  pay_gas_party?: "owner" | "licensee";
+};
+
+export type Royalties = {
+  rate_bps: number; // 500 = 5%
+  receiver?: string;
+};
+
+export type MetadataBlock = {
+  image_cid?: string;
+  metadata_cid?: string;
+  mutable?: boolean;
+};
 
 export type LicenseTerms = {
   purpose: string;
@@ -9,12 +72,41 @@ export type LicenseTerms = {
   media: string[];
   exclusivity: "exclusive" | "non-exclusive" | "category-exclusive";
   start_date?: string;
+
+  // Existing/basic bits
   deliverables?: string;
   credit_required?: boolean;
   usage_notes?: string;
   fee?: { amount: number; currency: string };
   sublicense?: boolean;
   derivative_edits?: string[];
+
+  // New — admin & payment
+  effective_date?: string;
+  credit_line?: string;
+  payment_terms?: PaymentTerms;
+  tax?: TaxTerms;
+  invoicing?: InvoicingInfo;
+
+  // New — brand/usage
+  brand_guidelines_url?: string;
+  preapproval_required?: boolean;
+  approval_sla_days?: number;
+  prohibited_uses?: string[];
+  usage_restrictions?: string[];
+  delivery_specs?: DeliverySpecs;
+
+  // New — legal & risk
+  confidentiality_term_months?: number;
+  liability_cap?: LiabilityCap;
+  termination?: TerminationTerms;
+  disputes?: DisputesTerms;
+  injunctive_relief?: boolean;
+
+  // Optional — on-chain/NFT
+  onchain?: OnchainBlock;
+  royalties?: Royalties;
+  metadata?: MetadataBlock;
 };
 
 export type LicenseRequest = {
@@ -70,9 +162,20 @@ export const LICENSE_TEMPLATES = [
       media: ["Web", "Social"],
       exclusivity: "non-exclusive",
       credit_required: true,
+      credit_line: "© Creator Name / Taedal",
+      preapproval_required: true,
+      approval_sla_days: 2,
+      prohibited_uses: [
+        "Hate, violence or illegal content",
+        "Political advertising",
+        "AI training or model ingestion",
+        "Watermark removal"
+      ],
       deliverables: "Use on social/web creatives.",
       usage_notes: "Link back to creator.",
       fee: { amount: 1200, currency: "USD" },
+      payment_terms: { due_days: 14, method: "bank" },
+      tax: { responsible_party: "licensee" },
       sublicense: false,
       derivative_edits: ["resize", "crop"]
     } as LicenseTerms
@@ -86,7 +189,10 @@ export const LICENSE_TEMPLATES = [
       territory: ["US", "CA"],
       media: ["Web", "Social", "Display"],
       exclusivity: "non-exclusive",
-      fee: { amount: 2500, currency: "USD" }
+      fee: { amount: 2500, currency: "USD" },
+      payment_terms: { due_days: 30, method: "bank" },
+      tax: { responsible_party: "licensee" },
+      preapproval_required: true
     } as LicenseTerms
   }
 ];
@@ -104,7 +210,12 @@ export type TermDiff = { key: keyof LicenseTerms; before: any; after: any };
 export function diffTerms(a: LicenseTerms, b: LicenseTerms): TermDiff[] {
   const keys: (keyof LicenseTerms)[] = [
     "purpose","term_months","territory","media","exclusivity","start_date",
-    "deliverables","credit_required","usage_notes","fee","sublicense","derivative_edits"
+    "deliverables","credit_required","usage_notes","fee","sublicense","derivative_edits",
+    "effective_date","credit_line","payment_terms","tax","invoicing",
+    "brand_guidelines_url","preapproval_required","approval_sla_days",
+    "prohibited_uses","usage_restrictions","delivery_specs",
+    "confidentiality_term_months","liability_cap","termination","disputes","injunctive_relief",
+    "onchain","royalties","metadata"
   ];
   const diffs: TermDiff[] = [];
   for (const k of keys) {
@@ -121,6 +232,13 @@ export function stringifyTerritory(t: LicenseTerms["territory"]) {
 
 export function formatMoney(f?: { amount: number; currency: string }) {
   return f ? `${f.amount.toLocaleString()} ${f.currency}` : "—";
+}
+
+export async function sha256(file: File): Promise<string> {
+  const buf = await file.arrayBuffer();
+  const digest = await crypto.subtle.digest("SHA-256", buf);
+  const arr = Array.from(new Uint8Array(digest));
+  return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /* ------------------------------- CRUD ------------------------------- */
@@ -229,7 +347,10 @@ export async function acceptOffer(requestId: string) {
 
 export async function updateLicenseRequest(
   requestId: string,
-  patch: Partial<Pick<LicenseRequest, "status" | "accepted_terms" | "requested" | "executed_pdf_url" | "executed_pdf_sha256" | "signed_at" | "signer_name" | "signer_title">>
+  patch: Partial<Pick<LicenseRequest,
+    "status" | "accepted_terms" | "requested" |
+    "executed_pdf_url" | "executed_pdf_sha256" |
+    "signed_at" | "signer_name" | "signer_title">>
 ) {
   const { data, error } = await supabase
     .from("license_requests")
@@ -294,9 +415,8 @@ export async function upsertApproval(requestId: string, stage: LicenseApproval["
   }
 }
 
-/* ------------------------- PDF generation & upload ------------------------- */
+/* ------------------------- Document generation ------------------------- */
 
-// app/src/lib/licensing.ts (only the generateContractPdf part changed)
 export async function generateContractPdf(requestId: string) {
   const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
     body: { request_id: requestId },
@@ -306,14 +426,7 @@ export async function generateContractPdf(requestId: string) {
   return data as { path: string; url?: string | null; html: string };
 }
 
-
-
-export async function sha256(file: File): Promise<string> {
-  const buf = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  const arr = Array.from(new Uint8Array(digest));
-  return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
+/* ----------------------------- Attachments ----------------------------- */
 
 export async function uploadExecutedPdf(requestId: string, file: File, signer: { name: string; title?: string }) {
   if (file.type !== "application/pdf") throw new Error("Please upload a PDF.");
@@ -338,8 +451,6 @@ export async function uploadExecutedPdf(requestId: string, file: File, signer: {
 
   return { updated, path, url: pub?.signedUrl, sha256: hash };
 }
-
-/* ----------------------------- Attachments ----------------------------- */
 
 export async function uploadAttachment(requestId: string, file: File, kind?: string) {
   const key = `requests/${requestId}/${Date.now()}-${file.name}`;
