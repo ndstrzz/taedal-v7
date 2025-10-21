@@ -30,6 +30,54 @@ const FieldRow = ({ label, children }: { label: string; children: React.ReactNod
   </div>
 );
 
+/* ---------- tiny helpers for bullets + typing throttle ---------- */
+function continueBullet(text: string, selStart: number) {
+  // Determine current line
+  const before = text.slice(0, selStart);
+  const after = text.slice(selStart);
+  const lineStart = before.lastIndexOf("\n") + 1;
+  const line = before.slice(lineStart);
+  const mNum = line.match(/^\s*(\d+)\.\s+/);
+  const mDash = line.match(/^\s*-\s+/);
+  const mDot = line.match(/^\s*•\s+/);
+
+  if (mNum) {
+    const n = parseInt(mNum[1], 10) + 1;
+    const insert = `\n${"".padStart(mNum[0].length - (mNum[1].length + 2))}${n}. `;
+    return { text: before + insert + after, deltaCaret: insert.length };
+  }
+  if (mDash) {
+    const pad = "".padStart(mDash[0].length - 2);
+    const insert = `\n${pad}- `;
+    return { text: before + insert + after, deltaCaret: insert.length };
+  }
+  if (mDot) {
+    const pad = "".padStart(mDot[0].length - 2);
+    const insert = `\n${pad}• `;
+    return { text: before + insert + after, deltaCaret: insert.length };
+  }
+  return null;
+}
+
+function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
+  let last = 0;
+  let timer: any = null;
+  return (...args: Parameters<T>) => {
+    const now = Date.now();
+    const remaining = last + ms - now;
+    if (remaining <= 0) {
+      last = now;
+      fn(...args);
+    } else if (!timer) {
+      timer = setTimeout(() => {
+        last = Date.now();
+        timer = null;
+        fn(...args);
+      }, remaining);
+    }
+  };
+}
+
 export default function RequestDetail() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -45,15 +93,19 @@ export default function RequestDetail() {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // NEW: edit modal state
+  // Edit modal
   const [editOpen, setEditOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<LicenseTerms>>({});
+
+  // Typing & seen
+  const [typingBy, setTypingBy] = useState<Record<string, number>>({});
+  const [seenBy, setSeenBy] = useState<Record<string, { msgId: string; ts: number }>>({});
+  const messagesWrapRef = useRef<HTMLDivElement>(null);
 
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const iAmOwner = useMemo(() => me && req && req.owner_id === me, [me, req]);
-  const iAmRequester = useMemo(() => me && req && req.requester_id === me, [me, req]);
-  const profileOf = (id: string | undefined) => (id === requester?.id ? requester : id === owner?.id ? owner : null);
+  const profileOf = (uid: string | undefined) => (uid === requester?.id ? requester : uid === owner?.id ? owner : null);
 
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
 
@@ -89,6 +141,7 @@ export default function RequestDetail() {
     return () => { alive = false; };
   }, [id]);
 
+  // Realtime: new messages (already had)
   useEffect(() => {
     if (!id) return;
     const channel = supabase
@@ -100,6 +153,104 @@ export default function RequestDetail() {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [id]);
+
+  // Realtime: typing + seen presence/broadcast
+  useEffect(() => {
+    if (!id) return;
+    let unsubbed = false;
+    let chan: ReturnType<typeof supabase.channel> | null = null;
+
+    (async () => {
+      const { data: sess } = await supabase.auth.getSession();
+      const uid = sess.session?.user?.id;
+      if (!uid) return;
+
+      chan = supabase.channel(`lr-${id}-rt`, {
+        config: { broadcast: { self: false }, presence: { key: uid } },
+      });
+
+      chan.on("broadcast", { event: "typing" }, (payload: any) => {
+        const from = payload?.payload?.user_id;
+        const at = payload?.payload?.at;
+        if (!from || from === uid) return;
+        setTypingBy((cur) => ({ ...cur, [from]: Number(at) || Date.now() }));
+      });
+
+      chan.on("broadcast", { event: "seen" }, (payload: any) => {
+        const from = payload?.payload?.user_id;
+        const msgId = payload?.payload?.msg_id;
+        const ts = payload?.payload?.ts;
+        if (!from || from === uid || !msgId) return;
+        setSeenBy((cur) => ({ ...cur, [from]: { msgId, ts: Number(ts) || Date.now() } }));
+      });
+
+      const status = await chan.subscribe((s) => {
+        if (s === "SUBSCRIBED") {
+          chan?.track({ user_id: uid, ts: Date.now() });
+        }
+      });
+      if (unsubbed) supabase.removeChannel(chan);
+    })();
+
+    return () => {
+      unsubbed = true;
+      if (chan) supabase.removeChannel(chan);
+    };
+  }, [id]);
+
+  // prune typing indicators
+  useEffect(() => {
+    const t = setInterval(() => {
+      const now = Date.now();
+      setTypingBy((cur) => {
+        const next: Record<string, number> = {};
+        for (const k in cur) if (now - cur[k] < 3500) next[k] = cur[k];
+        return next;
+      });
+    }, 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  // emit typing (throttled)
+  const sendTyping = useMemo(() => throttle(async () => {
+    const { data: sess } = await supabase.auth.getSession();
+    const uid = sess.session?.user?.id;
+    if (!uid || !id) return;
+    await supabase.channel(`lr-${id}-rt`).send({
+      type: "broadcast",
+      event: "typing",
+      payload: { user_id: uid, at: Date.now() },
+    });
+  }, 1200), [id]);
+
+  // seen helper
+  async function sendSeenIfNeeded() {
+    if (!id || !me || msgs.length === 0) return;
+    const last = msgs[msgs.length - 1];
+    // only send seen if the last message is NOT mine
+    if (last.author_id === me) return;
+
+    await supabase.channel(`lr-${id}-rt`).send({
+      type: "broadcast",
+      event: "seen",
+      payload: { user_id: me, msg_id: last.id, ts: Date.now() },
+    });
+  }
+
+  // observe scroll: at bottom => send "seen"
+  useEffect(() => {
+    const el = messagesWrapRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      if (el.scrollHeight - el.scrollTop - el.clientHeight < 8) {
+        sendSeenIfNeeded();
+      }
+    };
+    el.addEventListener("scroll", onScroll);
+    // also on mount/update
+    onScroll();
+    return () => el.removeEventListener("scroll", onScroll);
+  }, [msgs.length]);
 
   async function send(body: string, patch?: Partial<LicenseTerms> | null) {
     if (!body.trim() && !patch) return;
@@ -131,7 +282,6 @@ export default function RequestDetail() {
   async function onAcceptOffer() {
     setBusy(true);
     try {
-      // Owner accepts final offer → move to accepted
       const updated = await acceptOffer(id!);
       setReq(updated);
       await postLicenseMessage(id!, "Offer accepted. Contract finalized.", null);
@@ -163,8 +313,6 @@ export default function RequestDetail() {
 
   async function onGeneratePdf() {
     if (!req) return;
-
-    // Open a tab immediately to satisfy popup blockers
     const w = window.open("about:blank", "_blank");
     if (!w) {
       setMsg("Please allow pop-ups to preview the contract.");
@@ -230,7 +378,13 @@ export default function RequestDetail() {
   }
 
   const working = req.requested;
+  const othersTyping = Object.keys(typingBy).filter((uid) => uid !== me);
+  const lastMine = [...msgs].reverse().find((m) => m.author_id === me);
+  const someoneSeenMyLast =
+    lastMine &&
+    Object.entries(seenBy).some(([uid, s]) => uid !== me && s.msgId === lastMine.id);
 
+  /* ------------------------------ UI ------------------------------ */
   return (
     <div className="fixed inset-0 z-[60]">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => nav("/contracts")} />
@@ -262,11 +416,9 @@ export default function RequestDetail() {
             <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold mb-2">Contract Details</div>
-                {/* NEW: propose edits */}
                 <button
                   className="text-xs px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20"
                   onClick={() => {
-                    // seed the draft with current terms
                     setDraft({
                       purpose: working.purpose,
                       term_months: working.term_months,
@@ -293,8 +445,17 @@ export default function RequestDetail() {
               <FieldRow label="Media">{working.media.join(", ")}</FieldRow>
               <FieldRow label="Exclusivity">{working.exclusivity}</FieldRow>
               <FieldRow label="Fee">{formatMoney(working.fee || undefined)}</FieldRow>
-              {working.deliverables && <FieldRow label="Deliverables">{working.deliverables}</FieldRow>}
-              {working.usage_notes && <FieldRow label="Notes">{working.usage_notes}</FieldRow>}
+              {working.deliverables && (
+                <FieldRow label="Deliverables">
+                  {/* preserve bullets/lines */}
+                  <div className="whitespace-pre-wrap">{working.deliverables}</div>
+                </FieldRow>
+              )}
+              {working.usage_notes && (
+                <FieldRow label="Notes">
+                  <div className="whitespace-pre-wrap">{working.usage_notes}</div>
+                </FieldRow>
+              )}
               {typeof working.credit_required === "boolean" && (
                 <FieldRow label="Attribution">
                   {working.credit_required ? `yes${(working as any).credit_line ? ` — ${(working as any).credit_line}` : ""}` : "no"}
@@ -349,17 +510,48 @@ export default function RequestDetail() {
           </div>
 
           {/* RIGHT: Thread */}
-          <ChatPane
-            me={me!}
-            msgs={msgs}
-            req={req}
-            profileOf={profileOf}
-            onAcceptPatch={onAcceptPatch}
-            input={input}
-            setInput={setInput}
-            send={send}
-            chatEndRef={chatEndRef}
-          />
+          <div className="flex flex-col min-w-0">
+            <div ref={messagesWrapRef} className="flex-1 overflow-auto p-4 space-y-2">
+              <ChatPane
+                me={me!}
+                msgs={msgs}
+                req={req}
+                profileOf={profileOf}
+                onAcceptPatch={onAcceptPatch}
+                chatEndRef={chatEndRef}
+                seenBy={seenBy}
+              />
+            </div>
+
+            {/* typing row */}
+            <div className="px-3 h-5 text-[12px] text-white/60">
+              {othersTyping.length > 0 && (
+                <span>{nameOf(profileOf(othersTyping[0]) as any)} is typing…</span>
+              )}
+            </div>
+
+            {/* composer */}
+            <div className="p-3 border-t border-white/10 flex gap-2">
+              <textarea
+                className="flex-1 input min-h-[44px]"
+                placeholder="Type your message… (Enter to send, Shift+Enter for newline)"
+                value={input}
+                onChange={(e) => { setInput(e.target.value); sendTyping(); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    send(input);
+                  }
+                }}
+              />
+              <button className="btn shrink-0" onClick={() => send(input)} title="Send">➤</button>
+            </div>
+
+            {/* seen below my last message */}
+            {someoneSeenMyLast && (
+              <div className="px-3 pb-2 text-[11px] text-white/50">Seen</div>
+            )}
+          </div>
         </div>
       </div>
 
@@ -381,6 +573,85 @@ export default function RequestDetail() {
         </div>
       )}
     </div>
+  );
+}
+
+/* ------------------------------ ChatPane ------------------------------ */
+
+function ChatPane({
+  me, msgs, req, profileOf, onAcceptPatch, chatEndRef, seenBy
+}: any) {
+  const sameAuthorRecent = (a: any, b: any, mins = 6) =>
+    !!a && !!b && a.author_id === b.author_id &&
+    Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < mins * 60 * 1000;
+
+  const hasSeen = (msgId: string) => {
+    // if any other user seen this message id
+    return Object.entries(seenBy || {}).some(([uid, s]: any) => s?.msgId === msgId);
+  };
+
+  return (
+    <>
+      {msgs.map((m: any, i: number) => {
+        const prev = msgs[i - 1];
+        const mine = m.author_id === me;
+        const showHead = !sameAuthorRecent(prev, m);
+        const author = profileOf(m.author_id);
+        const working = req.requested;
+
+        const diffs = m.patch ? ((): any[] => {
+          const out: any[] = [];
+          const keys = Object.keys(m.patch!);
+          for (const k of keys) out.push({ key: k, before: (working as any)[k], after: (m.patch as any)[k] });
+          return out;
+        })() : [];
+
+        return (
+          <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+            <div className={`flex items-end gap-2 max-w-[78%] ${mine ? "flex-row-reverse" : ""}`}>
+              {showHead ? <Avatar url={author?.avatar_url} name={author ? (author.display_name || author.username || author.id) : "User"} size={32} /> : <div style={{ width: 32, height: 32 }} />}
+              <div className={`rounded-2xl px-3 py-2 ${mine ? "bg-indigo-500 text-black" : "bg-white/10"}`}>
+                {!mine && showHead && (
+                  <div className="text-[11px] text-white/70 mb-0.5">
+                    {author ? (author.display_name || author.username || author.id) : "User"}
+                  </div>
+                )}
+                {m.body && <div className="whitespace-pre-wrap text-sm mb-1">{m.body}</div>}
+
+                {m.patch && (
+                  <div className={`rounded-lg ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
+                    <ul className="space-y-1">
+                      {diffs.map((d, idx) => (
+                        <li key={idx}>
+                          <span className="text-white/60">{String(d.key)}:</span>{" "}
+                          <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
+                          <span>→ <b>{formatVal(d.after)}</b></span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div className="mt-2">
+                      <button className={`px-2 py-1 rounded-md text-xs ${mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"}`} onClick={() => onAcceptPatch(m.patch!)}>
+                        Accept change
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className={`text-[10px] mt-1 ${mine ? "text-black/60 text-right" : "text-white/50"}`}>
+                  {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
+                </div>
+
+                {/* per-message seen tick (optional): show only for last sent? keeping minimal */}
+                {mine && i === msgs.length - 1 && hasSeen(m.id) && (
+                  <div className="text-[10px] mt-1 text-black/60 text-right">Seen</div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      <div ref={chatEndRef} />
+    </>
   );
 }
 
@@ -408,10 +679,31 @@ function EditTermsModal({
   );
   const [feeCurrency, setFeeCurrency] = useState<string>(initial.fee?.currency || "USD");
 
+  // Refs for bullet-friendly textareas
+  const delivRef = useRef<HTMLTextAreaElement>(null);
+  const notesRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleBulletEnter = (ref: React.RefObject<HTMLTextAreaElement>, key: "deliverables" | "usage_notes") => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || !ref.current) return;
+    // allow Shift+Enter to insert newline always (still handle bullets)
+    const sel = ref.current.selectionStart;
+    const res = continueBullet(ref.current.value, sel);
+    if (res) {
+      e.preventDefault();
+      const next = res.text;
+      setForm((f) => ({ ...f, [key]: next } as any));
+      queueMicrotask(() => {
+        if (!ref.current) return;
+        const pos = sel + res.deltaCaret;
+        ref.current.selectionStart = ref.current.selectionEnd = pos;
+      });
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-[70]">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
-      <div className="absolute inset-0 m-auto max-w-[720px] w-[94vw] max-h-[88vh] overflow-auto rounded-2xl border border-white/15 bg-neutral-950 p-4">
+      <div className="absolute inset-0 m-auto max-w-[720px] w-[94vw] max-height-[88vh] overflow-auto rounded-2xl border border-white/15 bg-neutral-950 p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="text-lg font-semibold">Propose edits</div>
           <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10">✕</button>
@@ -516,22 +808,28 @@ function EditTermsModal({
           )}
 
           <label className="text-sm md:col-span-2">
-            <div className="text-white/60 mb-1">Deliverables</div>
+            <div className="text-white/60 mb-1">Deliverables (supports -, • and numbered lists)</div>
             <textarea
+              ref={delivRef}
               className="input w-full"
-              rows={3}
+              rows={5}
               value={form.deliverables || ""}
               onChange={(e) => set("deliverables", e.target.value)}
+              onKeyDown={handleBulletEnter(delivRef, "deliverables")}
+              placeholder={`- 3x resized banners (300x250, 728x90, 160x600)\n- Source file (PSD)\n- Social preview • 1080x1080`}
             />
           </label>
 
           <label className="text-sm md:col-span-2">
             <div className="text-white/60 mb-1">Notes</div>
             <textarea
+              ref={notesRef}
               className="input w-full"
-              rows={3}
+              rows={4}
               value={form.usage_notes || ""}
               onChange={(e) => set("usage_notes", e.target.value)}
+              onKeyDown={handleBulletEnter(notesRef, "usage_notes")}
+              placeholder={`• Link back to creator\n• No AI training\n• Provide final proofs before launch`}
             />
           </label>
         </div>
@@ -544,7 +842,6 @@ function EditTermsModal({
             className="px-3 py-2 rounded-lg bg-white text-black hover:bg-white/90"
             onClick={() => {
               const patch: Partial<LicenseTerms> = { ...form };
-              // normalize fee
               if (feeAmount || feeCurrency) {
                 const amt = Number(feeAmount);
                 patch.fee = isFinite(amt) && amt > 0
@@ -562,87 +859,7 @@ function EditTermsModal({
   );
 }
 
-/* ------------------------------ ChatPane ------------------------------ */
-
-function ChatPane({
-  me, msgs, req, profileOf, onAcceptPatch, input, setInput, send, chatEndRef
-}: any) {
-  const sameAuthorRecent = (a: any, b: any, mins = 6) =>
-    !!a && !!b && a.author_id === b.author_id &&
-    Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < mins * 60 * 1000;
-
-  return (
-    <div className="flex flex-col min-w-0">
-      <div className="flex-1 overflow-auto p-4 space-y-2">
-        {msgs.map((m: any, i: number) => {
-          const prev = msgs[i - 1];
-          const mine = m.author_id === me;
-          const showHead = !sameAuthorRecent(prev, m);
-          const author = profileOf(m.author_id);
-          const working = req.requested;
-
-          const diffs = m.patch ? ((): any[] => {
-            const out: any[] = [];
-            const keys = Object.keys(m.patch!);
-            for (const k of keys) out.push({ key: k, before: (working as any)[k], after: (m.patch as any)[k] });
-            return out;
-          })() : [];
-
-          return (
-            <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-              <div className={`flex items-end gap-2 max-w-[78%] ${mine ? "flex-row-reverse" : ""}`}>
-                {showHead ? <Avatar url={author?.avatar_url} name={author ? (author.display_name || author.username || author.id) : "User"} size={32} /> : <div style={{ width: 32, height: 32 }} />}
-                <div className={`rounded-2xl px-3 py-2 ${mine ? "bg-indigo-500 text-black" : "bg-white/10"}`}>
-                  {!mine && showHead && (
-                    <div className="text-[11px] text-white/70 mb-0.5">
-                      {author ? (author.display_name || author.username || author.id) : "User"}
-                    </div>
-                  )}
-                  {m.body && <div className="whitespace-pre-wrap text-sm mb-1">{m.body}</div>}
-
-                  {m.patch && (
-                    <div className={`rounded-lg ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
-                      <ul className="space-y-1">
-                        {diffs.map((d, idx) => (
-                          <li key={idx}>
-                            <span className="text-white/60">{String(d.key)}:</span>{" "}
-                            <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
-                            <span>→ <b>{formatVal(d.after)}</b></span>
-                          </li>
-                        ))}
-                      </ul>
-                      <div className="mt-2">
-                        <button className={`px-2 py-1 rounded-md text-xs ${mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"}`} onClick={() => onAcceptPatch(m.patch!)}>
-                          Accept change
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className={`text-[10px] mt-1 ${mine ? "text-black/60 text-right" : "text-white/50"}`}>
-                    {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-        <div ref={chatEndRef} />
-      </div>
-
-      <div className="p-3 border-t border-white/10 flex gap-2">
-        <textarea
-          className="flex-1 input min-h-[44px]"
-          placeholder="Type your message…"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") send(input); }}
-        />
-        <button className="btn shrink-0" onClick={() => send(input)} title="Send">➤</button>
-      </div>
-    </div>
-  );
-}
+/* ------------------------------ Attachments + utils ------------------------------ */
 
 function AttachmentList({ requestId }: { requestId: string }) {
   const [rows, setRows] = useState<any[]>([]);
