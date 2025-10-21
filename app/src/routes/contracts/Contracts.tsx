@@ -46,7 +46,6 @@ function statusLabel(s: LicenseRequest["status"]) {
 
 function RowCard({ r, me }: { r: Row; me: string }) {
   const other = r.owner_id === me ? r.requester : r.owner;
-  const role = r.owner_id === me ? "Incoming" : "Outgoing";
   const terms = r.accepted_terms ?? (r.requested as LicenseTerms);
   const st = statusLabel(r.status);
 
@@ -71,9 +70,12 @@ function RowCard({ r, me }: { r: Row; me: string }) {
               <Pill tone={st.tone}>{st.text}</Pill>
             </div>
           </div>
+
+          {/* subtitle line like your mock */}
           <div className="text-sm text-white/70 mt-1 truncate">
             {terms.purpose} — {terms.term_months}-month {terms.exclusivity} license
           </div>
+
           <div className="mt-2 flex items-center gap-2 text-sm text-white/80">
             <div className="flex items-center gap-2">
               <Avatar url={r.requester?.avatar_url} name={nameOf(r.requester)} />
@@ -101,7 +103,7 @@ const TABS = [
   { key: "open", label: "Pending" },
   { key: "negotiating", label: "Active" },
   { key: "accepted", label: "Completed" },
-  { key: "rejected", label: "Rejected" }, // derived: declined or withdrawn
+  { key: "rejected", label: "Rejected" },
 ] as const;
 type TabKey = (typeof TABS)[number]["key"];
 
@@ -166,13 +168,11 @@ export default function Contracts() {
   const filtered = useMemo(() => {
     const qlc = q.trim().toLowerCase();
     return rows.filter((r) => {
-      // tab filter
       if (tab === "open" && r.status !== "open") return false;
       if (tab === "negotiating" && r.status !== "negotiating") return false;
       if (tab === "accepted" && r.status !== "accepted") return false;
       if (tab === "rejected" && !(r.status === "declined" || r.status === "withdrawn")) return false;
 
-      // search filter
       if (!qlc) return true;
       const terms = r.accepted_terms ?? (r.requested as LicenseTerms);
       const hay = [
@@ -190,71 +190,89 @@ export default function Contracts() {
   }, [rows, tab, q]);
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className="text-2xl font-semibold">Contract Requests</span>
-          </div>
-          <div className="text-white/60 text-sm">Manage IP licensing and usage negotiations</div>
-        </div>
-      </div>
-
-      {/* Search + filter bar */}
-      <div className="mt-4 flex items-center gap-2">
-        <div className="flex-1">
-          <div className="relative">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="Search contracts, artists, buyers..."
-              className="w-full input pl-9 h-11"
-            />
-            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60">🔎</span>
+    // 🔒 Force full-page black background behind everything on this route
+    <div className="bg-black min-h-[calc(100dvh-56px)]">
+      <div className="max-w-6xl mx-auto p-6">
+        {/* Header with icon */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-3">
+              <img
+                src="/images/contract-icon.svg"
+                alt="Contracts"
+                className="h-6 w-6 opacity-90"
+              />
+              <span className="text-2xl font-semibold">Contract Requests</span>
+            </div>
+            <div className="text-white/60 text-sm">Manage IP licensing and usage negotiations</div>
           </div>
         </div>
-        <button className="h-11 px-3 rounded-xl bg-white/10 border border-white/10 text-sm hover:bg-white/15">
-          Filter
-        </button>
-      </div>
 
-      {/* Tabs */}
-      <div className="mt-3 flex flex-wrap gap-2">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`px-3 py-1.5 rounded-full text-sm border ${
-              tab === t.key ? "bg-white text-black border-white" : "bg-white/0 border-white/15 text-white/85 hover:bg-white/10"
-            }`}
-          >
-            {t.label}
-            <span className={`ml-2 text-xs ${tab === t.key ? "text-black/70" : "text-white/50"}`}>
-              ({(counts as any)[t.key] ?? counts.rejected})
-            </span>
+        {/* Search + filter bar */}
+        <div className="mt-4 flex items-center gap-2">
+          <div className="flex-1">
+            <div className="relative">
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search contracts, artists, buyers..."
+                className="w-full input pl-9 h-11"
+              />
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-white/60">🔎</span>
+            </div>
+          </div>
+          <button className="h-11 px-3 rounded-xl bg-white/10 border border-white/10 text-sm hover:bg-white/15">
+            Filter
           </button>
-        ))}
-      </div>
+        </div>
 
-      {msg && <div className="mt-3 text-amber-300 text-sm">{msg}</div>}
-
-      {/* List */}
-      {loading ? (
-        <div className="mt-6 grid gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-24 rounded-2xl bg-white/[0.05] border border-white/10 animate-pulse" />
+        {/* Tabs */}
+        <div className="mt-3 flex flex-wrap gap-2">
+          {(
+            [
+              { key: "all", label: "All Contracts" },
+              { key: "open", label: "Pending" },
+              { key: "negotiating", label: "Active" },
+              { key: "accepted", label: "Completed" },
+              { key: "rejected", label: "Rejected" },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setTab(t.key as TabKey)}
+              className={`px-3 py-1.5 rounded-full text-sm border ${
+                tab === (t.key as TabKey)
+                  ? "bg-white text-black border-white"
+                  : "bg-white/0 border-white/15 text-white/85 hover:bg-white/10"
+              }`}
+            >
+              {t.label}
+              <span className={`ml-2 text-xs ${tab === t.key ? "text-black/70" : "text-white/50"}`}>
+                ({(counts as any)[t.key] ?? 0})
+              </span>
+            </button>
           ))}
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="mt-6 text-white/70">
-          No license requests yet. Open an artwork and click <b>Request license</b>.
-        </div>
-      ) : (
-        <div className="mt-4 grid gap-3">
-          {filtered.map((r) => me && <RowCard key={r.id} r={r} me={me} />)}
-        </div>
-      )}
+
+        {msg && <div className="mt-3 text-amber-300 text-sm">{msg}</div>}
+
+        {/* List */}
+        {loading ? (
+          <div className="mt-6 grid gap-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="h-24 rounded-2xl bg-white/[0.05] border border-white/10 animate-pulse" />
+            ))}
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="mt-6 text-white/70">
+            No license requests yet. Open an artwork and click <b>Request license</b>.
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-3">
+            {filtered.map((r) => me && <RowCard key={r.id} r={r} me={me} />)}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
