@@ -322,7 +322,7 @@ export default function Account() {
         return;
       }
 
-      // 2) Uploads
+      // 2) Uploads (NOTE: object names DO NOT include bucket prefix)
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
       const stamp = `v=${Date.now()}`;
@@ -330,7 +330,7 @@ export default function Account() {
       if (avatarFile) {
         try {
           const resized = await resizeImage(avatarFile, 512, 512);
-          const path = `avatars/${uid}.jpg`;
+          const path = `${uid}.jpg`; // <— fixed
           const { error: upErr } = await supabase.storage
             .from("avatars")
             .upload(path, resized, {
@@ -350,7 +350,7 @@ export default function Account() {
         const isVid = coverMime?.startsWith("video/");
         try {
           if (isVid) {
-            const path = `covers/${uid}.webm`;
+            const path = `${uid}.webm`; // <— fixed
             const { error: upErr } = await supabase.storage
               .from("covers")
               .upload(path, coverFile, {
@@ -363,7 +363,7 @@ export default function Account() {
             cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
           } else {
             const resized = await resizeImage(coverFile, 1600, 500);
-            const path = `covers/${uid}.jpg`;
+            const path = `${uid}.jpg`; // <— fixed
             const { error: upErr } = await supabase.storage
               .from("covers")
               .upload(path, resized, {
