@@ -1,193 +1,128 @@
 // supabase/functions/generate-contract-pdf/index.ts
-// Deno Deploy / Supabase Edge Function
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
+// Supabase Edge Function (Deno)
+
+import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 
-type LicenseTerms = {
-  purpose: string;
-  term_months: number;
-  territory: string | string[];
-  media: string[];
-  exclusivity: string;
-  start_date?: string;
-  deliverables?: string;
-  credit_required?: boolean;
-  usage_notes?: string;
-  fee?: { amount: number; currency: string };
-};
-
-type LicenseRequest = {
-  id: string;
-  artwork_id: string;
-  requester_id: string;
-  owner_id: string;
-  requested: LicenseTerms;
-  accepted_terms: LicenseTerms | null;
-  created_at: string;
-  updated_at: string;
-};
-
-const cors = {
+const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
 };
 
-function textOrArray(val: string | string[]): string {
-  return Array.isArray(val) ? val.join(", ") : val;
+function json(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json", ...corsHeaders },
+  });
 }
 
-Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: cors });
-  }
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { request_id } = await req.json();
+    if (req.method !== "POST") return json(405, { error: "Method not allowed" });
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
+    const { request_id } = await req.json().catch(() => ({}));
+    if (!request_id) return json(400, { error: "Missing request_id" });
 
-    // Load request + little surrounding info
-    const { data: lr, error: e1 } = await supabase
+    const url = Deno.env.get("SUPABASE_URL");
+    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !serviceKey) {
+      return json(500, { error: "Missing SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY" });
+    }
+
+    const admin = createClient(url, serviceKey);
+
+    // Load request
+    const { data: reqRow, error: reqErr } = await admin
       .from("license_requests")
-      .select("*")
+      .select("id, requested, requester_id, owner_id, artwork_id")
       .eq("id", request_id)
-      .single<LicenseRequest>();
-    if (e1) throw e1;
+      .single();
+    if (reqErr) return json(404, { error: "license_request not found", details: reqErr.message });
 
-    const { data: art } = await supabase
-      .from("artworks")
-      .select("title")
-      .eq("id", lr.artwork_id)
-      .maybeSingle();
+    // Related
+    const [{ data: art }, { data: rq }, { data: ow }] = await Promise.all([
+      admin.from("artworks").select("title, image_url").eq("id", reqRow.artwork_id).maybeSingle(),
+      admin.from("profiles").select("display_name, username, avatar_url").eq("id", reqRow.requester_id).maybeSingle(),
+      admin.from("profiles").select("display_name, username, avatar_url").eq("id", reqRow.owner_id).maybeSingle(),
+    ]);
 
-    const { data: reqr } = await supabase
-      .from("profiles")
-      .select("display_name,username")
-      .eq("id", lr.requester_id)
-      .maybeSingle();
+    const nameOf = (p: any) => p?.display_name || p?.username || "—";
+    const t = reqRow.requested as {
+      purpose: string; term_months: number; territory: string | string[];
+      media: string[]; exclusivity: string; deliverables?: string;
+      usage_notes?: string; fee?: { amount: number; currency: string };
+    };
 
-    const { data: owner } = await supabase
-      .from("profiles")
-      .select("display_name,username")
-      .eq("id", lr.owner_id)
-      .maybeSingle();
+    const territory = Array.isArray(t.territory) ? t.territory.join(", ") : (t.territory ?? "");
+    const media = (t.media || []).join(", ");
+    const fee = t.fee ? `${t.fee.amount.toLocaleString()} ${t.fee.currency}` : "—";
 
-    const working = lr.accepted_terms ?? lr.requested;
+    const html = `<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  *{box-sizing:border-box}
+  body{margin:0;background:#0b0b0b;color:#fafafa;font:14px/1.5 system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";padding:40px}
+  .sheet{max-width:1120px;margin:0 auto;background:#0b0b0b;padding:40px;border-bottom:2px solid rgba(255,255,255,.25)}
+  .hdr{display:flex;align-items:center;justify-content:space-between;padding-bottom:16px}
+  .logo{height:24px;width:140px;background:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain;mask:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain}
+  .brand{display:flex;gap:8px;align-items:center}
+  .brand span{height:28px;width:28px;border-radius:50%;background:#fff}
+  .title{font-size:44px;font-weight:800;text-transform:lowercase;letter-spacing:.5px}
+  .grid{display:grid;grid-template-columns:200px 1fr;gap:8px 16px}
+  .lb{color:#d8d8d8}.v{color:#fff}
+  .section{margin-top:28px}
+</style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="hdr">
+      <div class="logo"></div>
+      <div class="brand"><span></span><span style="background:none;color:#fff;width:auto">×</span><span></span></div>
+    </div>
+    <div class="title">artwork license agreement</div>
 
-    // --- Build a simple PDF (via PDFKit-style minimal buffer) ---
-    // For portability here, we’ll emit a very simple PDF bytes buffer.
-    // In your repo you might already be using a PDF lib; plug the header
-    // drawing idea into that if so.
+    <div class="section grid">
+      <div class="lb">Artwork</div><div class="v">${art?.title ?? "Untitled"}</div>
+      <div class="lb">Requester</div><div class="v">${nameOf(rq)}</div>
+      <div class="lb">Owner</div><div class="v">${nameOf(ow)}</div>
+    </div>
 
-    // Use a tiny HTML->PDF via Satori/Resvg etc. if you prefer.
-    const body = `
-      <html>
-        <head>
-          <meta charset="utf-8" />
-          <style>
-            * { box-sizing: border-box; }
-            body { margin: 0; font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji"; color: #fafafa; }
-            .page { width: 794px; height: 1123px; background:#0b0b0b; padding: 40px 44px; }
-            .hdr { display:flex; align-items:center; justify-content:space-between; padding-bottom: 16px; border-bottom: 2px solid rgba(255,255,255,.25); }
-            .brand { display:flex; align-items:center; gap:14px; }
-            .brand .logo { width:110px; height:22px; background:#fff; -webkit-mask:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center / contain; mask:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center / contain; }
-            .brand small { color:#b8b8b8; font-size:11px; letter-spacing:.2px; }
-            .xpair { display:flex; align-items:center; gap:10px; color:#fff; }
-            .title { font-weight:800; font-size:36px; margin:28px 0 18px; text-transform:lowercase; letter-spacing:.5px; }
-            .section { margin: 20px 0; }
-            .grid { display:grid; grid-template-columns: 200px 1fr; gap: 8px 16px; }
-            .lbl { color:#c9c9c9; }
-            code { color:#fff; }
-          </style>
-        </head>
-        <body>
-          <div class="page">
-            <div class="hdr">
-              <div class="brand">
-                <div class="logo"></div>
-                <small>made by artists for artists</small>
-              </div>
-              <div class="xpair">
-                <span>🐺</span>
-                <span>×</span>
-                <span>📜</span>
-              </div>
-            </div>
+    <div class="section grid">
+      <div class="lb">Purpose</div><div class="v">${t.purpose}</div>
+      <div class="lb">Term</div><div class="v">${t.term_months} months</div>
+      <div class="lb">Territory</div><div class="v">${territory}</div>
+      <div class="lb">Media</div><div class="v">${media}</div>
+      <div class="lb">Exclusivity</div><div class="v">${t.exclusivity}</div>
+      <div class="lb">Fee</div><div class="v">${fee}</div>
+      ${t.deliverables ? `<div class="lb">Deliverables</div><div class="v">${t.deliverables}</div>` : ""}
+      ${t.usage_notes ? `<div class="lb">Notes</div><div class="v">${t.usage_notes}</div>` : ""}
+    </div>
 
-            <div class="title">artwork license agreement</div>
+    <div class="section" style="margin-top:40px;opacity:.6;font-size:12px">
+      generated ${new Date().toLocaleString()}
+    </div>
+  </div>
+</body>
+</html>`;
 
-            <div class="section grid">
-              <div class="lbl">Artwork</div>
-              <div><code>${(art?.title || "Untitled").replace(/</g,"&lt;")}</code></div>
-              <div class="lbl">Requester</div>
-              <div>${reqr?.display_name || reqr?.username || "—"}</div>
-              <div class="lbl">Owner</div>
-              <div>${owner?.display_name || owner?.username || "—"}</div>
-            </div>
-
-            <div class="section grid">
-              <div class="lbl">Purpose</div>
-              <div>${working.purpose}</div>
-              <div class="lbl">Term</div>
-              <div>${working.term_months} months</div>
-              <div class="lbl">Territory</div>
-              <div>${textOrArray(working.territory)}</div>
-              <div class="lbl">Media</div>
-              <div>${working.media.join(", ")}</div>
-              <div class="lbl">Exclusivity</div>
-              <div>${working.exclusivity}</div>
-              <div class="lbl">Fee</div>
-              <div>${working.fee ? `${working.fee.amount.toLocaleString()} ${working.fee.currency}` : "—"}</div>
-              ${
-                working.deliverables
-                  ? `<div class="lbl">Deliverables</div><div>${working.deliverables}</div>`
-                  : ""
-              }
-              ${
-                working.usage_notes
-                  ? `<div class="lbl">Notes</div><div>${working.usage_notes}</div>`
-                  : ""
-              }
-            </div>
-
-            <div class="section" style="margin-top:40px;color:#bdbdbd;font-size:12px">
-              Generated ${new Date().toLocaleString()}
-            </div>
-          </div>
-        </body>
-      </html>
-    `;
-
-    // Store the HTML; if you already render PDFs elsewhere, replace with your renderer
-    const path = `requests/${lr.id}/contract-${Date.now()}.html`;
-    const { error: eUp } = await supabase.storage
+    const path = `requests/${request_id}/contract.html`;
+    const up = await admin.storage
       .from("contracts")
-      .upload(path, new Blob([body], { type: "text/html" }), {
-        upsert: true,
-        contentType: "text/html",
-      });
-    if (eUp) throw eUp;
+      .upload(path, new Blob([html], { type: "text/html" }), { upsert: true, contentType: "text/html" });
+    if (up.error) return json(500, { error: up.error.message });
 
-    const { data: signed } = await supabase.storage
-      .from("contracts")
-      .createSignedUrl(path, 60 * 60 * 24 * 7);
+    const signed = await admin.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (signed.error) return json(500, { error: signed.error.message });
 
-    return new Response(
-      JSON.stringify({ path, url: signed?.signedUrl }),
-      { headers: { "content-type": "application/json", ...cors } },
-    );
+    return json(200, { path, url: signed.data?.signedUrl });
   } catch (err) {
-    const msg =
-      (err as any)?.message ||
-      (typeof err === "string" ? err : JSON.stringify(err));
-    return new Response(JSON.stringify({ error: msg }), {
-      status: 500,
-      headers: { "content-type": "application/json", ...cors },
-    });
+    console.error(err);
+    return json(500, { error: (err as Error)?.message ?? "Unknown error" });
   }
 });
