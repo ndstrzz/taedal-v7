@@ -302,7 +302,7 @@ export async function generateContractPdf(requestId: string) {
     body: { request_id: requestId },
   });
   if (error) throw error;
-  // now returns { path: string; url?: string | null; html: string }
+  // returns { path: string; url?: string | null; html: string }
   return data as { path: string; url?: string | null; html: string };
 }
 

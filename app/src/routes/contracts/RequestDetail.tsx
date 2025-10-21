@@ -162,31 +162,57 @@ export default function RequestDetail() {
     }
   }
 
-  async function onGeneratePdf() {
-    if (!req) return;
-    setBusy(true);
-    try {
-      const res = await generateContractPdf(req.id);
-      await postLicenseMessage(req.id, `Generated contract document.`, null);
-      setMsg("Draft document generated ✔️");
+async function onGeneratePdf() {
+  if (!req) return;
 
-      // ✅ Always render inline using returned HTML string
-      const w = window.open("", "_blank", "noopener,noreferrer");
-      if (w) {
-        w.document.open("text/html", "replace");
-        w.document.write(res.html || "<p>Empty document.</p>");
-        w.document.close();
-      }
-
-      // (optional) also keep the signed URL handy if you want a shareable link somewhere
-      // if (res?.url) console.log("Signed URL (optional):", res.url);
-
-    } catch (e: any) {
-      setMsg(e?.message || "Document generation failed");
-    } finally {
-      setBusy(false);
-    }
+  // 1) Open the tab RIGHT NOW (synchronous to the click)
+  const w = window.open("about:blank", "_blank");
+  if (!w) {
+    setMsg("Please allow pop-ups to preview the contract.");
+    return;
   }
+  // Minimal placeholder while we wait
+  try {
+    w.document.write(`
+      <!doctype html><meta charset="utf-8">
+      <title>Generating…</title>
+      <style>html,body{background:#0b0b0b;color:#fff;font:14px system-ui;margin:0}
+      .c{display:grid;place-items:center;min-height:100dvh;opacity:.8}</style>
+      <div class="c">Generating contract…</div>
+    `);
+    w.document.close();
+  } catch {
+    // ignore—some extensions block document.write
+  }
+
+  setBusy(true);
+  setMsg(null);
+  try {
+    const res = await generateContractPdf(req.id);
+    await postLicenseMessage(req.id, `Generated contract document.`, null);
+    setMsg("Draft document generated ✔️");
+
+    // 2) Build a Blob URL so the browser definitely renders as HTML
+    const html = res?.html || "<p>Empty document.</p>";
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+
+    // 3) Navigate the already-open tab to the Blob URL
+    w.location.replace(url);
+
+    // (optional) you can keep res.url around if you want a shareable signed link later
+    // console.debug("Signed URL:", res?.url);
+  } catch (e: any) {
+    setMsg(e?.message || "Document generation failed");
+    try {
+      w.document.open();
+      w.document.write(`<pre style="padding:24px;color:#fff;background:#1a1a1a">Error: ${String(e?.message || e)}</pre>`);
+      w.document.close();
+    } catch {}
+  } finally {
+    setBusy(false);
+  }
+}
 // ...
 
 
