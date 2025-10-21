@@ -298,7 +298,7 @@ export default function Account() {
     setMsg(null);
 
     try {
-      // Make sure we are authenticated at save-time
+      // Ensure authenticated at save-time
       const { data: who } = await supabase.auth.getUser();
       const uid = who?.user?.id;
       if (!uid) {
@@ -308,7 +308,7 @@ export default function Account() {
 
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
-      const stamp = `v=${Date.now()}`; // cache buster for immediate profile refresh
+      const stamp = `v=${Date.now()}`; // cache buster
 
       if (avatarFile) {
         const resized = await resizeImage(avatarFile, 512, 512);
@@ -355,18 +355,20 @@ export default function Account() {
         telegram: normalizeHandle(form.telegram),
       };
 
-      // Prefer UPDATE first (RLS USING & WITH CHECK), then fallback to INSERT if no row exists
-      const { error: updErr } = await supabase
+      // Try UPDATE first, and check if any rows changed. If none, INSERT.
+      const { data: updRows, error: updErr } = await supabase
         .from("profiles")
         .update(payload)
         .eq("id", uid)
-        .throwOnError(false);
+        .select("id");
 
       if (updErr) {
-        // If zero rows updated, try INSERT (first-time save)
-        const { error: insErr } = await supabase
-          .from("profiles")
-          .insert({ id: uid, ...payload });
+        // If update explicitly fails, try insert (new profile) — will still be RLS-checked
+        const { error: insErr } = await supabase.from("profiles").insert({ id: uid, ...payload });
+        if (insErr) throw insErr;
+      } else if (!updRows || updRows.length === 0) {
+        // No row existed → insert
+        const { error: insErr } = await supabase.from("profiles").insert({ id: uid, ...payload });
         if (insErr) throw insErr;
       }
 
