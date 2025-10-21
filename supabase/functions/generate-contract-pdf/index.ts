@@ -1,7 +1,11 @@
-// supabase/functions/generate-contract-pdf/index.ts
-// deno.json should include: { "imports": { "pdf-lib": "https://esm.sh/pdf-lib@1.17.1" } }
+// deno-lint-ignore-file no-explicit-any
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { PDFDocument, StandardFonts, rgb } from "pdf-lib";
+import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+
+/* ---------- Supabase (service role) ---------- */
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+const supabase = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
 
 type LicenseTerms = {
   purpose: string;
@@ -17,104 +21,125 @@ type LicenseTerms = {
   sublicense?: boolean;
   derivative_edits?: string[];
 };
+type RequestRow = {
+  id: string;
+  artwork_id: string;
+  requester_id: string;
+  owner_id: string;
+  requested: LicenseTerms;
+  accepted_terms: LicenseTerms | null;
+  status: string;
+  created_at: string;
+  updated_at: string;
+};
 
+/* ---------- helpers ---------- */
+const asStr = (t: LicenseTerms["territory"]) => Array.isArray(t) ? t.join(", ") : (t ?? "");
+const money = (f?: { amount: number; currency: string } | null) =>
+  f ? `${f.amount?.toLocaleString()} ${f.currency}` : "—";
+
+/** build a simple one-page PDF with the terms */
+async function buildPdf(req: RequestRow) {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([612, 792]); // US Letter
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  // dark background
+  page.drawRectangle({ x: 0, y: 0, width: 612, height: 792, color: rgb(0.06, 0.06, 0.08) });
+
+  const m = 54;
+  let y = 740;
+  const move = (dy: number) => (y -= dy);
+  const draw = (text: string, opts: any = {}) => {
+    page.drawText(text, { x: m, y, size: opts.size ?? 12, font: opts.font ?? font, color: rgb(1, 1, 1) });
+    if (!opts.noAdvance) move(opts.advance ?? 18);
+  };
+
+  draw("Artwork License Agreement", { font: bold, size: 20, advance: 30 });
+
+  const t = req.accepted_terms ?? req.requested;
+
+  draw("1) Parties", { font: bold });
+  draw(`Owner (Licensor): ${req.owner_id}`);
+  draw(`Requester (Licensee): ${req.requester_id}`);
+  move(6);
+
+  draw("2) Scope", { font: bold });
+  draw(`Purpose: ${t.purpose}`);
+  draw(`Term: ${t.term_months} months`);
+  draw(`Territory: ${asStr(t.territory)}`);
+  draw(`Media: ${t.media.join(", ")}`);
+  draw(`Exclusivity: ${t.exclusivity}`);
+  draw(`Fee: ${money(t.fee)}`);
+  if (t.start_date) draw(`Start date: ${t.start_date}`);
+  if (t.deliverables) draw(`Deliverables: ${t.deliverables}`);
+  if (t.credit_required != null) draw(`Credit required: ${t.credit_required ? "Yes" : "No"}`);
+  if (t.usage_notes) draw(`Notes: ${t.usage_notes}`);
+  if (t.sublicense != null) draw(`Sublicense: ${t.sublicense ? "Allowed" : "Not allowed"}`);
+  if (t.derivative_edits?.length) draw(`Allowed edits: ${t.derivative_edits.join(", ")}`);
+  move(6);
+
+  draw("3) Standard Terms (short)", { font: bold });
+  draw("• Licensee may use the Artwork only as described above.");
+  draw("• No transfer of copyright; all rights reserved by Licensor.");
+  draw("• No harmful/illegal use; no trademark use unless expressly stated.");
+  draw("• Liability limited to the license fee paid.");
+  draw("• Governed by Licensor’s locale unless otherwise agreed.");
+  move(12);
+
+  draw("Signatures (to be executed separately):", { font: bold });
+  draw("Licensor: __________________________   Date: ___________", { noAdvance: true });
+  page.drawText("Licensee: __________________________   Date: ___________", { x: m, y: y - 22, size: 12, font });
+
+  return await doc.save();
+}
+
+/* ---------- CORS helpers ---------- */
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Content-Type": "application/json"
+};
+
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), { status, headers: CORS_HEADERS });
+}
+
+/* ---------- server ---------- */
 Deno.serve(async (req) => {
+  // Preflight
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
+
   try {
-    const auth = req.headers.get("Authorization")!;
-    const { request_id } = await req.json();
+    if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
 
-    if (!auth || !request_id) {
-      return new Response(JSON.stringify({ error: "Missing auth or request_id" }), { status: 400 });
-    }
+    const { request_id } = await req.json().catch(() => ({}));
+    if (!request_id) return json({ error: "request_id required" }, 400);
 
-    const supabase = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, // needs RLS bypass for reads+writes
-      { global: { headers: { Authorization: auth } } }
-    );
-
-    // Load request + parties + artwork
-    const { data: reqRow, error: e1 } = await supabase
+    const { data, error } = await supabase
       .from("license_requests")
-      .select("*, requester:profiles!license_requests_requester_id_fkey(id,display_name,username), owner:profiles!license_requests_owner_id_fkey(id,display_name,username), artwork:artworks(id,title,image_url)")
+      .select("*")
       .eq("id", request_id)
-      .maybeSingle();
-    if (e1) throw e1;
-    if (!reqRow) throw new Error("Request not found");
+      .single<RequestRow>();
+    if (error || !data) return json({ error: error?.message || "Not found" }, 404);
 
-    const t: LicenseTerms = reqRow.requested;
-    const requesterName = reqRow.requester?.display_name || reqRow.requester?.username || reqRow.requester?.id;
-    const ownerName = reqRow.owner?.display_name || reqRow.owner?.username || reqRow.owner?.id;
-    const artTitle = reqRow.artwork?.title || "Untitled";
+    const pdfBytes = await buildPdf(data);
+    const path = `requests/${request_id}/draft-${Date.now()}.pdf`;
 
-    // Build PDF
-    const pdf = await PDFDocument.create();
-    const page = pdf.addPage([595, 842]); // A4 portrait
-    const { width } = page.getSize();
-    const font = await pdf.embedFont(StandardFonts.Helvetica);
-    const bold = await pdf.embedFont(StandardFonts.HelveticaBold);
+    const { error: upErr } = await supabase
+      .storage
+      .from("contracts")
+      .upload(path, new Blob([pdfBytes], { type: "application/pdf" }), { upsert: true });
+    if (upErr) return json({ error: upErr.message }, 500);
 
-    let y = 800;
-    const draw = (text: string, size = 11, f = font, color = rgb(1, 1, 1)) => {
-      page.drawText(text, { x: 40, y, size, font: f, color });
-      y -= size + 8;
-    };
-    const drawH = (text: string) => { draw(text, 16, bold); y -= 4; };
-    const line = () => { page.drawLine({ start: { x: 40, y }, end: { x: width - 40, y }, thickness: 0.5, color: rgb(1,1,1) }); y -= 12; };
+    const { data: signed, error: signErr } =
+      await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+    if (signErr) return json({ error: signErr.message }, 500);
 
-    // Header
-    drawH("Artwork License Agreement");
-    draw(`Artwork: ${artTitle}`);
-    draw(`Parties: ${ownerName} (Licensor)  ↔  ${requesterName} (Licensee)`);
-    draw(`Date: ${new Date().toLocaleDateString()}`);
-    line();
-
-    // Core terms
-    drawH("Scope of Rights");
-    draw(`Purpose: ${t.purpose}`);
-    draw(`Media: ${(t.media || []).join(", ")}`);
-    draw(`Territory: ${Array.isArray(t.territory) ? t.territory.join(", ") : t.territory}`);
-    draw(`Exclusivity: ${t.exclusivity}`);
-    draw(`Term: ${t.term_months} months${t.start_date ? `, start ${t.start_date}` : ""}`);
-    draw(`Credit required: ${t.credit_required ? "Yes" : "No"}`);
-    if (t.deliverables) draw(`Deliverables: ${t.deliverables}`);
-    if (t.usage_notes) draw(`Usage notes: ${t.usage_notes}`);
-    if (t.sublicense !== undefined) draw(`Sublicensing: ${t.sublicense ? "Allowed" : "Not allowed"}`);
-    if (t.derivative_edits) draw(`Allowed edits: ${t.derivative_edits.join(", ")}`);
-    if (t.fee) draw(`Fee: ${t.fee.amount.toLocaleString()} ${t.fee.currency}`);
-    line();
-
-    drawH("Standard Clauses");
-    const clauses = [
-      "Licensor represents they own or control the rights to the Artwork.",
-      "Licensee shall not use the Artwork in unlawful, hateful, or defamatory contexts.",
-      "No AI training, dataset inclusion, or biometric/face data extraction unless explicitly permitted.",
-      "Indemnities are mutual and limited to direct damages capped at the fee paid under this Agreement.",
-      "Either party may terminate for breach with 10 days to cure.",
-      "Governing Law and venue as mutually agreed; disputes via good-faith negotiation first."
-    ];
-    clauses.forEach(c => draw("• " + c));
-
-    line();
-    drawH("Signatures");
-    draw("Licensor: ____________________________   Date: __________");
-    draw("Licensee: ____________________________   Date: __________");
-    y -= 10;
-    draw("(Sign in-app or print, sign, and upload the executed PDF.)", 10, font, rgb(0.9,0.9,0.9));
-
-    const bytes = await pdf.save();
-
-    // Upload to storage
-    const path = `requests/${request_id}/draft.pdf`;
-    const { error: e2 } = await supabase.storage.from("contracts").upload(path, bytes, {
-      contentType: "application/pdf",
-      upsert: true,
-    });
-    if (e2) throw e2;
-
-    const { data: pub } = await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24); // 24h link
-    return new Response(JSON.stringify({ path, url: pub?.signedUrl }), { headers: { "Content-Type": "application/json" } });
-  } catch (err) {
-    return new Response(JSON.stringify({ error: (err as Error).message }), { status: 500 });
+    return json({ path, url: signed?.signedUrl });
+  } catch (e: any) {
+    return json({ error: String(e?.message || e) }, 500);
   }
 });
