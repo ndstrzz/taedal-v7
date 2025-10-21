@@ -1,20 +1,24 @@
 // app/src/components/VideoTrimModal.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 
-// Lazy load ffmpeg.wasm only when needed
 // npm i @ffmpeg/ffmpeg @ffmpeg/util
-// Ensure you have: "type": "module" or suitable bundler config.
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
 import { fetchFile } from "@ffmpeg/util";
 
 type Props = {
   file: File;
-  aspect?: number; // for preview mask only; output scales by selected max size
+  aspect?: number; // preview mask only; output is scaled by selected max size
   defaultMaxSeconds?: number;
   defaultMaxSize?: "720p" | "1080p";
   onCancel(): void;
-  onDone(blob: Blob): void; // returns processed video/webm
+  onDone(blob: Blob): void; // processed video/webm
 };
+
+/** Safe: clone Uint8Array and wrap as Blob (no ArrayBuffer/SharedArrayBuffer types involved). */
+function u8ToBlob(u8: Uint8Array, mime: string) {
+  const copy = u8.slice(0); // returns a new Uint8Array (ArrayBufferView -> valid BlobPart)
+  return new Blob([copy], { type: mime });
+}
 
 export default function VideoTrimModal({
   file,
@@ -35,12 +39,7 @@ export default function VideoTrimModal({
   const [estText, setEstText] = useState<string>("");
 
   const blobUrl = useMemo(() => URL.createObjectURL(file), [file]);
-
-  useEffect(() => {
-    return () => {
-      URL.revokeObjectURL(blobUrl);
-    };
-  }, [blobUrl]);
+  useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
 
   // Load metadata
   useEffect(() => {
@@ -62,13 +61,13 @@ export default function VideoTrimModal({
     const m = Math.floor(s / 60);
     const ss = Math.floor(s % 60);
     return `${m}:${ss.toString().padStart(2, "0")}`;
-    };
+  };
 
-  // Estimate text (very rough)
+  // Rough output estimate
   useEffect(() => {
     const secs = Math.max(0, end - start);
     const target = maxSize === "1080p" ? "1080p" : "720p";
-    const bitrateMbps = target === "1080p" ? 2.0 : 1.0; // conservative
+    const bitrateMbps = target === "1080p" ? 2.0 : 1.0; // conservative guess
     const bytes = bitrateMbps * 125000 * secs; // Mbps -> bytes/s
     const mb = (bytes / (1024 * 1024)).toFixed(1);
     setEstText(`${secs.toFixed(1)}s • ~${mb} MB`);
@@ -78,22 +77,19 @@ export default function VideoTrimModal({
     setProcessing(true);
     setErr(null);
     try {
-      // dynamically import to keep bundle light
+      // dynamic import keeps bundle small
       const { FFmpeg } = await import("@ffmpeg/ffmpeg");
       const ffmpeg: FFmpeg = new FFmpeg();
       await ffmpeg.load();
 
-      const data = await fetchFile(file);
+      const data = await fetchFile(file); // Uint8Array (FileData)
       await ffmpeg.writeFile("in", data);
 
       const secs = Math.max(0, Math.min(end, duration) - Math.max(start, 0));
       const t = Math.max(0.1, secs); // ensure >0
-
-      // scale by max size, preserve aspect
       const maxH = maxSize === "1080p" ? 1080 : 720;
 
-      // VP9 in webm, drop audio for smaller file and autoplay friendliness
-      // -deadline good is supported; -row-mt 1 can speed up if built in
+      // VP9 webm, muted (autoplay-friendly)
       const args = [
         "-ss",
         `${start}`,
@@ -116,8 +112,11 @@ export default function VideoTrimModal({
       ];
 
       await ffmpeg.exec(args);
-      const out = await ffmpeg.readFile("out.webm");
-      const blob = new Blob([out], { type: "video/webm" });
+
+      // readFile returns FileData (Uint8Array). Clone & wrap as Blob.
+      const outU8 = (await ffmpeg.readFile("out.webm")) as unknown as Uint8Array;
+      const blob = u8ToBlob(outU8, "video/webm");
+
       onDone(blob);
     } catch (e: any) {
       setErr(e?.message || "Failed to process video");
@@ -140,17 +139,9 @@ export default function VideoTrimModal({
           <div className="relative rounded-lg overflow-hidden bg-black">
             <div
               className="absolute inset-0 pointer-events-none"
-              style={{
-                boxShadow:
-                  "inset 0 0 0 9999px rgba(0,0,0,0.15)",
-              }}
+              style={{ boxShadow: "inset 0 0 0 9999px rgba(0,0,0,0.15)" }}
             />
-            <video
-              ref={videoRef}
-              src={blobUrl}
-              className="w-full max-h-[50vh] object-contain"
-              controls
-            />
+            <video ref={videoRef} src={blobUrl} className="w-full max-h-[50vh] object-contain" controls />
           </div>
 
           {loadingMeta ? (
@@ -167,9 +158,7 @@ export default function VideoTrimModal({
                     step={0.1}
                     className="w-full"
                     value={start}
-                    onChange={(e) =>
-                      setStart(Math.min(Number(e.target.value), end - 0.1))
-                    }
+                    onChange={(e) => setStart(Math.min(Number(e.target.value), end - 0.1))}
                   />
                 </label>
                 <label className="block">
@@ -181,9 +170,7 @@ export default function VideoTrimModal({
                     step={0.1}
                     className="w-full"
                     value={end}
-                    onChange={(e) =>
-                      setEnd(Math.max(Number(e.target.value), start + 0.1))
-                    }
+                    onChange={(e) => setEnd(Math.max(Number(e.target.value), start + 0.1))}
                   />
                 </label>
               </div>
@@ -191,11 +178,7 @@ export default function VideoTrimModal({
               <div className="grid sm:grid-cols-3 gap-3">
                 <label className="block">
                   <div className="text-sm mb-1">Max Size</div>
-                  <select
-                    className="input"
-                    value={maxSize}
-                    onChange={(e) => setMaxSize(e.target.value as any)}
-                  >
+                  <select className="input" value={maxSize} onChange={(e) => setMaxSize(e.target.value as any)}>
                     <option value="720p">720p (faster, smaller)</option>
                     <option value="1080p">1080p (sharper)</option>
                   </select>
@@ -221,7 +204,7 @@ export default function VideoTrimModal({
                 </button>
               </div>
               <p className="text-xs text-neutral-500">
-                Output: WebM (VP9, muted). Optimized for autoplay & small file size.
+                Output: WebM (VP9, muted). Optimized for autoplay & size.
               </p>
             </>
           )}
