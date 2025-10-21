@@ -167,16 +167,28 @@ export default function RequestDetail() {
     setBusy(true);
     try {
       const res = await generateContractPdf(req.id);
-      await postLicenseMessage(req.id, `Generated contract PDF.`, null);
-      setMsg("Draft PDF generated ✔️");
-      // you could open the URL:
-      if (res?.url) window.open(res.url, "_blank");
+      await postLicenseMessage(req.id, `Generated contract document.`, null);
+      setMsg("Draft document generated ✔️");
+
+      // ✅ Always render inline using returned HTML string
+      const w = window.open("", "_blank", "noopener,noreferrer");
+      if (w) {
+        w.document.open("text/html", "replace");
+        w.document.write(res.html || "<p>Empty document.</p>");
+        w.document.close();
+      }
+
+      // (optional) also keep the signed URL handy if you want a shareable link somewhere
+      // if (res?.url) console.log("Signed URL (optional):", res.url);
+
     } catch (e: any) {
-      setMsg(e?.message || "PDF generation failed");
+      setMsg(e?.message || "Document generation failed");
     } finally {
       setBusy(false);
     }
   }
+// ...
+
 
   async function onAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];

@@ -50,16 +50,19 @@ serve(async (req) => {
 
     const territory = Array.isArray(t.territory) ? t.territory.join(", ") : (t.territory ?? "");
     const media = (t.media || []).join(", ");
-    const fee = t.fee ? `${t.fee.amount.toLocaleString()} ${t.fee.currency}` : "—";
+    const fee = t.fee ? `${Number(t.fee.amount).toLocaleString()} ${t.fee.currency}` : "—";
 
-    // Simple, brand-forward contract HTML (black theme)
+    // HTML to render
     const html = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Artwork License Agreement</title>
 <style>
   *{box-sizing:border-box}
-  body{margin:0;background:#0b0b0b;color:#fafafa;font:14px/1.5 system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";padding:40px}
+  html,body{margin:0;background:#0b0b0b;color:#fafafa}
+  body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";padding:40px}
   .sheet{max-width:1120px;margin:0 auto;background:#0b0b0b;padding:40px;border-bottom:2px solid rgba(255,255,255,.25)}
   .hdr{display:flex;align-items:center;justify-content:space-between;padding-bottom:16px}
   .logo{height:24px;width:140px;background:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain;mask:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain}
@@ -103,26 +106,22 @@ serve(async (req) => {
 </body>
 </html>`;
 
+    // Upload to private bucket (audit trail)
     const path = `requests/${request_id}/contract.html`;
-
-    // Upload with the correct MIME so browsers can render it
-    const up = await admin.storage
-      .from("contracts")
-      .upload(path, new Blob([html], { type: "text/html; charset=utf-8" }), {
-        upsert: true,
-        contentType: "text/html; charset=utf-8",
-        cacheControl: "public, max-age=31536000",
-      });
+    const body = new TextEncoder().encode(html);
+    const up = await admin.storage.from("contracts").upload(path, body, {
+      upsert: true,
+      cacheControl: "public, max-age=31536000",
+      contentType: "text/html; charset=utf-8",
+    });
     if (up.error) return json(500, { error: up.error.message });
 
-    // IMPORTANT: keep bucket PRIVATE; issue a signed URL that forces inline render
-    const signed = await admin
-      .storage
-      .from("contracts")
-      .createSignedUrl(path, 60 * 60 * 24 * 7, { download: "" }); // download:"" => Content-Disposition: inline
-    if (signed.error) return json(500, { error: signed.error.message });
+    // Optional: signed URL (some Supabase deployments may still serve HTML as text/plain)
+    const signed = await admin.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+    const urlSigned = signed.data?.signedUrl ?? null;
 
-    return json(200, { path, url: signed.data.signedUrl });
+    // Return html string for guaranteed inline render on client
+    return json(200, { path, url: urlSigned, html });
   } catch (err) {
     console.error(err);
     return json(500, { error: (err as Error).message ?? "Unknown error" });
