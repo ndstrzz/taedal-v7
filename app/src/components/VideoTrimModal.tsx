@@ -1,7 +1,8 @@
 // app/src/components/VideoTrimModal.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { FFmpeg } from "@ffmpeg/ffmpeg";
-import { fetchFile, toBlobURL } from "@ffmpeg/util";
+import { fetchFile } from "@ffmpeg/util";
+import { getFFmpeg } from "../lib/ffmpegClient";
 
 type Props = {
   file: File;
@@ -9,7 +10,7 @@ type Props = {
   defaultMaxSeconds?: number;
   defaultMaxSize?: "720p" | "1080p";
   onCancel(): void;
-  onDone(blob: Blob): void; // processed video/webm
+  onDone(blob: Blob): void; // processed webm
 };
 
 /** Safe Uint8Array -> Blob */
@@ -18,48 +19,11 @@ function u8ToBlob(u8: Uint8Array, mime: string) {
   return new Blob([copy], { type: mime });
 }
 
-/** Load ffmpeg core (this build ships js+wasm only; no worker file). */
-async function loadFromBase(ffmpeg: FFmpeg, base: string) {
-  const coreJs = `${base}/ffmpeg-core.js`;
-  const coreWasm = `${base}/ffmpeg-core.wasm`;
-  const coreURL = await toBlobURL(coreJs, "text/javascript");
-  const wasmURL = await toBlobURL(coreWasm, "application/wasm");
-  await ffmpeg.load({ coreURL, wasmURL });
-}
-
-/** Try local /ffmpeg first, then CDNs. */
-async function loadFfmpeg(ffmpeg: FFmpeg, logs: string[]) {
-  const version = "0.12.4";
-  const localBase = `${import.meta.env.BASE_URL || "/"}ffmpeg`;
-  const cdnBases = [
-    `https://unpkg.com/@ffmpeg/core@${version}/dist/esm`,
-    `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${version}/dist/esm`,
-  ];
-
-  try {
-    await loadFromBase(ffmpeg, localBase);
-    logs.push("[ffmpeg] loaded from local /ffmpeg");
-    return true;
-  } catch {
-    logs.push("[ffmpeg] local load failed, falling back to CDN…");
-  }
-  for (const base of cdnBases) {
-    try {
-      await loadFromBase(ffmpeg, base);
-      logs.push(`[ffmpeg] loaded from CDN: ${base}`);
-      return true;
-    } catch {
-      logs.push(`[ffmpeg] CDN load failed: ${base}`);
-    }
-  }
-  return false;
-}
-
 export default function VideoTrimModal({
   file,
   aspect = 16 / 9,
   defaultMaxSeconds = 12,
-  defaultMaxSize = "1080p",
+  defaultMaxSize = "720p", // start faster by default; user can pick 1080p
   onCancel,
   onDone,
 }: Props) {
@@ -70,13 +34,14 @@ export default function VideoTrimModal({
   const [end, setEnd] = useState(defaultMaxSeconds);
   const [maxSize, setMaxSize] = useState<"720p" | "1080p">(defaultMaxSize);
   const [processing, setProcessing] = useState(false);
+  const [progress, setProgress] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [estText, setEstText] = useState<string>("");
 
   const blobUrl = useMemo(() => URL.createObjectURL(file), [file]);
   useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
 
-  // load metadata
+  // metadata
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -101,7 +66,7 @@ export default function VideoTrimModal({
   // estimate
   useEffect(() => {
     const secs = Math.max(0, end - start);
-    const bitrateMbps = maxSize === "1080p" ? 2.0 : 1.0;
+    const bitrateMbps = maxSize === "1080p" ? 2.0 : 0.9; // smaller for speed
     const bytes = bitrateMbps * 125000 * secs;
     const mb = (bytes / (1024 * 1024)).toFixed(1);
     setEstText(`${secs.toFixed(1)}s • ~${mb} MB`);
@@ -119,41 +84,77 @@ export default function VideoTrimModal({
   const processVideo = async () => {
     setProcessing(true);
     setErr(null);
+    setProgress(0);
 
     const logs: string[] = [];
     try {
-      const { FFmpeg } = await import("@ffmpeg/ffmpeg");
-      const ffmpeg: FFmpeg = new FFmpeg();
+      const ffmpeg = await getFFmpeg();
 
+      // hook progress/log once (no off() in API, so it's ok if it persists)
+      ffmpeg.on("progress", ({ progress }) => {
+        if (typeof progress === "number") setProgress(Math.max(0, Math.min(100, Math.round(progress * 100))));
+      });
       ffmpeg.on("log", ({ message }) => {
         if (message) logs.push(message);
       });
 
-      const ok = await loadFfmpeg(ffmpeg, logs);
-      if (!ok) {
-        throw new Error(
-          "FFmpeg core failed to load (both local and CDN). Ensure /public/ffmpeg has ffmpeg-core.js & ffmpeg-core.wasm, or allow CDN."
-        );
-      }
-
-      // Give the input a proper extension so demuxer detection is reliable.
+      // Write input as a real extension for reliable probing
       const inputName = "input.mp4";
       const data = await fetchFile(file);
+      try { await ffmpeg.deleteFile(inputName); } catch {}
       await ffmpeg.writeFile(inputName, data);
 
-      // Clamp times so we never exceed duration (common zero-frame cause).
+      // Clamp window
       const safeStart = Math.max(0, Math.min(start, Math.max(0, duration - 0.05)));
       const safeEnd = Math.max(safeStart + 0.1, Math.min(end, duration - 0.001));
       const secs = Math.max(0.1, safeEnd - safeStart);
 
-      // Prefer requested height, but we will downshift to 720 if OOM.
       const targetH = maxSize === "1080p" ? 1080 : 720;
-      const fallbackH = 720;
+      const fastBR = targetH === 1080 ? "1800k" : "900k";
 
-      // Try a sequence of variants (seek style × codec × size) until one works.
+      // Order matters: fastest/smallest first → escalate only if needed.
       const variants: Array<{ desc: string; args: string[] }> = [
+        // A) FAST PATH — VP8, 720/1080, keyframe seek, realtime deadline
         {
-          desc: "VP9, accurate seek, targetH",
+          desc: `VP8 realtime, keyframe seek, ${targetH}p`,
+          args: [
+            "-y",
+            "-ss", `${safeStart}`,
+            "-i", inputName,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx",
+            "-b:v", fastBR,
+            "-quality", "realtime",
+            "-cpu-used", "8",
+            "-an",
+            "out.webm",
+          ],
+        },
+        // B) ACCURATE SEEK — VP8, same size, good quality (slower than A)
+        {
+          desc: `VP8 good, accurate seek, ${targetH}p`,
+          args: [
+            "-y",
+            "-i", inputName,
+            "-ss", `${safeStart}`,
+            "-t", `${secs}`,
+            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libvpx",
+            "-b:v", fastBR,
+            "-quality", "good",
+            "-cpu-used", "4",
+            "-an",
+            "out.webm",
+          ],
+        },
+        // C) ACCURATE SEEK — VP9, better compression (slower)
+        {
+          desc: `VP9 good, accurate seek, ${targetH}p`,
           args: [
             "-y",
             "-i", inputName,
@@ -171,57 +172,21 @@ export default function VideoTrimModal({
             "out.webm",
           ],
         },
+        // D) SAFETY NET — VP8 @ 720p (if 1080p OOM)
         {
-          desc: "VP9, keyframe seek, targetH",
+          desc: `VP8 realtime, keyframe seek, 720p (fallback)`,
           args: [
             "-y",
             "-ss", `${safeStart}`,
             "-i", inputName,
             "-t", `${secs}`,
-            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
-            "-r", "30",
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libvpx-vp9",
-            "-b:v", targetH === 1080 ? "2000k" : "1000k",
-            "-row-mt", "1",
-            "-deadline", "good",
-            "-cpu-used", "4",
-            "-an",
-            "out.webm",
-          ],
-        },
-        {
-          desc: "VP8, accurate seek, targetH",
-          args: [
-            "-y",
-            "-i", inputName,
-            "-ss", `${safeStart}`,
-            "-t", `${secs}`,
-            "-vf", `scale=-2:${targetH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
+            "-vf", `scale=-2:720,pad=ceil(iw/2)*2:ceil(ih/2)*2`,
             "-r", "30",
             "-pix_fmt", "yuv420p",
             "-c:v", "libvpx",
-            "-b:v", targetH === 1080 ? "2000k" : "1000k",
-            "-quality", "good",
-            "-cpu-used", "4",
-            "-an",
-            "out.webm",
-          ],
-        },
-        {
-          desc: "VP8, accurate seek, fallbackH=720",
-          args: [
-            "-y",
-            "-i", inputName,
-            "-ss", `${safeStart}`,
-            "-t", `${secs}`,
-            "-vf", `scale=-2:${fallbackH},pad=ceil(iw/2)*2:ceil(ih/2)*2`,
-            "-r", "30",
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libvpx",
-            "-b:v", "1000k",
-            "-quality", "good",
-            "-cpu-used", "4",
+            "-b:v", "900k",
+            "-quality", "realtime",
+            "-cpu-used", "8",
             "-an",
             "out.webm",
           ],
@@ -230,32 +195,25 @@ export default function VideoTrimModal({
 
       let out: Uint8Array | null = null;
       let lastErr: unknown = null;
-
       for (const v of variants) {
         try {
           try { await ffmpeg.deleteFile("out.webm"); } catch {}
-          logs.push(`[ffmpeg] trying variant: ${v.desc}`);
           out = await run(ffmpeg, v.args);
-          logs.push(`[ffmpeg] success with: ${v.desc}`);
           break;
         } catch (e) {
           lastErr = e;
-          logs.push(`[ffmpeg] variant failed (${v.desc}): ${e instanceof Error ? e.message : String(e)}`);
-          // If memory OOB happened, immediately drop to the 720p VP8 variant next.
+          // continue to next variant
         }
       }
-
-      if (!out) {
-        throw lastErr || new Error("All encoding variants failed.");
-      }
+      if (!out) throw lastErr || new Error("All encoding variants failed.");
 
       onDone(u8ToBlob(out, "video/webm"));
     } catch (e: any) {
-      const last = logs.slice(-40).join("\n");
       const msg = e?.message || "Failed to process video";
-      setErr(last ? `${msg}\n\n${last}` : msg);
+      setErr(msg);
     } finally {
       setProcessing(false);
+      setProgress(null);
     }
   };
 
@@ -271,10 +229,7 @@ export default function VideoTrimModal({
 
         <div className="p-4 space-y-4">
           <div className="relative rounded-lg overflow-hidden bg-black">
-            <div
-              className="absolute inset-0 pointer-events-none"
-              style={{ boxShadow: "inset 0 0 0 9999px rgba(0,0,0,0.15)" }}
-            />
+            <div className="absolute inset-0 pointer-events-none" style={{ boxShadow: "inset 0 0 0 9999px rgba(0,0,0,0.15)" }}/>
             <video ref={videoRef} src={blobUrl} className="w-full max-h-[50vh] object-contain" controls />
           </div>
 
@@ -331,13 +286,13 @@ export default function VideoTrimModal({
 
               <div className="flex items-center gap-2">
                 <button className="btn" disabled={processing} onClick={processVideo}>
-                  {processing ? "Processing…" : "Process & Use"}
+                  {processing ? (progress !== null ? `Processing… ${progress}%` : "Processing…") : "Process & Use"}
                 </button>
                 <button className="btn bg-neutral-800" disabled={processing} onClick={onCancel}>
                   Cancel
                 </button>
               </div>
-              <p className="text-xs text-neutral-500">Output: WebM (VP9/VP8, muted). Optimized for autoplay & size.</p>
+              <p className="text-xs text-neutral-500">Output: WebM (VP8/VP9, muted). Optimized for autoplay & size.</p>
             </>
           )}
         </div>
