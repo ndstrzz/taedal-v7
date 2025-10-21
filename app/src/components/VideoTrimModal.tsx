@@ -14,10 +14,49 @@ type Props = {
   onDone(blob: Blob): void; // processed video/webm
 };
 
-/** Clone Uint8Array and wrap as Blob (keeps types simple). */
+/** Clone Uint8Array and wrap as Blob (keeps TS simple; no ArrayBuffer unions). */
 function u8ToBlob(u8: Uint8Array, mime: string) {
   const copy = u8.slice(0);
   return new Blob([copy], { type: mime });
+}
+
+/** Try local /ffmpeg first, then CDN. Returns true if loaded. */
+async function loadFfmpeg(ffmpeg: FFmpeg, logs: string[]) {
+  const version = "0.12.4"; // safe tested version of @ffmpeg/core
+  const localBase = `${import.meta.env.BASE_URL || "/"}ffmpeg`;
+
+  // Helper to load with specific base
+  const tryLoad = async (base: string) => {
+    const coreJs = `${base}/ffmpeg-core.js`;
+    const coreWasm = `${base}/ffmpeg-core.wasm`;
+    const coreWorker = `${base}/ffmpeg-core.worker.js`;
+    // Use blob URLs so COOP/COEP not required
+    await ffmpeg.load({
+      coreURL: await toBlobURL(coreJs, "text/javascript"),
+      wasmURL: await toBlobURL(coreWasm, "application/wasm"),
+      workerURL: await toBlobURL(coreWorker, "text/javascript"),
+    });
+  };
+
+  // 1) Local self-hosted (public/ffmpeg/*)
+  try {
+    await tryLoad(localBase);
+    logs.push("[ffmpeg] loaded from local /ffmpeg");
+    return true;
+  } catch (e) {
+    logs.push("[ffmpeg] local load failed, falling back to CDN…");
+  }
+
+  // 2) CDN fallback (unpkg); you can swap to jsDelivr if you prefer
+  const cdnBase = `https://unpkg.com/@ffmpeg/core@${version}/dist/esm`;
+  try {
+    await tryLoad(cdnBase);
+    logs.push("[ffmpeg] loaded from CDN");
+    return true;
+  } catch (e) {
+    logs.push("[ffmpeg] CDN load failed");
+    return false;
+  }
 }
 
 export default function VideoTrimModal({
@@ -41,7 +80,7 @@ export default function VideoTrimModal({
   const blobUrl = useMemo(() => URL.createObjectURL(file), [file]);
   useEffect(() => () => URL.revokeObjectURL(blobUrl), [blobUrl]);
 
-  // Load metadata
+  // Load metadata for scrubbers
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
@@ -63,11 +102,11 @@ export default function VideoTrimModal({
     return `${m}:${ss.toString().padStart(2, "0")}`;
   };
 
-  // Rough output estimate
+  // Rough output estimate for UX
   useEffect(() => {
     const secs = Math.max(0, end - start);
-    const bitrateMbps = maxSize === "1080p" ? 2.0 : 1.0;
-    const bytes = bitrateMbps * 125000 * secs;
+    const bitrateMbps = maxSize === "1080p" ? 2.0 : 1.0; // conservative
+    const bytes = bitrateMbps * 125000 * secs; // Mbps -> bytes/sec
     const mb = (bytes / (1024 * 1024)).toFixed(1);
     setEstText(`${secs.toFixed(1)}s • ~${mb} MB`);
   }, [start, end, maxSize]);
@@ -85,33 +124,41 @@ export default function VideoTrimModal({
         if (message) logs.push(message);
       });
 
-      // Load ffmpeg core from CDN via blob URLs (works in Vite build & dev)
-      const version = "0.12.4"; // safe, tested
-      const baseURL = `https://unpkg.com/@ffmpeg/core@${version}/dist/esm`;
-      await ffmpeg.load({
-        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, "text/javascript"),
-        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, "application/wasm"),
-        workerURL: await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, "text/javascript"),
-      });
+      const ok = await loadFfmpeg(ffmpeg, logs);
+      if (!ok) {
+        throw new Error(
+          "FFmpeg core failed to load (both local and CDN). Ensure /public/ffmpeg has ffmpeg-core.js/wasm/worker.js, or allow CDN."
+        );
+      }
 
+      // Write input
       const data = await fetchFile(file); // Uint8Array
       await ffmpeg.writeFile("in", data);
 
+      // Trim + scale
       const secs = Math.max(0, Math.min(end, duration) - Math.max(start, 0));
       const t = Math.max(0.1, secs);
       const outH = maxSize === "1080p" ? 1080 : 720;
 
       const args = [
         "-y",
-        "-ss", `${start}`,
-        "-i", "in",
-        "-t", `${t}`,
-        "-vf", `scale=-2:${outH}`,
-        "-c:v", "libvpx-vp9",
-        "-b:v", outH === 1080 ? "2000k" : "1000k",
+        "-ss",
+        `${start}`,
+        "-i",
+        "in",
+        "-t",
+        `${t}`,
+        "-vf",
+        `scale=-2:${outH}`,
+        "-c:v",
+        "libvpx-vp9",
+        "-b:v",
+        outH === 1080 ? "2000k" : "1000k",
         "-an",
-        "-deadline", "good",
-        "-cpu-used", "4",
+        "-deadline",
+        "good",
+        "-cpu-used",
+        "4",
         "out.webm",
       ];
 
@@ -121,8 +168,9 @@ export default function VideoTrimModal({
       const blob = u8ToBlob(outU8, "video/webm");
       onDone(blob);
     } catch (e: any) {
-      const last = logs.slice(-8).join("\n");
-      setErr((e?.message || "Failed to process video") + (last ? `\n\n${last}` : ""));
+      const last = logs.slice(-10).join("\n");
+      const msg = e?.message || "Failed to process video";
+      setErr(last ? `${msg}\n\n${last}` : msg);
     } finally {
       setProcessing(false);
     }
@@ -144,7 +192,12 @@ export default function VideoTrimModal({
               className="absolute inset-0 pointer-events-none"
               style={{ boxShadow: "inset 0 0 0 9999px rgba(0,0,0,0.15)" }}
             />
-            <video ref={videoRef} src={blobUrl} className="w-full max-h-[50vh] object-contain" controls />
+            <video
+              ref={videoRef}
+              src={blobUrl}
+              className="w-full max-h-[50vh] object-contain"
+              controls
+            />
           </div>
 
           {loadingMeta ? (
@@ -161,7 +214,9 @@ export default function VideoTrimModal({
                     step={0.1}
                     className="w-full"
                     value={start}
-                    onChange={(e) => setStart(Math.min(Number(e.target.value), end - 0.1))}
+                    onChange={(e) =>
+                      setStart(Math.min(Number(e.target.value), end - 0.1))
+                    }
                   />
                 </label>
                 <label className="block">
@@ -173,7 +228,9 @@ export default function VideoTrimModal({
                     step={0.1}
                     className="w-full"
                     value={end}
-                    onChange={(e) => setEnd(Math.max(Number(e.target.value), start + 0.1))}
+                    onChange={(e) =>
+                      setEnd(Math.max(Number(e.target.value), start + 0.1))
+                    }
                   />
                 </label>
               </div>
@@ -181,14 +238,20 @@ export default function VideoTrimModal({
               <div className="grid sm:grid-cols-3 gap-3">
                 <label className="block">
                   <div className="text-sm mb-1">Max Size</div>
-                  <select className="input" value={maxSize} onChange={(e) => setMaxSize(e.target.value as any)}>
+                  <select
+                    className="input"
+                    value={maxSize}
+                    onChange={(e) => setMaxSize(e.target.value as any)}
+                  >
                     <option value="720p">720p (faster, smaller)</option>
                     <option value="1080p">1080p (sharper)</option>
                   </select>
                 </label>
                 <div className="block">
                   <div className="text-sm mb-1">Clip length</div>
-                  <div className="input">{(Math.max(0, end - start)).toFixed(1)} s</div>
+                  <div className="input">
+                    {(Math.max(0, end - start)).toFixed(1)} s
+                  </div>
                 </div>
                 <div className="block">
                   <div className="text-sm mb-1">Estimate</div>
@@ -196,7 +259,9 @@ export default function VideoTrimModal({
                 </div>
               </div>
 
-              {err && <pre className="text-amber-300 text-xs whitespace-pre-wrap">{err}</pre>}
+              {err && (
+                <pre className="text-amber-300 text-xs whitespace-pre-wrap">{err}</pre>
+              )}
 
               <div className="flex items-center gap-2">
                 <button className="btn" disabled={processing} onClick={processVideo}>
@@ -206,7 +271,9 @@ export default function VideoTrimModal({
                   Cancel
                 </button>
               </div>
-              <p className="text-xs text-neutral-500">Output: WebM (VP9, muted). Optimized for autoplay & size.</p>
+              <p className="text-xs text-neutral-500">
+                Output: WebM (VP9, muted). Optimized for autoplay & size.
+              </p>
             </>
           )}
         </div>
