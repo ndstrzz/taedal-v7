@@ -3,8 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
-  getRequestWithThread, postLicenseMessage, acceptPatch, acceptOffer, updateLicenseRequest,
-  diffTerms, mergeTerms, LICENSE_TEMPLATES, listApprovals, upsertApproval,
+  getRequestWithThread, postLicenseMessage, acceptPatch, acceptOffer,
   type LicenseRequest, type LicenseThreadMsg, type LicenseTerms,
   stringifyTerritory, formatMoney, generateContractPdf, uploadExecutedPdf, uploadAttachment
 } from "../../lib/licensing";
@@ -41,14 +40,15 @@ export default function RequestDetail() {
   const [art, setArt] = useState<Artwork | null>(null);
   const [requester, setRequester] = useState<Profile | null>(null);
   const [owner, setOwner] = useState<Profile | null>(null);
-  const [approvals, setApprovals] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // NEW: edit modal state
   const [editOpen, setEditOpen] = useState(false);
   const [draft, setDraft] = useState<Partial<LicenseTerms>>({});
+
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const iAmOwner = useMemo(() => me && req && req.owner_id === me, [me, req]);
@@ -71,17 +71,15 @@ export default function RequestDetail() {
         setReq(request);
         setMsgs(messages);
 
-        const [a, rq, ow, app] = await Promise.all([
+        const [a, rq, ow] = await Promise.all([
           supabase.from("artworks").select("id,title,image_url").eq("id", request.artwork_id).maybeSingle(),
           supabase.from("profiles").select("id,display_name,username,avatar_url").eq("id", request.requester_id).maybeSingle(),
           supabase.from("profiles").select("id,display_name,username,avatar_url").eq("id", request.owner_id).maybeSingle(),
-          listApprovals(request.id),
         ]);
         if (!alive) return;
         setArt(a.data as any);
         setRequester(rq.data as any);
         setOwner(ow.data as any);
-        setApprovals(app);
       } catch (e: any) {
         setMsg(e?.message || "Failed to load request.");
       } finally {
@@ -133,6 +131,7 @@ export default function RequestDetail() {
   async function onAcceptOffer() {
     setBusy(true);
     try {
+      // Owner accepts final offer → move to accepted
       const updated = await acceptOffer(id!);
       setReq(updated);
       await postLicenseMessage(id!, "Offer accepted. Contract finalized.", null);
@@ -165,7 +164,7 @@ export default function RequestDetail() {
   async function onGeneratePdf() {
     if (!req) return;
 
-    // 1) Open a tab immediately (user-gesture)
+    // Open a tab immediately to satisfy popup blockers
     const w = window.open("about:blank", "_blank");
     if (!w) {
       setMsg("Please allow pop-ups to preview the contract.");
@@ -192,7 +191,6 @@ export default function RequestDetail() {
       const html = res?.html || "<p>Empty document.</p>";
       const blob = new Blob([html], { type: "text/html;charset=utf-8" });
       const url = URL.createObjectURL(blob);
-
       w.location.replace(url);
     } catch (e: any) {
       setMsg(e?.message || "Document generation failed");
@@ -233,7 +231,6 @@ export default function RequestDetail() {
 
   const working = req.requested;
 
-  /* ------------------------------ UI ------------------------------ */
   return (
     <div className="fixed inset-0 z-[60]">
       <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => nav("/contracts")} />
@@ -263,7 +260,31 @@ export default function RequestDetail() {
           {/* LEFT: Details + actions */}
           <div className="overflow-y-auto p-4 space-y-3 border-r border-white/10">
             <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4 space-y-2">
-              <div className="text-sm font-semibold mb-2">Contract Details</div>
+              <div className="flex items-center justify-between">
+                <div className="text-sm font-semibold mb-2">Contract Details</div>
+                {/* NEW: propose edits */}
+                <button
+                  className="text-xs px-2 py-1 rounded-lg bg-white/10 hover:bg-white/20"
+                  onClick={() => {
+                    // seed the draft with current terms
+                    setDraft({
+                      purpose: working.purpose,
+                      term_months: working.term_months,
+                      territory: working.territory,
+                      media: [...(working.media || [])],
+                      exclusivity: working.exclusivity,
+                      fee: working.fee ? { ...working.fee } : undefined,
+                      credit_required: working.credit_required,
+                      credit_line: (working as any).credit_line,
+                      deliverables: working.deliverables,
+                      usage_notes: working.usage_notes,
+                    });
+                    setEditOpen(true);
+                  }}
+                >
+                  Propose edits
+                </button>
+              </div>
 
               {/* Basics */}
               <FieldRow label="Purpose">{working.purpose}</FieldRow>
@@ -276,150 +297,8 @@ export default function RequestDetail() {
               {working.usage_notes && <FieldRow label="Notes">{working.usage_notes}</FieldRow>}
               {typeof working.credit_required === "boolean" && (
                 <FieldRow label="Attribution">
-                  {working.credit_required ? `yes${working.credit_line ? ` — ${working.credit_line}` : ""}` : "no"}
+                  {working.credit_required ? `yes${(working as any).credit_line ? ` — ${(working as any).credit_line}` : ""}` : "no"}
                 </FieldRow>
-              )}
-              {working.start_date && <FieldRow label="Start date">{working.start_date}</FieldRow>}
-              {working.effective_date && <FieldRow label="Effective date">{working.effective_date}</FieldRow>}
-
-              {/* Payment & Admin */}
-              {(working.payment_terms || working.tax || working.invoicing) && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">Payment & Admin</div>
-                  {working.payment_terms && (
-                    <FieldRow label="Payment">
-                      Net {working.payment_terms.due_days}
-                      {working.payment_terms.late_fee_pct ? ` · Late fee ${working.payment_terms.late_fee_pct}%` : ""}
-                      {working.payment_terms.method ? ` · ${working.payment_terms.method}` : ""}
-                    </FieldRow>
-                  )}
-                  {working.tax && (
-                    <FieldRow label="Taxes">
-                      {working.tax.responsible_party} responsible
-                      {working.tax.vat_registered ? " · VAT registered" : ""}
-                    </FieldRow>
-                  )}
-                  {working.invoicing && (
-                    <FieldRow label="Invoicing">
-                      {working.invoicing.entity_name}
-                      {working.invoicing.email ? ` · ${working.invoicing.email}` : ""}
-                      {working.invoicing.address ? ` · ${working.invoicing.address}` : ""}
-                    </FieldRow>
-                  )}
-                </>
-              )}
-
-              {/* Brand & Approvals */}
-              {(working.brand_guidelines_url || working.preapproval_required != null || working.approval_sla_days || working.prohibited_uses || working.usage_restrictions || working.delivery_specs) && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">Brand & Approvals</div>
-                  {working.brand_guidelines_url && <FieldRow label="Guidelines">{working.brand_guidelines_url}</FieldRow>}
-                  {working.preapproval_required != null && (
-                    <FieldRow label="Pre-approval">
-                      {working.preapproval_required ? "yes" : "no"}
-                      {working.approval_sla_days ? ` · SLA ${working.approval_sla_days} days` : ""}
-                    </FieldRow>
-                  )}
-                  {working.prohibited_uses && working.prohibited_uses.length > 0 && (
-                    <FieldRow label="Prohibited">{working.prohibited_uses.join(", ")}</FieldRow>
-                  )}
-                  {working.usage_restrictions && working.usage_restrictions.length > 0 && (
-                    <FieldRow label="Restrictions">{working.usage_restrictions.join(", ")}</FieldRow>
-                  )}
-                  {working.delivery_specs && (
-                    <FieldRow label="Delivery">
-                      {[
-                        working.delivery_specs.format,
-                        (working.delivery_specs.width && working.delivery_specs.height) ? `${working.delivery_specs.width}×${working.delivery_specs.height}` : null,
-                        working.delivery_specs.color,
-                        working.delivery_specs.dpi ? `${working.delivery_specs.dpi} dpi` : null
-                      ].filter(Boolean).join(" · ")}
-                    </FieldRow>
-                  )}
-                </>
-              )}
-
-              {/* Legal */}
-              {(working.confidentiality_term_months || working.liability_cap || working.sublicense != null || working.derivative_edits || working.injunctive_relief) && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">Legal</div>
-                  {working.sublicense != null && <FieldRow label="Sublicense">{working.sublicense ? "yes" : "no"}</FieldRow>}
-                  {working.derivative_edits && working.derivative_edits.length > 0 && (
-                    <FieldRow label="Edits">{working.derivative_edits.join(", ")}</FieldRow>
-                  )}
-                  {working.confidentiality_term_months && (
-                    <FieldRow label="Confidentiality">{working.confidentiality_term_months} months</FieldRow>
-                  )}
-                  {working.liability_cap && (
-                    <FieldRow label="Liability cap">
-                      {working.liability_cap.type === "fees_paid"
-                        ? "fees paid"
-                        : `USD ${Number(working.liability_cap.amount!).toLocaleString()}`}
-                    </FieldRow>
-                  )}
-                  {working.injunctive_relief && <FieldRow label="Equitable relief">Injunctive relief available</FieldRow>}
-                </>
-              )}
-
-              {/* Termination */}
-              {working.termination && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">Termination</div>
-                  {working.termination.for_convenience != null && (
-                    <FieldRow label="For convenience">{working.termination.for_convenience ? "yes" : "no"}</FieldRow>
-                  )}
-                  {working.termination.notice_days && <FieldRow label="Notice">{working.termination.notice_days} days</FieldRow>}
-                  {working.termination.breach_cure_days && (
-                    <FieldRow label="Cure period">{working.termination.breach_cure_days} days</FieldRow>
-                  )}
-                  {working.termination.takedown_days && (
-                    <FieldRow label="Post-term takedown">{working.termination.takedown_days} days</FieldRow>
-                  )}
-                </>
-              )}
-
-              {/* Disputes */}
-              {working.disputes && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">Governing Law & Disputes</div>
-                  <FieldRow label="Framework">
-                    {working.disputes.mode === "courts"
-                      ? `${working.disputes.law}${working.disputes.venue ? `, ${working.disputes.venue}` : ""}`
-                      : `${working.disputes.arb_rules || "Arbitration"} — seat ${working.disputes.seat || "TBD"} — law ${working.disputes.law}`}
-                  </FieldRow>
-                </>
-              )}
-
-              {/* On-chain */}
-              {(working.onchain || working.royalties || working.metadata) && (
-                <>
-                  <div className="h-px bg-white/10 my-2" />
-                  <div className="text-xs uppercase tracking-wide text-white/50">On-chain</div>
-                  {working.onchain?.chain && <FieldRow label="Chain">{working.onchain.chain}</FieldRow>}
-                  {working.onchain?.contract_address && <FieldRow label="Contract">{working.onchain.contract_address}</FieldRow>}
-                  {working.onchain?.token_id && <FieldRow label="Token ID">{working.onchain.token_id}</FieldRow>}
-                  {working.onchain?.pay_gas_party && <FieldRow label="Gas">{working.onchain.pay_gas_party} pays gas</FieldRow>}
-                  {working.royalties && (
-                    <FieldRow label="Royalties">
-                      {(working.royalties.rate_bps / 100).toFixed(2)}%
-                      {working.royalties.receiver ? ` · ${working.royalties.receiver}` : ""}
-                    </FieldRow>
-                  )}
-                  {working.metadata && (
-                    <FieldRow label="Storage">
-                      {[
-                        working.metadata.image_cid ? `image ${working.metadata.image_cid}` : null,
-                        working.metadata.metadata_cid ? `meta ${working.metadata.metadata_cid}` : null,
-                        working.metadata.mutable != null ? `mutable ${working.metadata.mutable ? "yes" : "no"}` : null
-                      ].filter(Boolean).join(" · ")}
-                    </FieldRow>
-                  )}
-                </>
               )}
 
               <div className="text-[12px] text-white/60">Status: <span className="capitalize">{req.status}</span></div>
@@ -483,11 +362,202 @@ export default function RequestDetail() {
           />
         </div>
       </div>
+
+      {/* EDIT TERMS MODAL */}
+      {editOpen && (
+        <EditTermsModal
+          initial={draft}
+          onClose={() => setEditOpen(false)}
+          onSubmit={async (patch) => {
+            setEditOpen(false);
+            await send("Proposed changes.", patch);
+          }}
+        />
+      )}
+
       {msg && (
         <div className="absolute left-1/2 -translate-x-1/2 bottom-4 text-sm px-3 py-2 rounded-lg bg-amber-500/20 border border-amber-500/30">
           {msg}
         </div>
       )}
+    </div>
+  );
+}
+
+/* ------------------------------ Edit Modal ------------------------------ */
+
+function EditTermsModal({
+  initial,
+  onClose,
+  onSubmit,
+}: {
+  initial: Partial<LicenseTerms>;
+  onClose: () => void;
+  onSubmit: (patch: Partial<LicenseTerms>) => void | Promise<void>;
+}) {
+  const [form, setForm] = useState<Partial<LicenseTerms>>(initial);
+
+  function set<K extends keyof LicenseTerms>(k: K, v: LicenseTerms[K]) {
+    setForm((f) => ({ ...f, [k]: v }));
+  }
+  const parseList = (s: string) =>
+    s.split(",").map((x) => x.trim()).filter(Boolean);
+
+  const [feeAmount, setFeeAmount] = useState<string>(
+    initial.fee?.amount != null ? String(initial.fee.amount) : ""
+  );
+  const [feeCurrency, setFeeCurrency] = useState<string>(initial.fee?.currency || "USD");
+
+  return (
+    <div className="fixed inset-0 z-[70]">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 m-auto max-w-[720px] w-[94vw] max-h-[88vh] overflow-auto rounded-2xl border border-white/15 bg-neutral-950 p-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-lg font-semibold">Propose edits</div>
+          <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10">✕</button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <label className="text-sm">
+            <div className="text-white/60 mb-1">Purpose</div>
+            <input
+              className="input w-full"
+              value={form.purpose || ""}
+              onChange={(e) => set("purpose", e.target.value)}
+            />
+          </label>
+
+          <label className="text-sm">
+            <div className="text-white/60 mb-1">Term (months)</div>
+            <input
+              type="number"
+              className="input w-full"
+              value={form.term_months ?? ""}
+              onChange={(e) => set("term_months", Math.max(0, Number(e.target.value || 0)) as any)}
+            />
+          </label>
+
+          <label className="text-sm md:col-span-2">
+            <div className="text-white/60 mb-1">Territory (comma-separated for multiple)</div>
+            <input
+              className="input w-full"
+              value={
+                Array.isArray(form.territory)
+                  ? form.territory.join(", ")
+                  : (form.territory ?? "")
+              }
+              onChange={(e) => {
+                const raw = e.target.value;
+                set("territory", raw.includes(",") ? (parseList(raw) as any) : (raw as any));
+              }}
+            />
+          </label>
+
+          <label className="text-sm md:col-span-2">
+            <div className="text-white/60 mb-1">Media (comma-separated)</div>
+            <input
+              className="input w-full"
+              value={(form.media || []).join(", ")}
+              onChange={(e) => set("media", parseList(e.target.value) as any)}
+            />
+          </label>
+
+          <label className="text-sm">
+            <div className="text-white/60 mb-1">Exclusivity</div>
+            <select
+              className="input w-full"
+              value={form.exclusivity || "non-exclusive"}
+              onChange={(e) => set("exclusivity", e.target.value as any)}
+            >
+              <option value="exclusive">exclusive</option>
+              <option value="non-exclusive">non-exclusive</option>
+              <option value="category-exclusive">category-exclusive</option>
+            </select>
+          </label>
+
+          <div className="text-sm grid grid-cols-[1fr_auto] gap-2">
+            <label>
+              <div className="text-white/60 mb-1">Fee amount</div>
+              <input
+                className="input w-full"
+                inputMode="decimal"
+                value={feeAmount}
+                onChange={(e) => setFeeAmount(e.target.value)}
+              />
+            </label>
+            <label>
+              <div className="text-white/60 mb-1">Currency</div>
+              <input
+                className="input w-24"
+                value={feeCurrency}
+                onChange={(e) => setFeeCurrency(e.target.value.toUpperCase())}
+              />
+            </label>
+          </div>
+
+          <label className="text-sm md:col-span-2 flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={!!form.credit_required}
+              onChange={(e) => set("credit_required", e.target.checked as any)}
+            />
+            <span>Attribution required</span>
+          </label>
+
+          {form.credit_required && (
+            <label className="text-sm md:col-span-2">
+              <div className="text-white/60 mb-1">Credit line</div>
+              <input
+                className="input w-full"
+                value={(form as any).credit_line || ""}
+                onChange={(e) => set("credit_line" as any, e.target.value as any)}
+              />
+            </label>
+          )}
+
+          <label className="text-sm md:col-span-2">
+            <div className="text-white/60 mb-1">Deliverables</div>
+            <textarea
+              className="input w-full"
+              rows={3}
+              value={form.deliverables || ""}
+              onChange={(e) => set("deliverables", e.target.value)}
+            />
+          </label>
+
+          <label className="text-sm md:col-span-2">
+            <div className="text-white/60 mb-1">Notes</div>
+            <textarea
+              className="input w-full"
+              rows={3}
+              value={form.usage_notes || ""}
+              onChange={(e) => set("usage_notes", e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button className="px-3 py-2 rounded-lg bg-white/10 hover:bg-white/20" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="px-3 py-2 rounded-lg bg-white text-black hover:bg-white/90"
+            onClick={() => {
+              const patch: Partial<LicenseTerms> = { ...form };
+              // normalize fee
+              if (feeAmount || feeCurrency) {
+                const amt = Number(feeAmount);
+                patch.fee = isFinite(amt) && amt > 0
+                  ? { amount: amt, currency: feeCurrency || "USD" }
+                  : undefined;
+              }
+              onSubmit(patch);
+            }}
+          >
+            Submit proposal
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -511,7 +581,6 @@ function ChatPane({
           const author = profileOf(m.author_id);
           const working = req.requested;
 
-          const patchedView = m.patch ? { ...working, ...m.patch } : null;
           const diffs = m.patch ? ((): any[] => {
             const out: any[] = [];
             const keys = Object.keys(m.patch!);
