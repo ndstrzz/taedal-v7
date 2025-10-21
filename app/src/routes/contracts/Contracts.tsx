@@ -1,6 +1,6 @@
 // app/src/routes/contracts/Contracts.tsx
 import { useEffect, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import type { LicenseRequest, LicenseTerms } from "../../lib/licensing";
 
@@ -9,6 +9,18 @@ type Row = LicenseRequest & {
   requester?: { id: string; display_name: string | null; username: string | null; avatar_url: string | null } | null;
   owner?: { id: string; display_name: string | null; username: string | null; avatar_url: string | null } | null;
 };
+
+const nameOf = (p?: Row["owner"]) => p?.display_name || p?.username || (p?.id ? p.id.slice(0, 6) : "—");
+
+function Avatar({ url, name }: { url?: string | null; name: string }) {
+  return url ? (
+    <img src={url} alt={name} className="h-6 w-6 rounded-full object-cover ring-1 ring-white/10" />
+  ) : (
+    <div className="h-6 w-6 rounded-full bg-white/10 grid place-items-center text-[10px]">
+      {(name[0] || "•").toUpperCase()}
+    </div>
+  );
+}
 
 function RowCard({ r, me }: { r: Row; me: string }) {
   const otherParty = r.owner_id === me ? r.requester : r.owner;
@@ -20,8 +32,8 @@ function RowCard({ r, me }: { r: Row; me: string }) {
       to={`/contracts/${r.id}`}
       className="block rounded-2xl border border-white/10 bg-white/[0.04] hover:border-white/30 transition overflow-hidden"
     >
-      <div className="flex gap-3 p-3">
-        <div className="h-16 w-16 rounded-lg bg-neutral-900 overflow-hidden shrink-0">
+      <div className="flex gap-3 p-3 items-center">
+        <div className="h-14 w-14 rounded-lg bg-neutral-900 overflow-hidden shrink-0">
           {r.artworks?.image_url ? (
             <img src={r.artworks.image_url} className="h-full w-full object-cover" />
           ) : (
@@ -30,9 +42,9 @@ function RowCard({ r, me }: { r: Row; me: string }) {
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded-full bg-white/10">{role}</span>
-            <span className="text-xs px-2 py-0.5 rounded-full bg-white/10">{r.status}</span>
+          <div className="flex items-center gap-2 text-xs">
+            <span className="px-2 py-0.5 rounded-full bg-white/10">{role}</span>
+            <span className="px-2 py-0.5 rounded-full bg-white/10">{r.status}</span>
           </div>
           <div className="mt-1 font-medium truncate">
             {r.artworks?.title || "Untitled"} • {terms.purpose}
@@ -42,12 +54,13 @@ function RowCard({ r, me }: { r: Row; me: string }) {
           </div>
         </div>
 
-        <div className="w-36 text-right text-sm">
-          <div className="text-white">{terms.fee?.amount ? `${terms.fee.amount} ${terms.fee.currency}` : "—"}</div>
-          <div className="text-white/60 truncate">
-            {otherParty
-              ? otherParty.display_name || otherParty.username || otherParty.id.slice(0, 6)
-              : "—"}
+        <div className="w-44 text-right text-sm">
+          <div className="flex items-center justify-end gap-2">
+            <div className="text-white/80 truncate">{nameOf(otherParty)}</div>
+            <Avatar url={otherParty?.avatar_url} name={nameOf(otherParty)} />
+          </div>
+          <div className="text-white/60">
+            {terms.fee?.amount ? `${terms.fee.amount} ${terms.fee.currency}` : "—"}
           </div>
           <div className="text-white/40 text-xs">{new Date(r.updated_at).toLocaleString()}</div>
         </div>
@@ -61,7 +74,6 @@ export default function Contracts() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
-  const nav = useNavigate();
 
   useEffect(() => {
     let alive = true;
@@ -75,7 +87,6 @@ export default function Contracts() {
         if (!alive) return;
         setMe(uid);
 
-        // pull requests where I'm requester or owner
         const { data, error } = await supabase
           .from("license_requests")
           .select(`
@@ -97,7 +108,9 @@ export default function Contracts() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   return (
@@ -121,7 +134,9 @@ export default function Contracts() {
         </div>
       ) : (
         <div className="mt-4 grid gap-3">
-          {rows.map((r) => <RowCard key={r.id} r={r} me={me!} />)}
+          {rows.map((r) => (
+            <RowCard key={r.id} r={r} me={me!} />
+          ))}
         </div>
       )}
     </div>
