@@ -18,6 +18,12 @@ type Profile = {
   telegram?: string | null;
 };
 
+function isVideoUrl(u?: string | null) {
+  if (!u) return false;
+  const qless = u.split("?")[0].toLowerCase();
+  return qless.endsWith(".webm") || qless.endsWith(".mp4") || qless.endsWith(".mov");
+}
+
 export default function PublicProfile() {
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
@@ -118,7 +124,7 @@ export default function PublicProfile() {
       .from("ownerships")
       .select("artwork_id")
       .eq("owner_id", profileId)
-      .eq("hidden", true)          // ← no quantity filter; some rows may have nulls
+      .eq("hidden", true)
       .in("artwork_id", ids);
     if (hErr) throw hErr;
 
@@ -141,7 +147,7 @@ export default function PublicProfile() {
       `
       )
       .eq("owner_id", profileId)
-      .eq("hidden", false)  // only visible
+      .eq("hidden", false)
       .order("updated_at", { ascending: false })
       .limit(200);
     if (error) throw error;
@@ -155,9 +161,16 @@ export default function PublicProfile() {
         .filter(Boolean)
         .map((a: any) => [a.id, a])
     );
-    setPurchased(ids.map((id) => map.get(id)).filter(Boolean).map((a: any) => ({
-      id: a.id, title: a.title, image_url: a.image_url
-    })));
+    setPurchased(
+      ids
+        .map((id) => map.get(id))
+        .filter(Boolean)
+        .map((a: any) => ({
+          id: a.id,
+          title: a.title,
+          image_url: a.image_url,
+        }))
+    );
   }
 
   async function loadHidden(profileId: string) {
@@ -199,7 +212,6 @@ export default function PublicProfile() {
         } else if (activeTab === "purchased") {
           await loadPurchased(p.id);
         } else {
-          // Hidden only makes sense for owner view (RLS will enforce anyway)
           await loadHidden(p.id);
         }
       } catch (e: any) {
@@ -224,31 +236,57 @@ export default function PublicProfile() {
   /* derived */
   const isMe = useMemo(() => Boolean(viewerId && p?.id && viewerId === p.id), [viewerId, p?.id]);
   const coverUrl = p?.cover_url || "";
+  const isCoverVideo = isVideoUrl(coverUrl);
   const avatarUrl = p?.avatar_url || "/images/taedal-logo.svg";
   const displayName = p?.display_name?.trim() || p?.username || "Profile";
   const usernameText = p?.username ? `@${p.username}` : null;
 
   const setTab = (t: "created" | "purchased" | "hidden") =>
-    setSp((cur) => {
-      const copy = new URLSearchParams(cur);
-      copy.set("tab", t);
-      return copy;
-    }, { replace: true });
+    setSp(
+      (cur) => {
+        const copy = new URLSearchParams(cur);
+        copy.set("tab", t);
+        return copy;
+      },
+      { replace: true }
+    );
 
   if (loadingProfile) return <div className="p-6">loading…</div>;
 
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
-      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
+      <div
+        className="relative border-b border-neutral-800 overflow-hidden"
+        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
+      >
         {coverUrl ? (
-          <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
+          isCoverVideo ? (
+            <video
+              src={coverUrl}
+              className="absolute inset-0 h-full w-full object-cover"
+              autoPlay
+              loop
+              muted
+              playsInline
+            />
+          ) : (
+            <img
+              src={coverUrl}
+              alt="cover"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+          )
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
         )}
-        <div className="absolute inset-0 pointer-events-none" style={{
-          backgroundImage: "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
-        }}/>
+        <div
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            backgroundImage:
+              "radial-gradient(120% 80% at 50% 40%, rgba(0,0,0,0) 0%, rgba(0,0,0,0.25) 60%, rgba(0,0,0,0.55) 80%)",
+          }}
+        />
         <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-b from-transparent to-black/70 pointer-events-none" />
       </div>
 
@@ -256,24 +294,42 @@ export default function PublicProfile() {
       <div className="max-w-6xl mx-auto px-4 -mt-12 md:-mt-14 relative z-10 pb-2">
         <div className="flex items-end justify-between">
           <div className="flex items-end gap-4">
-            <img src={avatarUrl} alt="avatar" className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900" />
+            <img
+              src={avatarUrl}
+              alt="avatar"
+              className="h-24 w-24 rounded-full object-cover ring-4 ring-black shadow-xl bg-neutral-900"
+            />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
               {usernameText && <p className="text-neutral-400">{usernameText}</p>}
-              <div className="mt-1"><Socials p={p} /></div>
+              <div className="mt-1">
+                <Socials p={p} />
+              </div>
             </div>
           </div>
-          <div className="pb-1">{isMe ? <Link to="/account" className="btn">Edit profile</Link> : null}</div>
+          <div className="pb-1">
+            {isMe ? (
+              <Link to="/account" className="btn">
+                Edit profile
+              </Link>
+            ) : null}
+          </div>
         </div>
       </div>
 
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>Created</TabButton>
-          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>Purchased</TabButton>
+          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>
+            Created
+          </TabButton>
+          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
+            Purchased
+          </TabButton>
           {isMe && (
-            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>Hidden</TabButton>
+            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>
+              Hidden
+            </TabButton>
           )}
         </div>
       </div>
@@ -296,13 +352,23 @@ export default function PublicProfile() {
 }
 
 /* ---------- UI bits ---------- */
-function TabButton({ active, onClick, children }: { active?: boolean; onClick(): void; children: React.ReactNode }) {
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  onClick(): void;
+  children: React.ReactNode;
+}) {
   return (
     <button
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active
+          ? "border-white text-white"
+          : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -322,11 +388,18 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
         >
           <div className="aspect-square bg-neutral-800">
             {a.image_url ? (
-              <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" loading="lazy" />
+              <img
+                src={a.image_url}
+                alt={a.title ?? "Artwork"}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
+            <div className="truncate font-medium group-hover:text-white">
+              {a.title || "Untitled"}
+            </div>
           </div>
         </Link>
       ))}
@@ -338,7 +411,10 @@ function GridSkeleton() {
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse">
+        <div
+          key={i}
+          className="rounded-xl overflow-hidden border border-neutral-800 bg-neutral-900 animate-pulse"
+        >
           <div className="aspect-square bg-neutral-800/70" />
           <div className="p-3 h-5 bg-neutral-800/70" />
         </div>
@@ -358,7 +434,13 @@ function Socials({ p }: { p: Profile | null }) {
   return (
     <div className="flex items-center gap-2">
       {items.map((it) => (
-        <a key={it.label} href={it.href} target="_blank" rel="noreferrer" className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700">
+        <a
+          key={it.label}
+          href={it.href}
+          target="_blank"
+          rel="noreferrer"
+          className="text-xs px-2 py-0.5 rounded-md bg-neutral-800 hover:bg-neutral-700"
+        >
           {it.label}
         </a>
       ))}

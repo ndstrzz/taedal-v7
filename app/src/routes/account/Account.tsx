@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import CropModal from "../../components/CropModal";
+import VideoTrimModal from "../../components/VideoTrimModal";
 import { supabase } from "../../lib/supabase";
 
 /* --- tiny image resizer --- */
@@ -26,6 +27,18 @@ async function resizeImage(
   return new Promise<Blob>((resolve) =>
     canvas.toBlob((b) => resolve(b!), mime, quality)
   );
+}
+
+/* --- helpers --- */
+function isVideoFile(f: File | Blob) {
+  // relies on MIME if available, fallback to extension
+  const type = (f as File).type || "";
+  if (type.startsWith("video/")) return true;
+  if ((f as File).name) {
+    const n = (f as File).name.toLowerCase();
+    if (n.endsWith(".mp4") || n.endsWith(".mov") || n.endsWith(".webm")) return true;
+  }
+  return false;
 }
 
 /* ---------- tiny inline brand icons ---------- */
@@ -116,14 +129,16 @@ export default function Account() {
   const [purchased, setPurchased] = useState<ArtworkThumb[]>([]);
   const [activeTab, setActiveTab] = useState<"created" | "purchased">("created");
 
-  // local, post-crop files
+  // local, post-crop/processed files
   const [avatarFile, setAvatarFile] = useState<Blob | null>(null);
   const [coverFile, setCoverFile] = useState<Blob | null>(null);
+  const [coverMime, setCoverMime] = useState<string | null>(null);
 
-  // which cropper is open?
-  const [cropTarget, setCropTarget] = useState<
-    null | { kind: "avatar" | "cover"; file: File }
-  >(null);
+  // which modal is open?
+  const [cropTarget, setCropTarget] = useState<null | { kind: "avatar" | "cover"; file: File }>(
+    null
+  );
+  const [videoTarget, setVideoTarget] = useState<null | { file: File }>(null);
 
   const avatarPreview = useMemo(
     () =>
@@ -132,10 +147,10 @@ export default function Account() {
         : form.avatar_url || "/images/taedal-logo.svg",
     [avatarFile, form.avatar_url]
   );
-  const coverPreview = useMemo(
-    () => (coverFile ? URL.createObjectURL(coverFile) : form.cover_url || ""),
-    [coverFile, form.cover_url]
-  );
+  const coverPreview = useMemo(() => {
+    if (coverFile) return URL.createObjectURL(coverFile);
+    return form.cover_url || "";
+  }, [coverFile, form.cover_url]);
 
   useEffect(
     () => () => {
@@ -182,7 +197,6 @@ export default function Account() {
 
   // Created (hide pieces you created AND still own with hidden=true)
   async function loadCreated(uid: string) {
-    // 1) All artworks you created
     const { data, error } = await supabase
       .from("artworks")
       .select("id,title,image_url,creator_id,created_at")
@@ -197,25 +211,22 @@ export default function Account() {
       return;
     }
 
-    // 2) Of those, which ones do you ALSO own (quantity>0) and have marked hidden?
     const ids = createdArts.map((a) => a.id);
     const { data: hiddenRows, error: hErr } = await supabase
       .from("ownerships")
       .select("artwork_id")
       .eq("owner_id", uid)
       .eq("hidden", true)
-      .gt("quantity", 0) // important: you still own it
+      .gt("quantity", 0)
       .in("artwork_id", ids);
     if (hErr) throw hErr;
     const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
 
-    // 3) Exclude hidden ones from Created grid
     setCreated(createdArts.filter((a) => !hiddenIds.has(a.id)));
   }
 
   // Purchased (only visible ownerships)
   async function loadPurchased(uid: string) {
-    // 1) Get owned (visible) artwork IDs, newest first
     const { data: ownIds, error: idsErr } = await supabase
       .from("ownerships")
       .select("artwork_id, updated_at")
@@ -232,18 +243,14 @@ export default function Account() {
       return;
     }
 
-    // 2) Fetch those artworks
     const { data: arts, error: artsErr } = await supabase
       .from("artworks")
       .select("id,title,image_url,creator_id,created_at")
       .in("id", ids);
     if (artsErr) throw artsErr;
 
-    // 3) Keep the same order as ownerships.updated_at
     const byId = new Map(arts!.map((a) => [a.id, a]));
-    const ordered = ids
-      .map((id) => byId.get(id))
-      .filter((a): a is ArtworkThumb => !!a);
+    const ordered = ids.map((id) => byId.get(id)).filter((a): a is ArtworkThumb => !!a);
 
     setPurchased(ordered);
   }
@@ -299,21 +306,33 @@ export default function Account() {
         const path = `avatars/${userId}.jpg`;
         const { error: upErr } = await supabase.storage
           .from("avatars")
-          .upload(path, resized, { upsert: true, cacheControl: "0" });
+          .upload(path, resized, { upsert: true, cacheControl: "0", contentType: "image/jpeg" });
         if (upErr) throw upErr;
         const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
         avatar_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
       }
 
       if (coverFile) {
-        const resized = await resizeImage(coverFile, 1600, 500);
-        const path = `covers/${userId}.jpg`;
-        const { error: upErr } = await supabase.storage
-          .from("covers")
-          .upload(path, resized, { upsert: true, cacheControl: "0" });
-        if (upErr) throw upErr;
-        const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
-        cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+        // detect video vs image by MIME
+        const isVid = coverMime?.startsWith("video/");
+        if (isVid) {
+          const path = `covers/${userId}.webm`;
+          const { error: upErr } = await supabase.storage
+            .from("covers")
+            .upload(path, coverFile, { upsert: true, cacheControl: "0", contentType: "video/webm" });
+          if (upErr) throw upErr;
+          const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
+          cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+        } else {
+          const resized = await resizeImage(coverFile, 1600, 500);
+          const path = `covers/${userId}.jpg`;
+          const { error: upErr } = await supabase.storage
+            .from("covers")
+            .upload(path, resized, { upsert: true, cacheControl: "0", contentType: "image/jpeg" });
+          if (upErr) throw upErr;
+          const { data: pub } = supabase.storage.from("covers").getPublicUrl(path);
+          cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
+        }
       }
 
       const payload = {
@@ -328,9 +347,7 @@ export default function Account() {
         telegram: normalizeHandle(form.telegram),
       };
 
-      const { error } = await supabase
-        .from("profiles")
-        .upsert({ id: userId, ...payload });
+      const { error } = await supabase.from("profiles").upsert({ id: userId, ...payload });
       if (error) throw error;
 
       setForm((f) => ({
@@ -340,6 +357,7 @@ export default function Account() {
       }));
       setAvatarFile(null);
       setCoverFile(null);
+      setCoverMime(null);
       setMsg("Saved ✔");
     } catch (e: any) {
       setMsg(e?.message || "Save failed");
@@ -397,19 +415,39 @@ export default function Account() {
         className="relative bg-neutral-900 border-b border-neutral-800"
         style={{ height: "clamp(12rem, 28vh, 24rem)" }}
       >
-        {coverPreview && (
-          <img src={coverPreview} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
-        )}
+        {coverPreview &&
+          (isVideoFile(coverFile || ({} as any)) || (form.cover_url || "").toLowerCase().match(/\.(webm|mp4|mov)(\?|$)/)) ? (
+          <video
+            src={coverPreview}
+            className="absolute inset-0 h-full w-full object-cover"
+            autoPlay
+            loop
+            muted
+            playsInline
+          />
+        ) : coverPreview ? (
+          <img
+            src={coverPreview}
+            alt="cover"
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : null}
+
         <div className="absolute inset-0 bg-black/10 pointer-events-none" />
-        <div className="absolute right-4 bottom-4">
+        <div className="absolute right-4 bottom-4 flex gap-2">
           <label className="btn cursor-pointer">
             <input
               type="file"
-              accept="image/*"
+              accept="image/*,video/*"
               className="hidden"
               onChange={(e) => {
                 const f = e.target.files?.[0];
-                if (f) setCropTarget({ kind: "cover", file: f });
+                if (!f) return;
+                if (isVideoFile(f)) {
+                  setVideoTarget({ file: f });
+                } else {
+                  setCropTarget({ kind: "cover", file: f });
+                }
               }}
             />
             Change cover
@@ -542,7 +580,7 @@ export default function Account() {
               {saving ? "Saving…" : "Save"}
             </button>
             {avatarFile || coverFile ? (
-              <span className="text-sm text-neutral-400">You have unsaved image changes.</span>
+              <span className="text-sm text-neutral-400">You have unsaved media changes.</span>
             ) : null}
           </div>
           {msg && <p className="text-sm text-amber-300">{msg}</p>}
@@ -576,7 +614,7 @@ export default function Account() {
         )}
       </div>
 
-      {/* Crop modal */}
+      {/* Crop modal (images) */}
       {cropTarget && (
         <CropModal
           file={cropTarget.file}
@@ -585,8 +623,27 @@ export default function Account() {
           onCancel={() => setCropTarget(null)}
           onDone={(blob) => {
             if (cropTarget.kind === "avatar") setAvatarFile(blob);
-            else setCoverFile(blob);
+            else {
+              setCoverFile(blob);
+              setCoverMime("image/jpeg");
+            }
             setCropTarget(null);
+          }}
+        />
+      )}
+
+      {/* Video trim modal */}
+      {videoTarget && (
+        <VideoTrimModal
+          file={videoTarget.file}
+          aspect={16 / 5} // match cover aspect feel
+          defaultMaxSize="1080p"
+          defaultMaxSeconds={12}
+          onCancel={() => setVideoTarget(null)}
+          onDone={(blob) => {
+            setCoverFile(blob);
+            setCoverMime("video/webm");
+            setVideoTarget(null);
           }}
         />
       )}
@@ -622,7 +679,11 @@ function Gallery({
             >
               <div className="aspect-square bg-neutral-950 grid place-items-center overflow-hidden">
                 {a.image_url ? (
-                  <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" />
+                  <img
+                    src={a.image_url}
+                    alt={a.title ?? "Artwork"}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <span className="text-neutral-500 text-xs">No image</span>
                 )}
