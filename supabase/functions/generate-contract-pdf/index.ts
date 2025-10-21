@@ -1,145 +1,183 @@
 // deno-lint-ignore-file no-explicit-any
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
+import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
+import {
+  PDFDocument,
+  PageSizes,
+  StandardFonts,
+  rgb,
+} from "https://esm.sh/pdf-lib@1.17.1";
 
-/* ---------- Supabase (service role) ---------- */
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-const supabase = createClient(SUPABASE_URL, SERVICE_ROLE, { auth: { persistSession: false } });
+const allowOrigin = "*";
 
-type LicenseTerms = {
-  purpose: string;
-  term_months: number;
-  territory: string | string[];
-  media: string[];
-  exclusivity: "exclusive" | "non-exclusive" | "category-exclusive";
-  start_date?: string;
-  deliverables?: string;
-  credit_required?: boolean;
-  usage_notes?: string;
-  fee?: { amount: number; currency: string };
-  sublicense?: boolean;
-  derivative_edits?: string[];
-};
-type RequestRow = {
-  id: string;
-  artwork_id: string;
-  requester_id: string;
-  owner_id: string;
-  requested: LicenseTerms;
-  accepted_terms: LicenseTerms | null;
-  status: string;
-  created_at: string;
-  updated_at: string;
-};
-
-/* ---------- helpers ---------- */
-const asStr = (t: LicenseTerms["territory"]) => Array.isArray(t) ? t.join(", ") : (t ?? "");
-const money = (f?: { amount: number; currency: string } | null) =>
-  f ? `${f.amount?.toLocaleString()} ${f.currency}` : "—";
-
-/** build a simple one-page PDF with the terms */
-async function buildPdf(req: RequestRow) {
-  const doc = await PDFDocument.create();
-  const page = doc.addPage([612, 792]); // US Letter
-  const font = await doc.embedFont(StandardFonts.Helvetica);
-  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-
-  // dark background
-  page.drawRectangle({ x: 0, y: 0, width: 612, height: 792, color: rgb(0.06, 0.06, 0.08) });
-
-  const m = 54;
-  let y = 740;
-  const move = (dy: number) => (y -= dy);
-  const draw = (text: string, opts: any = {}) => {
-    page.drawText(text, { x: m, y, size: opts.size ?? 12, font: opts.font ?? font, color: rgb(1, 1, 1) });
-    if (!opts.noAdvance) move(opts.advance ?? 18);
+function corsHeaders(status = 200) {
+  return {
+    status,
+    headers: {
+      "content-type": "application/json",
+      "access-control-allow-origin": allowOrigin,
+      "access-control-allow-headers":
+        "authorization, x-client-info, apikey, content-type",
+      "access-control-allow-methods": "POST, OPTIONS",
+    },
   };
-
-  draw("Artwork License Agreement", { font: bold, size: 20, advance: 30 });
-
-  const t = req.accepted_terms ?? req.requested;
-
-  draw("1) Parties", { font: bold });
-  draw(`Owner (Licensor): ${req.owner_id}`);
-  draw(`Requester (Licensee): ${req.requester_id}`);
-  move(6);
-
-  draw("2) Scope", { font: bold });
-  draw(`Purpose: ${t.purpose}`);
-  draw(`Term: ${t.term_months} months`);
-  draw(`Territory: ${asStr(t.territory)}`);
-  draw(`Media: ${t.media.join(", ")}`);
-  draw(`Exclusivity: ${t.exclusivity}`);
-  draw(`Fee: ${money(t.fee)}`);
-  if (t.start_date) draw(`Start date: ${t.start_date}`);
-  if (t.deliverables) draw(`Deliverables: ${t.deliverables}`);
-  if (t.credit_required != null) draw(`Credit required: ${t.credit_required ? "Yes" : "No"}`);
-  if (t.usage_notes) draw(`Notes: ${t.usage_notes}`);
-  if (t.sublicense != null) draw(`Sublicense: ${t.sublicense ? "Allowed" : "Not allowed"}`);
-  if (t.derivative_edits?.length) draw(`Allowed edits: ${t.derivative_edits.join(", ")}`);
-  move(6);
-
-  draw("3) Standard Terms (short)", { font: bold });
-  draw("• Licensee may use the Artwork only as described above.");
-  draw("• No transfer of copyright; all rights reserved by Licensor.");
-  draw("• No harmful/illegal use; no trademark use unless expressly stated.");
-  draw("• Liability limited to the license fee paid.");
-  draw("• Governed by Licensor’s locale unless otherwise agreed.");
-  move(12);
-
-  draw("Signatures (to be executed separately):", { font: bold });
-  draw("Licensor: __________________________   Date: ___________", { noAdvance: true });
-  page.drawText("Licensee: __________________________   Date: ___________", { x: m, y: y - 22, size: 12, font });
-
-  return await doc.save();
 }
+const ok = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), corsHeaders(status));
+const fail = (msg: string, status = 500, extra?: Record<string, unknown>) =>
+  new Response(JSON.stringify({ error: msg, ...(extra || {}) }), corsHeaders(status));
 
-/* ---------- CORS helpers ---------- */
-const CORS_HEADERS = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json"
-};
-
-function json(body: unknown, status = 200) {
-  return new Response(JSON.stringify(body), { status, headers: CORS_HEADERS });
-}
-
-/* ---------- server ---------- */
-Deno.serve(async (req) => {
-  // Preflight
-  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
+serve(async (req) => {
+  if (req.method === "OPTIONS") return new Response(null, corsHeaders().headers);
 
   try {
-    if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+    // ---------- Guard: env ----------
+    const url = Deno.env.get("SUPABASE_URL");
+    const serviceRole = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!url || !serviceRole) {
+      console.error("Missing env", { hasUrl: !!url, hasKey: !!serviceRole });
+      return fail("Server not configured: missing SUPABASE env", 500);
+    }
+    const supabase = createClient(url, serviceRole);
 
-    const { request_id } = await req.json().catch(() => ({}));
-    if (!request_id) return json({ error: "request_id required" }, 400);
+    // ---------- Parse body ----------
+    let payload: any = {};
+    try {
+      payload = await req.json();
+    } catch {
+      return fail("Invalid JSON body", 400);
+    }
+    const request_id = payload?.request_id;
+    if (!request_id) return fail("request_id is required", 400);
 
-    const { data, error } = await supabase
+    // ---------- Fetch license_request + joins ----------
+    const { data: lr, error: eReq } = await supabase
       .from("license_requests")
       .select("*")
       .eq("id", request_id)
-      .single<RequestRow>();
-    if (error || !data) return json({ error: error?.message || "Not found" }, 404);
+      .maybeSingle();
+    if (eReq) return fail("Failed to load license_request", 500, { detail: eReq.message });
+    if (!lr) return fail("License request not found", 404);
 
-    const pdfBytes = await buildPdf(data);
-    const path = `requests/${request_id}/draft-${Date.now()}.pdf`;
+    const [art, requester, owner] = await Promise.all([
+      supabase
+        .from("artworks")
+        .select("title,image_url")
+        .eq("id", lr.artwork_id)
+        .maybeSingle(),
+      supabase
+        .from("profiles")
+        .select("display_name,username")
+        .eq("id", lr.requester_id)
+        .maybeSingle(),
+      supabase
+        .from("profiles")
+        .select("display_name,username")
+        .eq("id", lr.owner_id)
+        .maybeSingle(),
+    ]);
 
-    const { error: upErr } = await supabase
-      .storage
-      .from("contracts")
-      .upload(path, new Blob([pdfBytes], { type: "application/pdf" }), { upsert: true });
-    if (upErr) return json({ error: upErr.message }, 500);
+    const aTitle = art.data?.title || "Untitled";
+    const rName = requester.data?.display_name || requester.data?.username || "Requester";
+    const oName = owner.data?.display_name || owner.data?.username || "Owner";
 
-    const { data: signed, error: signErr } =
-      await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
-    if (signErr) return json({ error: signErr.message }, 500);
+    // ---------- Build PDF ----------
+    const pdf = await PDFDocument.create();
+    const page = pdf.addPage(PageSizes.A4);
+    const { width, height } = page.getSize();
+    const helv = await pdf.embedFont(StandardFonts.Helvetica);
+    const helvBold = await pdf.embedFont(StandardFonts.HelveticaBold);
 
-    return json({ path, url: signed?.signedUrl });
-  } catch (e: any) {
-    return json({ error: String(e?.message || e) }, 500);
+    const headerH = 70;
+    const padX = 24;
+
+    // Black header
+    page.drawRectangle({ x: 0, y: height - headerH, width, height: headerH, color: rgb(0, 0, 0) });
+    page.drawText("taedal", {
+      x: padX, y: height - headerH / 2 - 7, size: 22, font: helvBold, color: rgb(1, 1, 1),
+    });
+    const icons = "🐺  ×  📜";
+    const iconsW = helv.widthOfTextAtSize(icons, 18);
+    page.drawText(icons, {
+      x: width - padX - iconsW, y: height - headerH / 2 - 6, size: 18, font: helv, color: rgb(1, 1, 1),
+    });
+    // Divider
+    page.drawLine({
+      start: { x: 24, y: height - headerH - 8 },
+      end: { x: width - 24, y: height - headerH - 8 },
+      thickness: 1,
+      color: rgb(1, 1, 1),
+    });
+    // Title
+    const hero = "artwork license agreement";
+    const heroSize = 28;
+    const heroW = helvBold.widthOfTextAtSize(hero, heroSize);
+    page.drawText(hero, {
+      x: (width - heroW) / 2,
+      y: height - headerH - 48,
+      size: heroSize,
+      font: helvBold,
+      color: rgb(1, 1, 1),
+    });
+
+    // Body terms
+    const terms = lr.accepted_terms ?? lr.requested;
+    const territory = Array.isArray(terms.territory) ? terms.territory.join(", ") : terms.territory;
+    const fee = terms?.fee ? `${Number(terms.fee.amount).toLocaleString()} ${terms.fee.currency}` : "—";
+
+    let y = height - headerH - 100;
+    const lh = 16;
+    const item = (label: string, value: string) => {
+      page.drawText(label, { x: padX, y, size: 11, font: helv, color: rgb(0.85, 0.85, 0.85) });
+      y -= lh;
+      page.drawText(value, { x: padX, y, size: 12, font: helvBold, color: rgb(1, 1, 1) });
+      y -= lh + 6;
+    };
+    item("Artwork", aTitle);
+    item("Parties", `${oName} (Owner)  ↔  ${rName} (Licensee)`);
+    item("Purpose", terms.purpose || "—");
+    item("Term", `${terms.term_months} months`);
+    item("Territory", territory || "—");
+    item("Media", (terms.media || []).join(", ") || "—");
+    item("Exclusivity", terms.exclusivity || "—");
+    item("Fee", fee);
+    if (terms.deliverables) item("Deliverables", terms.deliverables);
+    if (terms.usage_notes) item("Notes", terms.usage_notes);
+    page.drawText(`Request ${lr.id}`, { x: padX, y: 28, size: 9, font: helv, color: rgb(0.7, 0.7, 0.7) });
+
+    const bytes = await pdf.save();
+
+    // ---------- Ensure bucket exists (idempotent) ----------
+    const bucket = "contracts";
+    try {
+      const { data: buckets } = await (supabase as any).storage.listBuckets();
+      const exists = (buckets || []).some((b: any) => b.name === bucket);
+      if (!exists) {
+        await (supabase as any).storage.createBucket(bucket, {
+          public: false,
+          fileSizeLimit: 50 * 1024 * 1024,
+        });
+      }
+    } catch (e) {
+      console.warn("Bucket check/create failed (continuing):", e);
+    }
+
+    // ---------- Upload + sign ----------
+    const path = `requests/${lr.id}/draft-${Date.now()}.pdf`;
+    const up = await supabase.storage
+      .from(bucket)
+      .upload(path, new Blob([bytes], { type: "application/pdf" }), {
+        upsert: true,
+        contentType: "application/pdf",
+      });
+    if (up.error) return fail("Upload failed", 500, { detail: up.error.message });
+
+    const signed = await supabase.storage.from(bucket).createSignedUrl(path, 3600);
+    if (signed.error) return fail("Signed URL failed", 500, { detail: signed.error.message });
+
+    return ok({ path, url: signed.data.signedUrl });
+  } catch (err: any) {
+    console.error("generate-contract-pdf crash:", err);
+    return fail(err?.message || String(err), 500);
   }
 });

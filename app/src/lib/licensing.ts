@@ -75,8 +75,8 @@ export const LICENSE_TEMPLATES = [
       usage_notes: "Link back to creator.",
       fee: { amount: 1200, currency: "USD" },
       sublicense: false,
-      derivative_edits: ["resize", "crop"]
-    } as LicenseTerms
+      derivative_edits: ["resize", "crop"],
+    } as LicenseTerms,
   },
   {
     id: "paid-ads",
@@ -87,9 +87,9 @@ export const LICENSE_TEMPLATES = [
       territory: ["US", "CA"],
       media: ["Web", "Social", "Display"],
       exclusivity: "non-exclusive",
-      fee: { amount: 2500, currency: "USD" }
-    } as LicenseTerms
-  }
+      fee: { amount: 2500, currency: "USD" },
+    } as LicenseTerms,
+  },
 ];
 
 /* ----------------------------- Utilities ---------------------------- */
@@ -104,8 +104,18 @@ export function mergeTerms<T extends object>(base: T, patch?: Partial<T> | null)
 export type TermDiff = { key: keyof LicenseTerms; before: any; after: any };
 export function diffTerms(a: LicenseTerms, b: LicenseTerms): TermDiff[] {
   const keys: (keyof LicenseTerms)[] = [
-    "purpose","term_months","territory","media","exclusivity","start_date",
-    "deliverables","credit_required","usage_notes","fee","sublicense","derivative_edits"
+    "purpose",
+    "term_months",
+    "territory",
+    "media",
+    "exclusivity",
+    "start_date",
+    "deliverables",
+    "credit_required",
+    "usage_notes",
+    "fee",
+    "sublicense",
+    "derivative_edits",
   ];
   const diffs: TermDiff[] = [];
   for (const k of keys) {
@@ -129,7 +139,7 @@ export function formatMoney(f?: { amount: number; currency: string }) {
 /** Create a license request (requester = current user) */
 export async function createLicenseRequest(params: {
   artwork_id: string;
-  owner_id: string;        // artwork creator/rights holder
+  owner_id: string; // artwork creator/rights holder
   requested: LicenseTerms;
 }): Promise<LicenseRequest> {
   const { data: session } = await supabase.auth.getSession();
@@ -141,7 +151,7 @@ export async function createLicenseRequest(params: {
     .insert({
       artwork_id: params.artwork_id,
       owner_id: params.owner_id,
-      requester_id: uid,                 // IMPORTANT: satisfy RLS insert check
+      requester_id: uid, // RLS insert check
       requested: params.requested as any,
     })
     .select("*")
@@ -182,7 +192,11 @@ export async function getRequestWithThread(requestId: string) {
 }
 
 /** Post a thread message (optional structured patch) */
-export async function postLicenseMessage(requestId: string, body: string, patch?: Partial<LicenseTerms> | null) {
+export async function postLicenseMessage(
+  requestId: string,
+  body: string,
+  patch?: Partial<LicenseTerms> | null
+) {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
@@ -237,7 +251,19 @@ export async function acceptOffer(requestId: string) {
 /** Generic update */
 export async function updateLicenseRequest(
   requestId: string,
-  patch: Partial<Pick<LicenseRequest, "status" | "accepted_terms" | "requested" | "executed_pdf_url" | "executed_pdf_sha256" | "signed_at" | "signer_name" | "signer_title">>
+  patch: Partial<
+    Pick<
+      LicenseRequest,
+      | "status"
+      | "accepted_terms"
+      | "requested"
+      | "executed_pdf_url"
+      | "executed_pdf_sha256"
+      | "signed_at"
+      | "signer_name"
+      | "signer_title"
+    >
+  >
 ) {
   const { data, error } = await supabase
     .from("license_requests")
@@ -251,7 +277,6 @@ export async function updateLicenseRequest(
 
 /* --------------------- Approvals (internal, optional) --------------------- */
 
-/** List approvals for a request */
 export async function listApprovals(requestId: string): Promise<LicenseApproval[]> {
   const { data, error } = await supabase
     .from("license_approvals")
@@ -262,13 +287,16 @@ export async function listApprovals(requestId: string): Promise<LicenseApproval[
   return (data ?? []) as LicenseApproval[];
 }
 
-/** Create/update your approval for a stage */
-export async function upsertApproval(requestId: string, stage: LicenseApproval["stage"], decision: LicenseApproval["decision"], note?: string) {
+export async function upsertApproval(
+  requestId: string,
+  stage: LicenseApproval["stage"],
+  decision: LicenseApproval["decision"],
+  note?: string
+) {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
 
-  // Since we don't have a UNIQUE constraint, do a manual upsert.
   const { data: existing, error: e1 } = await supabase
     .from("license_approvals")
     .select("*")
@@ -307,12 +335,61 @@ export async function upsertApproval(requestId: string, stage: LicenseApproval["
 
 /* ------------------------- PDF generation & upload ------------------------- */
 
+/**
+ * Robust PDF generator call:
+ * 1) Try supabase.functions.invoke (preferred)
+ * 2) If a transport/preflight error occurs, fall back to direct fetch to the function URL
+ */
 export async function generateContractPdf(requestId: string) {
-  const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
-    body: { request_id: requestId },
-  });
-  if (error) throw error;
-  return data as { path: string; url?: string };
+  // First: SDK
+  try {
+    const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
+      body: { request_id: requestId },
+    });
+    if (error) {
+      const detail =
+        (error as any)?.context?.response?.error ??
+        (data as any)?.error ??
+        error.message;
+      throw new Error(detail || "Edge function returned an error");
+    }
+    return data as { path: string; url?: string };
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+
+    // Only fallback on likely transport issues
+    const transportFail =
+      /Failed to fetch|Failed to send|NetworkError|TypeError|CORS|non-2xx status code/i.test(msg);
+    if (!transportFail) throw e;
+
+    // Fallback: direct fetch
+    const urlEnv = (import.meta as any).env?.VITE_SUPABASE_URL as string;
+    const anon = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string;
+    if (!urlEnv || !anon) throw new Error("Missing Supabase env in frontend");
+
+    const fnUrl = `${urlEnv.replace(/\/+$/, "")}/functions/v1/generate-contract-pdf`;
+    const res = await fetch(fnUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: anon,
+        Authorization: `Bearer ${anon}`,
+      },
+      body: JSON.stringify({ request_id: requestId }),
+    });
+
+    let payload: any = {};
+    try {
+      payload = await res.json();
+    } catch {
+      // ignore
+    }
+
+    if (!res.ok) {
+      throw new Error(payload?.error || `Function HTTP ${res.status}`);
+    }
+    return payload as { path: string; url?: string };
+  }
 }
 
 export async function sha256(file: File): Promise<string> {
@@ -322,7 +399,11 @@ export async function sha256(file: File): Promise<string> {
   return arr.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-export async function uploadExecutedPdf(requestId: string, file: File, signer: { name: string; title?: string }) {
+export async function uploadExecutedPdf(
+  requestId: string,
+  file: File,
+  signer: { name: string; title?: string }
+) {
   if (file.type !== "application/pdf") throw new Error("Please upload a PDF.");
   const hash = await sha256(file);
   const path = `requests/${requestId}/executed-${Date.now()}.pdf`;
@@ -333,7 +414,9 @@ export async function uploadExecutedPdf(requestId: string, file: File, signer: {
   });
   if (e1) throw e1;
 
-  const { data: pub } = await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+  const { data: pub } = await supabase.storage
+    .from("contracts")
+    .createSignedUrl(path, 60 * 60 * 24 * 7);
 
   const updated = await updateLicenseRequest(requestId, {
     executed_pdf_url: pub?.signedUrl ?? null,
@@ -350,14 +433,19 @@ export async function uploadExecutedPdf(requestId: string, file: File, signer: {
 
 export async function uploadAttachment(requestId: string, file: File, kind?: string) {
   const key = `requests/${requestId}/${Date.now()}-${file.name}`;
-  const { error: e1 } = await supabase.storage.from("license_attachments").upload(key, file, {
-    upsert: true,
-  });
+  const { error: e1 } = await supabase.storage
+    .from("license_attachments")
+    .upload(key, file, { upsert: true });
   if (e1) throw e1;
-  const { data } = await supabase.from("license_attachments").insert({
-    request_id: requestId,
-    path: key,
-    kind: kind ?? null,
-  }).select("*");
+
+  const { data } = await supabase
+    .from("license_attachments")
+    .insert({
+      request_id: requestId,
+      path: key,
+      kind: kind ?? null,
+    })
+    .select("*");
+
   return data;
 }
