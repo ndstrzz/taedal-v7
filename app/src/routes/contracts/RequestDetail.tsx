@@ -30,9 +30,8 @@ const FieldRow = ({ label, children }: { label: string; children: React.ReactNod
   </div>
 );
 
-/* ---------- tiny helpers for bullets + typing throttle ---------- */
+/* ---------- bullet continuation + throttle helpers ---------- */
 function continueBullet(text: string, selStart: number) {
-  // Determine current line
   const before = text.slice(0, selStart);
   const after = text.slice(selStart);
   const lineStart = before.lastIndexOf("\n") + 1;
@@ -154,27 +153,6 @@ export default function RequestDetail() {
     return () => { supabase.removeChannel(channel); };
   }, [id]);
 
-  // Fallback poller: fetch latest if realtime misses
-  useEffect(() => {
-    if (!id) return;
-    const interval = setInterval(async () => {
-      try {
-        const lastAt = msgs.length ? msgs[msgs.length - 1].created_at : null;
-        let q = supabase
-          .from("license_threads")
-          .select("*")
-          .eq("request_id", id)
-          .order("created_at", { ascending: true });
-
-        const { data, error } = lastAt ? await q.gt("created_at", lastAt) : await q;
-        if (!error && data && data.length) {
-          setMsgs((cur) => [...cur, ...data as any]);
-        }
-      } catch { /* ignore */ }
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [id, msgs]);
-
   // Realtime: typing + seen presence/broadcast
   useEffect(() => {
     if (!id) return;
@@ -205,7 +183,7 @@ export default function RequestDetail() {
         setSeenBy((cur) => ({ ...cur, [from]: { msgId, ts: Number(ts) || Date.now() } }));
       });
 
-      await chan.subscribe((s) => {
+      const status = await chan.subscribe((s) => {
         if (s === "SUBSCRIBED") {
           chan?.track({ user_id: uid, ts: Date.now() });
         }
@@ -248,7 +226,7 @@ export default function RequestDetail() {
   async function sendSeenIfNeeded() {
     if (!id || !me || msgs.length === 0) return;
     const last = msgs[msgs.length - 1];
-    if (last.author_id === me) return; // only send seen if last is NOT mine
+    if (last.author_id === me) return;
     await supabase.channel(`lr-${id}-rt`).send({
       type: "broadcast",
       event: "seen",
@@ -266,7 +244,6 @@ export default function RequestDetail() {
       }
     };
     el.addEventListener("scroll", onScroll);
-    // also on mount/update
     onScroll();
     return () => el.removeEventListener("scroll", onScroll);
   }, [msgs.length]);
@@ -294,7 +271,7 @@ export default function RequestDetail() {
     } catch (e: any) {
       setMsg(e?.message || "Failed to apply changes.");
     } finally {
-           setBusy(false);
+      setBusy(false);
     }
   }
 
@@ -330,24 +307,41 @@ export default function RequestDetail() {
     }
   }
 
+  // ==== PDF generation: show video loading screen in the new tab ====
   async function onGeneratePdf() {
     if (!req) return;
-    // Open tab synchronously to avoid popup blockers
+
+    // open the tab synchronously so popup blockers don't kill it
     const w = window.open("about:blank", "_blank");
     if (!w) {
       setMsg("Please allow pop-ups to preview the contract.");
       return;
     }
+
+    // Use your video (with space URL-encoded)
+    const VIDEO_SRC = `${location.origin}/images/contract%20loading.mp4`;
+
     try {
       w.document.write(`
-        <!doctype html><meta charset="utf-8">
-        <title>Generating…</title>
-        <style>html,body{background:#0b0b0b;color:#fff;font:14px system-ui;margin:0}
-        .c{display:grid;place-items:center;min-height:100dvh;opacity:.8}</style>
-        <div class="c">Generating contract…</div>
+        <!doctype html>
+        <meta charset="utf-8" />
+        <title>Generating contract…</title>
+        <style>
+          html,body{height:100%;margin:0;background:#0b0b0b;color:#fff;font:14px system-ui}
+          .wrap{position:fixed;inset:0;display:grid;place-items:center}
+          .inner{display:flex;flex-direction:column;align-items:center;gap:14px}
+          .msg{opacity:.8}
+          video{max-width:220px;max-height:220px;border-radius:14px;outline:none}
+        </style>
+        <div class="wrap">
+          <div class="inner">
+            <video src="${VIDEO_SRC}" autoplay muted loop playsinline></video>
+            <div class="msg">Generating contract…</div>
+          </div>
+        </div>
       `);
       w.document.close();
-    } catch {}
+    } catch {/* ignore */}
 
     setBusy(true);
     setMsg(null);
@@ -467,7 +461,6 @@ export default function RequestDetail() {
               <FieldRow label="Fee">{formatMoney(working.fee || undefined)}</FieldRow>
               {working.deliverables && (
                 <FieldRow label="Deliverables">
-                  {/* preserve bullets/lines */}
                   <div className="whitespace-pre-wrap">{working.deliverables}</div>
                 </FieldRow>
               )}
@@ -530,7 +523,8 @@ export default function RequestDetail() {
           </div>
 
           {/* RIGHT: Thread */}
-          <div className="flex flex-col min-w-0">
+          <div className="flex flex-col min-w-0 overflow-hidden">
+            {/* messages area is the ONLY scroll container */}
             <div ref={messagesWrapRef} className="flex-1 overflow-auto p-4 space-y-2">
               <ChatPane
                 me={me!}
@@ -550,8 +544,8 @@ export default function RequestDetail() {
               )}
             </div>
 
-            {/* composer */}
-            <div className="p-3 border-t border-white/10 flex gap-2">
+            {/* composer — STICKY at bottom so it is always visible at any zoom */}
+            <div className="sticky bottom-0 z-10 p-3 border-t border-white/10 bg-neutral-950 flex gap-2">
               <textarea
                 className="flex-1 input min-h-[44px]"
                 placeholder="Type your message… (Enter to send, Shift+Enter for newline)"
@@ -606,8 +600,7 @@ function ChatPane({
     Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < mins * 60 * 1000;
 
   const hasSeen = (msgId: string) => {
-    // if any other user seen this message id
-    return Object.entries(seenBy || {}).some(([_, s]: any) => s?.msgId === msgId);
+    return Object.entries(seenBy || {}).some(([uid, s]: any) => s?.msgId === msgId);
   };
 
   return (
@@ -661,7 +654,6 @@ function ChatPane({
                   {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
                 </div>
 
-                {/* per-message seen tick (only on the latest) */}
                 {mine && i === msgs.length - 1 && hasSeen(m.id) && (
                   <div className="text-[10px] mt-1 text-black/60 text-right">Seen</div>
                 )}
@@ -699,13 +691,11 @@ function EditTermsModal({
   );
   const [feeCurrency, setFeeCurrency] = useState<string>(initial.fee?.currency || "USD");
 
-  // Refs for bullet-friendly textareas
   const delivRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
   const handleBulletEnter = (ref: React.RefObject<HTMLTextAreaElement>, key: "deliverables" | "usage_notes") => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key !== "Enter" || !ref.current) return;
-    // Shift+Enter still enters newline (we also handle bullets)
     const sel = ref.current.selectionStart;
     const res = continueBullet(ref.current.value, sel);
     if (res) {
