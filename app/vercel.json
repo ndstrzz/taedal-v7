@@ -1,4 +1,12 @@
 {
+  "headers": [
+    {
+      "source": "/ffmpeg/(.*)\\.wasm",
+      "headers": [
+        { "key": "Content-Type", "value": "application/wasm" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/(.*)", "destination": "/" }
   ]
