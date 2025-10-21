@@ -14,6 +14,7 @@ import {
   endAuction,
   type Bid,
 } from "../../lib/bids";
+import RequestLicenseModal from "../../components/RequestLicenseModal";
 
 /* ------------------------------ config ------------------------------ */
 
@@ -167,7 +168,7 @@ function Countdown({
   }, [ms, onElapsed]);
 
   const Box = ({ v, label }: { v: number; label: string }) => (
-    <div className="px-2 py-1 rounded-md bg-white/8 border border-white/10 text-center">
+    <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
       <div className="text-sm font-semibold tabular-nums">{v.toString().padStart(2, "0")}</div>
       <div className="text-[10px] text-white/70">{label}</div>
     </div>
@@ -310,9 +311,12 @@ export default function ArtworkDetail() {
   // seller console (UI-only)
   const [sellerOpen, setSellerOpen] = useState(false);
 
-  // 👇 per-owner visibility (ownerships.hidden)
+  // per-owner visibility
   const [myHidden, setMyHidden] = useState<boolean | null>(null);
   const [hideBusy, setHideBusy] = useState(false);
+
+  // license modal
+  const [showLicense, setShowLicense] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -521,7 +525,6 @@ export default function ArtworkDetail() {
       .maybeSingle();
 
     if (!data) {
-      // make a lightweight row so the owner can manage visibility
       await supabase.from("ownerships").upsert({
         artwork_id: art.id,
         owner_id: viewerId,
@@ -554,7 +557,6 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ Buy handlers ------------------------------ */
 
-  // Stripe flow for fiat currencies
   async function onBuy() {
     if (!activeListing || !art) return;
 
@@ -593,14 +595,10 @@ export default function ArtworkDetail() {
       const ethereum = (window as any).ethereum;
       if (!ethereum) throw new Error("MetaMask not found. Please install it.");
 
-      // 1) connect wallet
-      const accounts: string[] = await ethereum.request({
-        method: "eth_requestAccounts",
-      });
+      const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts" });
       const from = accounts?.[0];
       if (!from) throw new Error("No account authorized in MetaMask.");
 
-      // 2) ensure Sepolia
       let chainId = await ethereum.request({ method: "eth_chainId" });
       if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
         try {
@@ -609,10 +607,7 @@ export default function ArtworkDetail() {
             params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
           });
         } catch {
-          await ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [SEPOLIA_PARAMS],
-          });
+          await ethereum.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_PARAMS] });
         }
         chainId = await ethereum.request({ method: "eth_chainId" });
         if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
@@ -620,7 +615,6 @@ export default function ArtworkDetail() {
         }
       }
 
-      // 3) send TX
       const priceEth = Number(activeListing.fixed_price || 0);
       if (!isFinite(priceEth) || priceEth <= 0) {
         throw new Error("Invalid price for listing.");
@@ -635,7 +629,6 @@ export default function ArtworkDetail() {
         params: [{ from, to, value }],
       });
 
-      // 4) record the sale (best-effort)
       try {
         await supabase.functions.invoke("record-eth-purchase", {
           body: {
@@ -733,6 +726,8 @@ export default function ArtworkDetail() {
     activeListing && activeListing.sale_currency?.toUpperCase() === "ETH" && activeListing.fixed_price
       ? ""
       : "";
+
+  const canRequestLicense = !!viewerId && viewerId !== art.creator_id; // anyone except rights holder
 
   return (
     <>
@@ -945,6 +940,15 @@ export default function ArtworkDetail() {
                   )}
                 </div>
 
+                {/* License CTA */}
+                {canRequestLicense && (
+                  <div className="mt-3">
+                    <button className="btn w-full" onClick={() => setShowLicense(true)}>
+                      Request license
+                    </button>
+                  </div>
+                )}
+
                 {/* Owner shortcut to Seller Console */}
                 {isOwner && (
                   <div className="mt-3">
@@ -965,6 +969,15 @@ export default function ArtworkDetail() {
             ) : (
               <>
                 <p className="text-sm text-white/70">Not currently listed.</p>
+
+                {canRequestLicense && (
+                  <div className="mt-3">
+                    <button className="btn w-full" onClick={() => setShowLicense(true)}>
+                      Request license
+                    </button>
+                  </div>
+                )}
+
                 {isOwner && (
                   <div className="mt-3">
                     <button className="btn w-full" onClick={() => setSellerOpen(true)}>
@@ -1056,7 +1069,7 @@ export default function ArtworkDetail() {
                 {/* Traits (placeholder) */}
                 <Card
                   title={
-                    <div className="flex items一起 gap-2">
+                    <div className="flex items-center gap-2">
                       <span className="text-base font-semibold">Traits</span>
                       <Pill className="ml-1">Soon</Pill>
                     </div>
@@ -1066,7 +1079,7 @@ export default function ArtworkDetail() {
                       <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
                         ▦
                       </button>
-                      <button className="px-2 py-1 rounded-lg hover:bg白/10" title="List">
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
                         ☰
                       </button>
                     </div>
@@ -1087,19 +1100,19 @@ export default function ArtworkDetail() {
                   <div className="space-y-4">
                     <div>
                       <div className="font-medium">About {art.title || "this artwork"}</div>
-                      <div className="mt-1 text-sm text白/80 whitespace-pre-wrap">
+                      <div className="mt-1 text-sm text-white/80 whitespace-pre-wrap">
                         {art.description || "No description provided."}
                       </div>
                     </div>
                     {creator && (
                       <>
-                        <div className="h-px bg白/10" />
+                        <div className="h-px bg-white/10" />
                         <div>
                           <div className="font-medium flex items-center gap-2">
                             {creator.avatar_url ? (
                               <img src={creator.avatar_url} className="h-6 w-6 rounded-full object-cover" />
                             ) : (
-                              <div className="h-6 w-6 rounded-full bg白/10" />
+                              <div className="h-6 w-6 rounded-full bg-white/10" />
                             )}
                             <span>
                               A collection by{" "}
@@ -1108,7 +1121,7 @@ export default function ArtworkDetail() {
                               </Link>
                             </span>
                           </div>
-                          <div className="mt-1 text-sm text白/70">Creator bio coming soon.</div>
+                          <div className="mt-1 text-sm text-white/70">Creator bio coming soon.</div>
                         </div>
                       </>
                     )}
@@ -1118,7 +1131,7 @@ export default function ArtworkDetail() {
                 {/* Blockchain details */}
                 <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
                   <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
-                    <div className="text白/60">Contract Address</div>
+                    <div className="text-white/60">Contract Address</div>
                     <div className="truncate">
                       {art.token_uri ? (
                         <a className="underline" href={art.token_uri} target="_blank" rel="noreferrer">
@@ -1130,18 +1143,18 @@ export default function ArtworkDetail() {
                         "—"
                       )}
                     </div>
-                    <div className="text白/60">Token ID</div>
+                    <div className="text-white/60">Token ID</div>
                     <div>{art.id}</div>
-                    <div className="text白/60">Token Standard</div>
+                    <div className="text-white/60">Token Standard</div>
                     <div>ERC721</div>
-                    <div className="text白/60">Chain</div>
+                    <div className="text-white/60">Chain</div>
                     <div>Ethereum (Sepolia)</div>
                   </div>
                 </Card>
 
                 {/* More from this collection (placeholder) */}
                 <Card title={<span className="text-base font-semibold">More from this collection</span>}>
-                  <div className="text-sm text白/70">Collection grid coming soon.</div>
+                  <div className="text-sm text-white/70">Collection grid coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1150,7 +1163,7 @@ export default function ArtworkDetail() {
             {tab === "orders" && (
               <div className="p-4">
                 <Card>
-                  <div className="text-sm text白/70">Orders UI coming soon.</div>
+                  <div className="text-sm text-white/70">Orders UI coming soon.</div>
                 </Card>
               </div>
             )}
@@ -1159,16 +1172,16 @@ export default function ArtworkDetail() {
             {tab === "activity" && (
               <div className="p-4">
                 {sales.length === 0 ? (
-                  <div className="text-sm text白/70">No activity yet.</div>
+                  <div className="text-sm text-white/70">No activity yet.</div>
                 ) : (
                   <ul className="space-y-3">
                     {sales.map((s) => (
-                      <li key={s.id} className="p-3 rounded-xl bg白/[0.04] border border白/10">
+                      <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
                         <div className="text-sm">
                           Sale • <b>{s.price} {s.currency}</b>{" "}
                           on {new Date(s.sold_at).toLocaleString()}
                         </div>
-                        <div className="text-xs text白/70">
+                        <div className="text-xs text-white/70">
                           From{" "}
                           {s.seller ? (
                             <Link
@@ -1211,6 +1224,16 @@ export default function ArtworkDetail() {
         onMetaMask={onBuyWithMetaMask}
         disabledText="Coming soon"
       />
+
+      {/* Request License modal */}
+      {art && (
+        <RequestLicenseModal
+          open={showLicense}
+          onClose={() => setShowLicense(false)}
+          artworkId={art.id}
+          ownerId={art.creator_id}
+        />
+      )}
 
       {/* Seller Console (owner-only, UI only) */}
       {isOwner && (

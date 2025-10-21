@@ -110,11 +110,10 @@ export default function Sidebar() {
   );
   const profileUrl = user?.username ? `/u/${user.username}` : "/account";
 
-  // ✅ Discover now points to /discover
   const mainNav: NavItem[] = [
     { to: "/discover", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Discover" },
     { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
-    { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
+    { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" }, // ✅
     { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
   ];
 
@@ -133,7 +132,6 @@ export default function Sidebar() {
         overflow-hidden
       "
     >
-      {/* Brand / Home */}
       <Link
         to="/"
         title="Home"
@@ -167,7 +165,6 @@ export default function Sidebar() {
         </span>
       </Link>
 
-      {/* Main nav */}
       <nav className="mt-2 grid gap-2 px-1" role="navigation">
         {mainNav.map((it) => (
           <RailLink key={it.to} {...it} />
@@ -176,12 +173,10 @@ export default function Sidebar() {
 
       <div className="flex-1" />
 
-      {/* Settings */}
       <nav className="grid gap-2 px-1 mb-2">
         <RailLink to="/settings" label="Settings" iconSrc="/images/settings-icon.svg" />
       </nav>
 
-      {/* Account */}
       {!user ? (
         <Link
           to="/signin"
