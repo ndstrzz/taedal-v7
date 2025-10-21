@@ -1,3 +1,4 @@
+// app/src/routes/account/Account.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import CropModal from "../../components/CropModal";
@@ -293,18 +294,25 @@ export default function Account() {
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!userId) return;
     setSaving(true);
     setMsg(null);
 
     try {
+      // Make sure we are authenticated at save-time
+      const { data: who } = await supabase.auth.getUser();
+      const uid = who?.user?.id;
+      if (!uid) {
+        setMsg("You're signed out. Please sign in again.");
+        return;
+      }
+
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
       const stamp = `v=${Date.now()}`; // cache buster for immediate profile refresh
 
       if (avatarFile) {
         const resized = await resizeImage(avatarFile, 512, 512);
-        const path = `avatars/${userId}.jpg`;
+        const path = `avatars/${uid}.jpg`;
         const { error: upErr } = await supabase.storage
           .from("avatars")
           .upload(path, resized, { upsert: true, cacheControl: "0", contentType: "image/jpeg" });
@@ -316,7 +324,7 @@ export default function Account() {
       if (coverFile) {
         const isVid = coverMime?.startsWith("video/");
         if (isVid) {
-          const path = `covers/${userId}.webm`;
+          const path = `covers/${uid}.webm`;
           const { error: upErr } = await supabase.storage
             .from("covers")
             .upload(path, coverFile, { upsert: true, cacheControl: "0", contentType: "video/webm" });
@@ -325,7 +333,7 @@ export default function Account() {
           cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
         } else {
           const resized = await resizeImage(coverFile, 1600, 500);
-          const path = `covers/${userId}.jpg`;
+          const path = `covers/${uid}.jpg`;
           const { error: upErr } = await supabase.storage
             .from("covers")
             .upload(path, resized, { upsert: true, cacheControl: "0", contentType: "image/jpeg" });
@@ -347,8 +355,20 @@ export default function Account() {
         telegram: normalizeHandle(form.telegram),
       };
 
-      const { error } = await supabase.from("profiles").upsert({ id: userId, ...payload });
-      if (error) throw error;
+      // Prefer UPDATE first (RLS USING & WITH CHECK), then fallback to INSERT if no row exists
+      const { error: updErr } = await supabase
+        .from("profiles")
+        .update(payload)
+        .eq("id", uid)
+        .throwOnError(false);
+
+      if (updErr) {
+        // If zero rows updated, try INSERT (first-time save)
+        const { error: insErr } = await supabase
+          .from("profiles")
+          .insert({ id: uid, ...payload });
+        if (insErr) throw insErr;
+      }
 
       setForm((f) => ({
         ...f,
@@ -360,7 +380,12 @@ export default function Account() {
       setCoverMime(null);
       setMsg("Saved ✔");
     } catch (e: any) {
-      setMsg(e?.message || "Save failed");
+      const m = (e?.message || "").toLowerCase();
+      if (m.includes("row-level security")) {
+        setMsg("Save failed due to permissions. Please sign in again and try.");
+      } else {
+        setMsg(e?.message || "Save failed");
+      }
     } finally {
       setSaving(false);
     }
@@ -509,9 +534,20 @@ export default function Account() {
               </div>
             </div>
           </div>
-          <button className="btn" onClick={signOut}>
-            Sign out
-          </button>
+
+          {/* Actions: View profile + Sign out */}
+          <div className="flex items-center gap-2">
+            <Link
+              to={`/profiles/${form.username?.trim() || form.id}`}
+              className="btn"
+              title="View your public profile"
+            >
+              View profile
+            </Link>
+            <button className="btn" onClick={signOut}>
+              Sign out
+            </button>
+          </div>
         </div>
 
         {/* Profile form */}
