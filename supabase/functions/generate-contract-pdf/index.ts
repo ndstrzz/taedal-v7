@@ -52,7 +52,10 @@ serve(async (req) => {
     const media = (t.media || []).join(", ");
     const fee = t.fee ? `${Number(t.fee.amount).toLocaleString()} ${t.fee.currency}` : "—";
 
-    // HTML to render
+    // Absolute image URLs so they resolve in the blob preview
+    const LEFT_BAR = "https://taedal-v7.vercel.app/images/left-contract.svg";
+    const KURO     = "https://taedal-v7.vercel.app/images/taedal-static.svg";
+
     const html = `<!doctype html>
 <html>
 <head>
@@ -60,26 +63,44 @@ serve(async (req) => {
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Artwork License Agreement</title>
 <style>
+  :root{
+    --bg:#0b0b0b; --fg:#fafafa; --muted:#d8d8d8; --rule:rgba(255,255,255,.8);
+  }
   *{box-sizing:border-box}
-  html,body{margin:0;background:#0b0b0b;color:#fafafa}
+  html,body{margin:0;background:var(--bg);color:var(--fg)}
   body{font:14px/1.5 system-ui,-apple-system,"Segoe UI",Inter,Roboto,Helvetica,Arial,"Apple Color Emoji","Segoe UI Emoji";padding:40px}
-  .sheet{max-width:1120px;margin:0 auto;background:#0b0b0b;padding:40px;border-bottom:2px solid rgba(255,255,255,.25)}
-  .hdr{display:flex;align-items:center;justify-content:space-between;padding-bottom:16px}
-  .logo{height:24px;width:140px;background:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain;mask:url(https://taedal-v7.vercel.app/images/taedal-static.svg) no-repeat center/contain}
-  .brand{display:flex;gap:8px;align-items:center}
-  .brand span{height:28px;width:28px;border-radius:50%;background:#fff}
-  .title{font-size:44px;font-weight:800;text-transform:lowercase;letter-spacing:.5px}
-  .grid{display:grid;grid-template-columns:200px 1fr;gap:8px 16px;margin-top:20px}
-  .lb{color:#d8d8d8}.v{color:#fff}
-  .section{margin-top:28px}
+  .sheet{max-width:1120px;margin:0 auto;background:var(--bg);padding:32px 40px 48px;border-bottom:2px solid rgba(255,255,255,.25)}
+  /* ---------- header ---------- */
+  .hdr{display:flex;align-items:center;justify-content:space-between}
+  .hdr-left{
+    width:320px; height:64px; background:url(${LEFT_BAR}) no-repeat left center / contain;
+  }
+  .hdr-right{
+    width:44px; height:44px; background:url(${KURO}) no-repeat center / contain;
+  }
+  .rule{height:2px;background:var(--rule);margin:18px 0 26px 0}
+  /* ---------- title ---------- */
+  .title{font-size:52px;line-height:1.05;font-weight:800;text-align:center;text-transform:lowercase;letter-spacing:.3px;margin:12px 0 24px}
+  /* ---------- grid ---------- */
+  .grid{display:grid;grid-template-columns:180px 1fr;gap:10px 20px;margin-top:10px}
+  .lb{color:var(--muted)} .v{color:var(--fg)}
+  .section{margin-top:26px}
+  /* Print */
+  @media print {
+    body{padding:0}
+    .sheet{border:none}
+    .rule{opacity:1}
+  }
 </style>
 </head>
 <body>
   <div class="sheet">
     <div class="hdr">
-      <div class="logo"></div>
-      <div class="brand"><span></span><span style="background:none;color:#fff;width:auto">×</span><span></span></div>
+      <div class="hdr-left" aria-label="taedal brand"></div>
+      <div class="hdr-right" aria-label="kuro logo"></div>
     </div>
+    <div class="rule"></div>
+
     <div class="title">artwork license agreement</div>
 
     <div class="section grid">
@@ -116,12 +137,10 @@ serve(async (req) => {
     });
     if (up.error) return json(500, { error: up.error.message });
 
-    // Optional: signed URL (some Supabase deployments may still serve HTML as text/plain)
+    // Optional: signed URL (not used for the blob preview, but handy to store/share)
     const signed = await admin.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
-    const urlSigned = signed.data?.signedUrl ?? null;
 
-    // Return html string for guaranteed inline render on client
-    return json(200, { path, url: urlSigned, html });
+    return json(200, { path, url: signed.data?.signedUrl ?? null, html });
   } catch (err) {
     console.error(err);
     return json(500, { error: (err as Error).message ?? "Unknown error" });
