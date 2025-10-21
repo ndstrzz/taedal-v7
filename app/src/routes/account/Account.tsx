@@ -355,20 +355,27 @@ export default function Account() {
         telegram: normalizeHandle(form.telegram),
       };
 
-      // Try UPDATE first, and check if any rows changed. If none, INSERT.
-      const { data: updRows, error: updErr } = await supabase
+      // >>> IMPORTANT CHANGE: Avoid RETURNING on writes.
+      // 1) Does the profile row exist?
+      const { data: existsRow, error: existsErr } = await supabase
         .from("profiles")
-        .update(payload)
+        .select("id")
         .eq("id", uid)
-        .select("id");
+        .maybeSingle();
+      if (existsErr) throw existsErr;
 
-      if (updErr) {
-        // If update explicitly fails, try insert (new profile) — will still be RLS-checked
-        const { error: insErr } = await supabase.from("profiles").insert({ id: uid, ...payload });
-        if (insErr) throw insErr;
-      } else if (!updRows || updRows.length === 0) {
-        // No row existed → insert
-        const { error: insErr } = await supabase.from("profiles").insert({ id: uid, ...payload });
+      if (existsRow?.id) {
+        // 2) UPDATE (no .select())
+        const { error: updErr } = await supabase
+          .from("profiles")
+          .update(payload)
+          .eq("id", uid);
+        if (updErr) throw updErr;
+      } else {
+        // 3) INSERT (new profile)
+        const { error: insErr } = await supabase
+          .from("profiles")
+          .insert({ id: uid, ...payload });
         if (insErr) throw insErr;
       }
 
@@ -382,6 +389,7 @@ export default function Account() {
       setCoverMime(null);
       setMsg("Saved ✔");
     } catch (e: any) {
+      console.error("Save profile failed:", e);
       const m = (e?.message || "").toLowerCase();
       if (m.includes("row-level security")) {
         setMsg("Save failed due to permissions. Please sign in again and try.");
@@ -468,7 +476,7 @@ export default function Account() {
           <div className="absolute inset-0 bg-neutral-900" />
         )}
 
-        {/* Vignette/gradients for readability (same as profile) */}
+        {/* Vignette/gradients for readability (match PublicProfile) */}
         <div
           className="absolute inset-0 pointer-events-none"
           style={{
