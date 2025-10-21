@@ -142,7 +142,8 @@ export async function createLicenseRequest(params: {
   owner_id: string; // artwork creator/rights holder
   requested: LicenseTerms;
 }): Promise<LicenseRequest> {
-  const { data: session } = await supabase.auth.getSession();
+  const { data: session, error: sErr } = await supabase.auth.getSession();
+  if (sErr) throw sErr;
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
 
@@ -151,13 +152,13 @@ export async function createLicenseRequest(params: {
     .insert({
       artwork_id: params.artwork_id,
       owner_id: params.owner_id,
-      requester_id: uid, // RLS insert check
+      requester_id: uid, // important for RLS
       requested: params.requested as any,
     })
     .select("*")
     .single<LicenseRequest>();
 
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return data!;
 }
 
@@ -168,7 +169,7 @@ export async function listRequestsForArtwork(artworkId: string) {
     .select("*")
     .eq("artwork_id", artworkId)
     .order("created_at", { ascending: false });
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return (data ?? []) as LicenseRequest[];
 }
 
@@ -179,14 +180,14 @@ export async function getRequestWithThread(requestId: string) {
     .select("*")
     .eq("id", requestId)
     .single<LicenseRequest>();
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
 
   const { data: msgs, error: e2 } = await supabase
     .from("license_threads")
     .select("*")
     .eq("request_id", requestId)
     .order("created_at", { ascending: true });
-  if (e2) throw e2;
+  if (e2) throw new Error(e2.message || JSON.stringify(e2));
 
   return { request: req!, messages: (msgs ?? []) as LicenseThreadMsg[] };
 }
@@ -197,15 +198,28 @@ export async function postLicenseMessage(
   body: string,
   patch?: Partial<LicenseTerms> | null
 ) {
-  const { data: session } = await supabase.auth.getSession();
+  const { data: session, error: sErr } = await supabase.auth.getSession();
+  if (sErr) throw sErr;
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
+
+  const payload: any = {
+    request_id: requestId,
+    author_id: uid,
+    body,
+    patch: patch ?? null,
+  };
+
   const { data, error } = await supabase
     .from("license_threads")
-    .insert({ request_id: requestId, author_id: uid, body, patch: patch ?? null })
+    .insert(payload)
     .select("*")
     .single<LicenseThreadMsg>();
-  if (error) throw error;
+
+  if (error) {
+    // Surface the real reason (RLS, missing column, etc.)
+    throw new Error(error.message || JSON.stringify(error));
+  }
   return data!;
 }
 
@@ -216,7 +230,8 @@ export async function acceptPatch(requestId: string, patch: Partial<LicenseTerms
     .select("requested,status")
     .eq("id", requestId)
     .single<{ requested: LicenseTerms; status: LicenseRequest["status"] }>();
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
+
   const next = mergeTerms(cur!.requested, patch);
   const nextStatus = cur!.status === "open" ? "negotiating" : cur!.status;
   const { data, error } = await supabase
@@ -225,7 +240,7 @@ export async function acceptPatch(requestId: string, patch: Partial<LicenseTerms
     .eq("id", requestId)
     .select("*")
     .single<LicenseRequest>();
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return data!;
 }
 
@@ -236,7 +251,7 @@ export async function acceptOffer(requestId: string) {
     .select("requested")
     .eq("id", requestId)
     .single<{ requested: LicenseTerms }>();
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
 
   const { data, error } = await supabase
     .from("license_requests")
@@ -244,7 +259,7 @@ export async function acceptOffer(requestId: string) {
     .eq("id", requestId)
     .select("*")
     .single<LicenseRequest>();
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return data!;
 }
 
@@ -271,7 +286,7 @@ export async function updateLicenseRequest(
     .eq("id", requestId)
     .select("*")
     .single<LicenseRequest>();
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return data!;
 }
 
@@ -283,7 +298,7 @@ export async function listApprovals(requestId: string): Promise<LicenseApproval[
     .select("*")
     .eq("request_id", requestId)
     .order("created_at", { ascending: true });
-  if (error) throw error;
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return (data ?? []) as LicenseApproval[];
 }
 
@@ -293,7 +308,8 @@ export async function upsertApproval(
   decision: LicenseApproval["decision"],
   note?: string
 ) {
-  const { data: session } = await supabase.auth.getSession();
+  const { data: session, error: sErr } = await supabase.auth.getSession();
+  if (sErr) throw sErr;
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
 
@@ -304,7 +320,7 @@ export async function upsertApproval(
     .eq("approver_id", uid)
     .eq("stage", stage)
     .maybeSingle<LicenseApproval>();
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
 
   if (existing) {
     const { data, error } = await supabase
@@ -313,7 +329,7 @@ export async function upsertApproval(
       .eq("id", existing.id)
       .select("*")
       .single<LicenseApproval>();
-    if (error) throw error;
+    if (error) throw new Error(error.message || JSON.stringify(error));
     return data!;
   } else {
     const { data, error } = await supabase
@@ -328,68 +344,19 @@ export async function upsertApproval(
       })
       .select("*")
       .single<LicenseApproval>();
-    if (error) throw error;
+    if (error) throw new Error(error.message || JSON.stringify(error));
     return data!;
   }
 }
 
 /* ------------------------- PDF generation & upload ------------------------- */
 
-/**
- * Robust PDF generator call:
- * 1) Try supabase.functions.invoke (preferred)
- * 2) If a transport/preflight error occurs, fall back to direct fetch to the function URL
- */
 export async function generateContractPdf(requestId: string) {
-  // First: SDK
-  try {
-    const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
-      body: { request_id: requestId },
-    });
-    if (error) {
-      const detail =
-        (error as any)?.context?.response?.error ??
-        (data as any)?.error ??
-        error.message;
-      throw new Error(detail || "Edge function returned an error");
-    }
-    return data as { path: string; url?: string };
-  } catch (e: any) {
-    const msg = String(e?.message || e);
-
-    // Only fallback on likely transport issues
-    const transportFail =
-      /Failed to fetch|Failed to send|NetworkError|TypeError|CORS|non-2xx status code/i.test(msg);
-    if (!transportFail) throw e;
-
-    // Fallback: direct fetch
-    const urlEnv = (import.meta as any).env?.VITE_SUPABASE_URL as string;
-    const anon = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY as string;
-    if (!urlEnv || !anon) throw new Error("Missing Supabase env in frontend");
-
-    const fnUrl = `${urlEnv.replace(/\/+$/, "")}/functions/v1/generate-contract-pdf`;
-    const res = await fetch(fnUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: anon,
-        Authorization: `Bearer ${anon}`,
-      },
-      body: JSON.stringify({ request_id: requestId }),
-    });
-
-    let payload: any = {};
-    try {
-      payload = await res.json();
-    } catch {
-      // ignore
-    }
-
-    if (!res.ok) {
-      throw new Error(payload?.error || `Function HTTP ${res.status}`);
-    }
-    return payload as { path: string; url?: string };
-  }
+  const { data, error } = await supabase.functions.invoke("generate-contract-pdf", {
+    body: { request_id: requestId },
+  });
+  if (error) throw new Error(error.message || JSON.stringify(error));
+  return data as { path: string; url?: string };
 }
 
 export async function sha256(file: File): Promise<string> {
@@ -412,7 +379,7 @@ export async function uploadExecutedPdf(
     contentType: "application/pdf",
     upsert: true,
   });
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
 
   const { data: pub } = await supabase.storage
     .from("contracts")
@@ -436,16 +403,12 @@ export async function uploadAttachment(requestId: string, file: File, kind?: str
   const { error: e1 } = await supabase.storage
     .from("license_attachments")
     .upload(key, file, { upsert: true });
-  if (e1) throw e1;
+  if (e1) throw new Error(e1.message || JSON.stringify(e1));
 
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("license_attachments")
-    .insert({
-      request_id: requestId,
-      path: key,
-      kind: kind ?? null,
-    })
+    .insert({ request_id: requestId, path: key, kind: kind ?? null })
     .select("*");
-
+  if (error) throw new Error(error.message || JSON.stringify(error));
   return data;
 }
