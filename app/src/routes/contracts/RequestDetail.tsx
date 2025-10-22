@@ -77,6 +77,13 @@ function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
   };
 }
 
+/* ---------- NEW: long-token soft wrapping (every 30 chars) ---------- */
+function softWrapLongTokens(s: string, chunk = 30): string {
+  // Insert a zero-width space every `chunk` chars inside runs of non-whitespace.
+  // This does NOT affect normal words; only very long tokens like "AAAA...."
+  return s.replace(/\S{30,}/g, (w) => w.replace(new RegExp(`.{${chunk}}`, "g"), "$&\u200B"));
+}
+
 export default function RequestDetail() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -311,14 +318,12 @@ export default function RequestDetail() {
   async function onGeneratePdf() {
     if (!req) return;
 
-    // open the tab synchronously so popup blockers don't kill it
     const w = window.open("about:blank", "_blank");
     if (!w) {
       setMsg("Please allow pop-ups to preview the contract.");
       return;
     }
 
-    // Use your video (with space URL-encoded)
     const VIDEO_SRC = `${location.origin}/images/contract%20loading.mp4`;
 
     try {
@@ -341,7 +346,7 @@ export default function RequestDetail() {
         </div>
       `);
       w.document.close();
-    } catch {/* ignore */}
+    } catch {}
 
     setBusy(true);
     setMsg(null);
@@ -461,12 +466,12 @@ export default function RequestDetail() {
               <FieldRow label="Fee">{formatMoney(working.fee || undefined)}</FieldRow>
               {working.deliverables && (
                 <FieldRow label="Deliverables">
-                  <div className="whitespace-pre-wrap">{working.deliverables}</div>
+                  <div className="whitespace-pre-wrap break-words">{working.deliverables}</div>
                 </FieldRow>
               )}
               {working.usage_notes && (
                 <FieldRow label="Notes">
-                  <div className="whitespace-pre-wrap">{working.usage_notes}</div>
+                  <div className="whitespace-pre-wrap break-words">{working.usage_notes}</div>
                 </FieldRow>
               )}
               {typeof working.credit_required === "boolean" && (
@@ -488,7 +493,6 @@ export default function RequestDetail() {
                 )}
               </div>
 
-              {/* Execution record */}
               {(req.executed_pdf_url || req.signed_at) && (
                 <div className="rounded-lg bg-white/[0.06] p-3 text-xs space-y-1">
                   <div className="font-semibold text-sm">Execution record</div>
@@ -507,7 +511,6 @@ export default function RequestDetail() {
               )}
             </div>
 
-            {/* Attachments */}
             <div className="rounded-xl border border-white/10 bg-white/[0.04] p-3">
               <div className="flex items-center justify-between mb-2">
                 <div className="text-sm font-semibold">Attachments</div>
@@ -524,7 +527,6 @@ export default function RequestDetail() {
 
           {/* RIGHT: Thread */}
           <div className="flex flex-col min-w-0 overflow-hidden">
-            {/* messages area is the ONLY scroll container */}
             <div ref={messagesWrapRef} className="flex-1 overflow-auto p-4 space-y-2">
               <ChatPane
                 me={me!}
@@ -537,14 +539,12 @@ export default function RequestDetail() {
               />
             </div>
 
-            {/* typing row */}
             <div className="px-3 h-5 text-[12px] text-white/60">
               {othersTyping.length > 0 && (
                 <span>{nameOf(profileOf(othersTyping[0]) as any)} is typing…</span>
               )}
             </div>
 
-            {/* composer — STICKY at bottom so it is always visible at any zoom */}
             <div className="sticky bottom-0 z-10 p-3 border-t border-white/10 bg-neutral-950 flex gap-2">
               <textarea
                 className="flex-1 input min-h-[44px]"
@@ -561,7 +561,6 @@ export default function RequestDetail() {
               <button className="btn shrink-0" onClick={() => send(input)} title="Send">➤</button>
             </div>
 
-            {/* seen below my last message */}
             {someoneSeenMyLast && (
               <div className="px-3 pb-2 text-[11px] text-white/50">Seen</div>
             )}
@@ -569,7 +568,6 @@ export default function RequestDetail() {
         </div>
       </div>
 
-      {/* EDIT TERMS MODAL */}
       {editOpen && (
         <EditTermsModal
           initial={draft}
@@ -619,6 +617,9 @@ function ChatPane({
           return out;
         })() : [];
 
+        // NEW: display body with soft wrapping
+        const bodyText = m.body ? softWrapLongTokens(m.body, 30) : "";
+
         return (
           <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
             <div className={`flex items-end gap-2 max-w-[78%] ${mine ? "flex-row-reverse" : ""}`}>
@@ -629,13 +630,17 @@ function ChatPane({
                     {author ? (author.display_name || author.username || author.id) : "User"}
                   </div>
                 )}
-                {m.body && <div className="whitespace-pre-wrap text-sm mb-1">{m.body}</div>}
+                {m.body && (
+                  <div className="whitespace-pre-wrap break-words text-sm mb-1">
+                    {bodyText}
+                  </div>
+                )}
 
                 {m.patch && (
                   <div className={`rounded-lg ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
                     <ul className="space-y-1">
                       {diffs.map((d, idx) => (
-                        <li key={idx}>
+                        <li key={idx} className="break-words">
                           <span className="text-white/60">{String(d.key)}:</span>{" "}
                           <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
                           <span>→ <b>{formatVal(d.after)}</b></span>
