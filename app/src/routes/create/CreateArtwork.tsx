@@ -438,50 +438,77 @@ export default function CreateArtworkWizard() {
   }
 
   // ── STEP 0: CHOOSE ARTWORK TYPE ──────────────────────────────────────────
-  if (step === 0) {
-    return (
-      <div className="max-w-4xl mx-auto p-8">
-        <h1 className="text-3xl font-semibold">What are you creating?</h1>
-        <p className="text-white/70 mt-1">Pick the format first — you can still add listing details later.</p>
+if (step === 0) {
+  return (
+    <div className="max-w-4xl mx-auto p-8">
+      <h1 className="text-3xl font-semibold">What are you creating?</h1>
+      <p className="text-white/70 mt-1">
+        Pick the format first — you can still add listing details later.
+      </p>
 
-        <div className="mt-6 grid sm:grid-cols-2 gap-4">
-          <button
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30"
-            onClick={() => {
-              setArtType("digital");
-              setStep(1);
-            }}
-          >
-            <div className="text-lg font-semibold">Digital Artwork</div>
-            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
-              <li>On-chain token only</li>
-              <li>Best for images, videos, or generative pieces</li>
-              <li>No shipping management</li>
-            </ul>
-          </button>
+      <div className="mt-6 grid sm:grid-cols-2 gap-4">
+        {/* Digital card */}
+        <button
+          className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
+          onClick={() => {
+            setArtType("digital");
+            setStep(1);
+          }}
+          aria-label="Create digital artwork"
+        >
+          {/* Icon on top */}
+          <img
+            src="/images/digital-icon.svg"
+            alt=""
+            width={40}
+            height={40}
+            className="h-10 w-10 mb-3"
+            loading="eager"
+          />
+          <div className="text-lg font-semibold">Digital Artwork</div>
+          <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+            <li>On-chain token only</li>
+            <li>Best for images, videos, or generative pieces</li>
+            <li>No shipping management</li>
+          </ul>
+        </button>
 
-          <button
-            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30"
-            onClick={() => {
-              setArtType("physical");
-              setStep(1);
-            }}
-          >
-            <div className="text-lg font-semibold">Physical Artwork</div>
-            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
-              <li>Includes shipping & scan events</li>
-              <li>Track status (with creator / in transit / with buyer)</li>
-              <li>Great for paintings, prints, sculptures</li>
-            </ul>
-          </button>
-        </div>
-
-        <div className="mt-6">
-          <button className="btn" onClick={() => nav(-1 as any)}>Back</button>
-        </div>
+        {/* Physical card */}
+        <button
+          className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
+          onClick={() => {
+            setArtType("physical");
+            setStep(1);
+          }}
+          aria-label="Create physical artwork"
+        >
+          {/* Icon on top */}
+          <img
+            src="/images/physical-icon.svg"
+            alt=""
+            width={40}
+            height={40}
+            className="h-10 w-10 mb-3"
+            loading="eager"
+          />
+          <div className="text-lg font-semibold">Physical Artwork</div>
+          <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+            <li>Includes shipping &amp; scan events</li>
+            <li>Track status (with creator / in transit / with buyer)</li>
+            <li>Great for paintings, prints, sculptures</li>
+          </ul>
+        </button>
       </div>
-    );
-  }
+
+      <div className="mt-6">
+        <button className="btn" onClick={() => nav(-1 as any)}>
+          Back
+        </button>
+      </div>
+    </div>
+  );
+}
+
 
   // (Optional) tiny label showing the chosen type
   const TypeChip = () => (
