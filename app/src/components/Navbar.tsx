@@ -111,10 +111,9 @@ export default function Navbar() {
     };
   }, [user?.id]);
 
-  /* close account dropdown on route change */
+  /* close account dropdown + search on route change */
   useEffect(() => {
     setMenuOpen(false);
-    // also clear search on route change
     setOpenSearch(false);
     setUsers([]);
     setArts([]);
@@ -161,14 +160,18 @@ export default function Navbar() {
   const [arts, setArts] = useState<HitArtwork[]>([]);
   const [selIndex, setSelIndex] = useState<number>(-1);
 
-  // Debounced live search — show a lot of results; panel scrolls
+  // Debounced live search — show panel immediately (with "Searching…")
   useEffect(() => {
     const term = q.trim();
+
+    // open the panel as soon as there is any term
+    if (term && !openSearch) setOpenSearch(true);
     if (!term) {
       setUsers([]);
       setArts([]);
       setOpenSearch(false);
       setSelIndex(-1);
+      setLoadingSearch(false);
       return;
     }
 
@@ -180,44 +183,48 @@ export default function Navbar() {
         const likeAnywhere = `%${term}%`;
         const likePrefix = `${term}%`;
 
-        // Profiles: prioritize prefix matches on username, then contains on username/display_name
+        // PROFILES
         const pPrefix = supabase
           .from("profiles")
           .select("id, username, display_name, avatar_url")
           .ilike("username", likePrefix)
           .order("username")
-          .limit(10);
+          .limit(12);
 
         const pAny = supabase
           .from("profiles")
           .select("id, username, display_name, avatar_url")
           .or(`username.ilike.${likeAnywhere},display_name.ilike.${likeAnywhere}`)
           .order("username")
-          .limit(15);
+          .limit(18);
 
-        // Artworks: similar — prefix first, then contains
+        // ARTWORKS
         const aPrefix = supabase
           .from("artworks")
           .select("id, title, image_url, status, deleted_at")
           .ilike("title", likePrefix)
           .order("created_at", { ascending: false })
-          .limit(12);
+          .limit(16);
 
         const aAny = supabase
           .from("artworks")
           .select("id, title, image_url, status, deleted_at")
           .ilike("title", likeAnywhere)
           .order("created_at", { ascending: false })
-          .limit(18);
+          .limit(24);
 
         const [pp, pa, ap, aa] = await Promise.all([pPrefix, pAny, aPrefix, aAny]);
 
         if (!alive) return;
 
-        // Merge + de-dupe while keeping order (prefix hits first)
+        // quick error visibility in dev/console
+        if (pp.error) console.warn("[search] profiles prefix error:", pp.error);
+        if (pa.error) console.warn("[search] profiles any error:", pa.error);
+        if (ap.error) console.warn("[search] artworks prefix error:", ap.error);
+        if (aa.error) console.warn("[search] artworks any error:", aa.error);
+
         const uniqBy = <T extends { id: string }>(arr: T[]) => {
-          const seen = new Set<string>();
-          const out: T[] = [];
+          const seen = new Set<string>(); const out: T[] = [];
           for (const x of arr) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
           return out;
         };
@@ -232,7 +239,7 @@ export default function Navbar() {
         });
 
         setUsers(
-          pRows.slice(0, 15).map((r: any) => ({
+          pRows.slice(0, 20).map((r: any) => ({
             id: r.id,
             username: r.username ?? null,
             display_name: r.display_name ?? null,
@@ -240,29 +247,28 @@ export default function Navbar() {
           }))
         );
         setArts(
-          aRows.slice(0, 24).map((r: any) => ({
+          aRows.slice(0, 32).map((r: any) => ({
             id: r.id,
             title: r.title ?? null,
             image_url: r.image_url ?? null,
           }))
         );
 
-        setOpenSearch(true);
         setSelIndex(-1);
-      } catch {
-        // keep old results on error
+      } catch (err) {
+        console.warn("[search] error:", err);
       } finally {
         if (alive) setLoadingSearch(false);
       }
-    }, 200); // tighter debounce so it feels instant
+    }, 180); // snappy debounce
 
     return () => {
       alive = false;
       clearTimeout(t);
     };
-  }, [q]);
+  }, [q, openSearch]);
 
-  // Flatten results for keyboard navigation
+  // flatten results for keyboard nav
   const flatResults = useMemo(
     () => [
       ...users.map((u) => ({ kind: "user" as const, data: u })),
@@ -343,15 +349,22 @@ export default function Navbar() {
           />
 
           {/* dropdown */}
-          {openSearch && (users.length || arts.length || loadingSearch) ? (
+          {openSearch ? (
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
               <div className="max-h-[60vh] overflow-auto">
+                {/* when searching and nothing yet */}
+                {loadingSearch && (
+                  <div className="px-3 py-2 text-sm text-neutral-400 border-b border-neutral-800">
+                    Searching…
+                  </div>
+                )}
+
                 {/* Users */}
                 {users.length > 0 && (
                   <div className="py-2">
                     <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-400">Users</div>
                     {users.map((u, idx) => {
-                      const flatIdx = idx; // users first
+                      const flatIdx = idx;
                       const active = selIndex === flatIdx;
                       return (
                         <button
@@ -411,26 +424,24 @@ export default function Navbar() {
                     })}
                   </div>
                 )}
+
+                {!loadingSearch && users.length === 0 && arts.length === 0 && (
+                  <div className="px-3 py-2 text-sm text-neutral-400">No results</div>
+                )}
               </div>
 
               {/* footer row */}
               <div className="px-3 py-2 border-t border-neutral-800 flex items-center justify-between">
-                {loadingSearch ? (
-                  <div className="text-sm text-neutral-400">Searching…</div>
-                ) : (
-                  <>
-                    <div className="text-xs text-neutral-500">
-                      {users.length + arts.length} result{users.length + arts.length === 1 ? "" : "s"}
-                    </div>
-                    <button
-                      className="text-sm text-neutral-200 hover:underline"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={goToFullSearch}
-                    >
-                      View all results
-                    </button>
-                  </>
-                )}
+                <div className="text-xs text-neutral-500">
+                  {users.length + arts.length} result{users.length + arts.length === 1 ? "" : "s"}
+                </div>
+                <button
+                  className="text-sm text-neutral-200 hover:underline"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={goToFullSearch}
+                >
+                  View all results
+                </button>
               </div>
             </div>
           ) : null}
