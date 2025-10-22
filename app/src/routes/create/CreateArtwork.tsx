@@ -460,8 +460,8 @@ if (step === 0) {
           <img
             src="/images/digital-icon.svg"
             alt=""
-            width={40}
-            height={40}
+            width={80}
+            height={80}
             className="h-10 w-10 mb-3"
             loading="eager"
           />
