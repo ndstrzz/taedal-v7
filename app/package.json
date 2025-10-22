@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "npm run typecheck && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -34,7 +35,7 @@
     "@eslint/js": "^9.36.0",
     "@nomicfoundation/hardhat-ethers": "^4.0.2",
     "@openzeppelin/contracts": "^5.4.0",
-    "@types/node": "^24.6.0",
+    "@types/node": "^24.9.1",
     "@types/react": "^19.1.16",
     "@types/react-dom": "^19.1.9",
     "@vitejs/plugin-react": "^5.0.4",

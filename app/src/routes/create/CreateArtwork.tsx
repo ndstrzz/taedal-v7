@@ -9,9 +9,13 @@ import { CreateArtworkSchema, type CreateArtworkInput } from "../../schemas/artw
 import { uploadToArtworksBucket } from "../../lib/upload";
 import { sha256File } from "../../lib/hashFile";
 import MintModal from "../../components/MintModal";
-// import SimilarityOverlay from "../../components/SimilarityOverlay"; // (not used now)
 import useMinBusy from "../../hooks/useMinBusy";
 import CropModal from "../../components/CropModal";
+
+/* ------------------------------------------------------------------------------------ */
+
+type Step = 0 | 1 | 2 | 3;
+type ArtworkType = "digital" | "physical";
 
 type DuplicateHit = {
   id: string;
@@ -34,7 +38,7 @@ type LocalImage = {
 
 const MAX_IMAGES = 6;
 
-/* ------------------------------ UI helpers (visual only) ------------------------------ */
+/* ------------------------------ UI helpers ------------------------------ */
 
 function Breadcrumb({ step }: { step: 1 | 2 | 3 }) {
   const map = { 1: "Upload", 2: "Details", 3: "Preview & Mint" } as const;
@@ -97,20 +101,11 @@ function InfoBar({ tone = "default", children }: { tone?: "default" | "warning" 
   return <div className={`text-xs rounded-lg px-3 py-2 border ${tones[tone]}`}>{children}</div>;
 }
 
-/* -------- Video Overlay (new): uses your loading video + THICCCBOI font -------- */
+/* -------- Video Overlay (uses your loading mp4 + THICCCBOI font) -------- */
 
-function VideoOverlay({
-  open,
-  message,
-}: {
-  open: boolean;
-  message: "scan" | "pin";
-}) {
+function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin" }) {
   if (!open) return null;
-
-  // NOTE: file path contains a space; using %20 for safe URL.
   const videoSrc = "/images/laoding%20video.mp4";
-
   const text =
     message === "pin"
       ? "We are pinning your unique art, please wait"
@@ -118,7 +113,6 @@ function VideoOverlay({
 
   return (
     <>
-      {/* Local font face just for the overlay text */}
       <style>{`
         @font-face {
           font-family: 'THICCCBOI-BOLD';
@@ -127,30 +121,14 @@ function VideoOverlay({
           font-style: normal;
           font-display: swap;
         }
-        .thicccboi {
-          font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-          letter-spacing: 0.2px;
-        }
+        .thicccboi { font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: 0.2px; }
       `}</style>
-
-      <div
-        aria-live="polite"
-        className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center"
-      >
+      <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
         <div className="relative w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
-          <video
-            src={videoSrc}
-            autoPlay
-            muted
-            loop
-            playsInline
-            className="absolute inset-0 h-full w-full object-cover"
-          />
+          <video src={videoSrc} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-black/30" />
           <div className="absolute inset-x-4 bottom-4">
-            <div className="thicccboi text-base md:text-lg text-white drop-shadow-sm">
-              {text}
-            </div>
+            <div className="thicccboi text-base md:text-lg text-white drop-shadow-sm">{text}</div>
             <div className="text-[11px] text-white/70 mt-1">This may take a few moments.</div>
           </div>
         </div>
@@ -165,8 +143,9 @@ export default function CreateArtworkWizard() {
   const nav = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
 
-  // Wizard step
-  const [step, setStep] = useState<1 | 2 | 3>(1);
+  // NEW: pre-step for selecting physical vs digital
+  const [artType, setArtType] = useState<ArtworkType | null>(null);
+  const [step, setStep] = useState<Step>(0); // 0=new pre-step
 
   // Step 1 (upload/dupe)
   const [images, setImages] = useState<LocalImage[]>([]);
@@ -219,11 +198,10 @@ export default function CreateArtworkWizard() {
   const allDupes = images.flatMap((im) => im.dupes ?? []);
   const anyDupes = allDupes.length > 0;
 
-  // Gate overlays (show similarity overlay if any image is checking)
+  // Overlays
   const showDupeOverlay = useMinBusy(anyChecking, 5000);
   const showPinOverlay = useMinBusy(pinning, 5000);
   const overlayOpen = showDupeOverlay || showPinOverlay;
-  // (We keep these booleans; message selection happens in our new overlay.)
 
   // Require login
   useEffect(() => {
@@ -244,7 +222,6 @@ export default function CreateArtworkWizard() {
 
   // Helper: run similarity for a single image index (sequentially)
   async function checkImageDupes(idx: number, file: File) {
-    // mark checking
     setImages((arr) => {
       const next = [...arr];
       if (!next[idx]) return arr;
@@ -280,7 +257,7 @@ export default function CreateArtworkWizard() {
     }
   }
 
-  // Add media (append; don’t replace)
+  // Add media
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
@@ -288,7 +265,6 @@ export default function CreateArtworkWizard() {
     setGlobalMsg(null);
     setAckOriginal(false);
 
-    // Map new files to LocalImage objects
     const mapped: LocalImage[] = files.map((f) => ({
       original: f,
       current: f,
@@ -298,21 +274,18 @@ export default function CreateArtworkWizard() {
       hash: null,
     }));
 
-    // Append to existing up to MAX_IMAGES
     let startIndex = 0;
     setImages((prev) => {
       const spaceLeft = Math.max(0, MAX_IMAGES - prev.length);
       const toUse = mapped.slice(0, spaceLeft);
-      startIndex = prev.length; // where the new ones start
+      startIndex = prev.length;
       return [...prev, ...toUse];
     });
 
-    // Sequentially check each new file (avoids CPU spike)
     for (let i = 0; i < mapped.length && startIndex + i < MAX_IMAGES; i++) {
       await checkImageDupes(startIndex + i, mapped[i].current);
     }
 
-    // Allow selecting the same file(s) again
     e.currentTarget.value = "";
   }
 
@@ -347,6 +320,10 @@ export default function CreateArtworkWizard() {
       setGlobalMsg("Please sign in and upload at least one image.");
       return;
     }
+    if (!artType) {
+      setGlobalMsg("Please choose Digital or Physical.");
+      return;
+    }
     if (anyChecking) {
       setGlobalMsg("Please wait for similarity scan to finish.");
       return;
@@ -361,7 +338,7 @@ export default function CreateArtworkWizard() {
       // 1) upload cover (images[0])
       const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
 
-      // 2) insert row
+      // 2) insert row (NOTE: includes type + physical_status)
       const payload: any = {
         creator_id: userId,
         owner_id: userId,
@@ -396,14 +373,14 @@ export default function CreateArtworkWizard() {
         tags: values.tags ?? [],
         is_nsfw: values.is_nsfw ?? false,
 
+        // NEW:
+        type: artType,
+        physical_status: artType === "physical" ? "with_creator" : null,
+
         pin_status: "pending",
       };
 
-      const { data: row, error } = await supabase
-        .from("artworks")
-        .insert(payload)
-        .select("id")
-        .single();
+      const { data: row, error } = await supabase.from("artworks").insert(payload).select("id").single();
       if (error) throw error;
 
       setArtworkId(row.id);
@@ -411,9 +388,7 @@ export default function CreateArtworkWizard() {
 
       // 2b) upload additional images → artwork_files (best-effort)
       if (images.length > 1) {
-        const uploads = await Promise.all(
-          images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId))
-        );
+        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
         const records = uploads.map((up, i) => ({
           artwork_id: row.id,
           url: up.publicUrl,
@@ -423,7 +398,7 @@ export default function CreateArtworkWizard() {
         try {
           await supabase.from("artwork_files").insert(records);
         } catch {
-          // ignore best-effort failures
+          /* ignore */
         }
       }
 
@@ -431,10 +406,9 @@ export default function CreateArtworkWizard() {
       setPinning(true);
       setPinMsg("Pinning to IPFS…");
 
-      const { data: pin, error: pinErr } = await supabase.functions.invoke<PinResp>(
-        "pin-artwork",
-        { body: { artwork_id: row.id } }
-      );
+      const { data: pin, error: pinErr } = await supabase.functions.invoke<PinResp>("pin-artwork", {
+        body: { artwork_id: row.id },
+      });
       if (pinErr) throw pinErr;
 
       setPinning(false);
@@ -452,28 +426,85 @@ export default function CreateArtworkWizard() {
     }
   });
 
+  /* ------------------------------ RENDER ------------------------------ */
+
   if (!userId) {
     return (
       <div className="max-w-4xl mx-auto p-8">
-        <Breadcrumb step={1} />
         <div className="mt-4 text-xl font-semibold">Create artwork</div>
         <InfoBar tone="warning">Sign in to create an artwork.</InfoBar>
       </div>
     );
   }
 
+  // ── STEP 0: CHOOSE ARTWORK TYPE ──────────────────────────────────────────
+  if (step === 0) {
+    return (
+      <div className="max-w-4xl mx-auto p-8">
+        <h1 className="text-3xl font-semibold">What are you creating?</h1>
+        <p className="text-white/70 mt-1">Pick the format first — you can still add listing details later.</p>
+
+        <div className="mt-6 grid sm:grid-cols-2 gap-4">
+          <button
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30"
+            onClick={() => {
+              setArtType("digital");
+              setStep(1);
+            }}
+          >
+            <div className="text-lg font-semibold">Digital Artwork</div>
+            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+              <li>On-chain token only</li>
+              <li>Best for images, videos, or generative pieces</li>
+              <li>No shipping management</li>
+            </ul>
+          </button>
+
+          <button
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30"
+            onClick={() => {
+              setArtType("physical");
+              setStep(1);
+            }}
+          >
+            <div className="text-lg font-semibold">Physical Artwork</div>
+            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+              <li>Includes shipping & scan events</li>
+              <li>Track status (with creator / in transit / with buyer)</li>
+              <li>Great for paintings, prints, sculptures</li>
+            </ul>
+          </button>
+        </div>
+
+        <div className="mt-6">
+          <button className="btn" onClick={() => nav(-1 as any)}>Back</button>
+        </div>
+      </div>
+    );
+  }
+
+  // (Optional) tiny label showing the chosen type
+  const TypeChip = () => (
+    <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-white/10 border border-white/10">
+      {artType === "physical" ? "PHYSICAL" : "DIGITAL"}
+    </span>
+  );
+
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
-          <Breadcrumb step={step} />
+          <div className="flex items-center gap-2">
+            <Breadcrumb step={step as 1 | 2 | 3} />
+            <TypeChip />
+          </div>
           <h1 className="text-2xl font-semibold">Create artwork</h1>
           <div className="text-sm text-white/60">
             Publish immediately — items show right away. Great for evolving collections.
           </div>
         </div>
-        <Stepper step={step} />
+        <Stepper step={step as 1 | 2 | 3} />
       </div>
 
       {globalMsg && <InfoBar tone="warning">{globalMsg}</InfoBar>}
@@ -482,8 +513,10 @@ export default function CreateArtworkWizard() {
       {step === 1 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
-            {/* Upload panel */}
-            <Section title="Upload media" desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5.">
+            <Section
+              title="Upload media"
+              desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5."
+            >
               <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
                 <div className="h-12 w-12 rounded-full bg-white/8 grid place-items-center border border-white/10">
                   <span className="text-xl">⤴</span>
@@ -495,7 +528,7 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            {/* Thumbs with per-image actions + dupe badge */}
+            {/* Thumbs */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
               {images.map((im, i) => (
                 <div
@@ -505,7 +538,6 @@ export default function CreateArtworkWizard() {
                   } bg-neutral-900`}
                 >
                   <img src={im.previewUrl} className="h-40 w-full object-cover" />
-                  {/* badges */}
                   {im.checking && (
                     <div className="absolute left-2 top-2 text-[11px] px-1.5 py-0.5 rounded bg-white/10 border border-white/20">
                       scanning…
@@ -517,7 +549,6 @@ export default function CreateArtworkWizard() {
                       title="Possible duplicate"
                     />
                   )}
-                  {/* actions */}
                   <div className="absolute inset-x-0 bottom-0 p-2 flex gap-2 bg-black/40 backdrop-blur">
                     <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(i)}>
                       Crop
@@ -533,7 +564,6 @@ export default function CreateArtworkWizard() {
                   </div>
                 </div>
               ))}
-              {/* placeholders up to MAX */}
               {Array.from({ length: Math.max(0, MAX_IMAGES - images.length) }).map((_, idx) => (
                 <label
                   key={`ph-${idx}`}
@@ -546,7 +576,6 @@ export default function CreateArtworkWizard() {
               ))}
             </div>
 
-            {/* Combined duplicates list (across all images) */}
             {anyDupes && (
               <Section title="Potential duplicates">
                 <div className="text-sm mb-2">
@@ -558,9 +587,7 @@ export default function CreateArtworkWizard() {
                       key={`${d.id}-${idx}`}
                       className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]"
                     >
-                      {d.image_url && (
-                        <img src={d.image_url} className="h-14 w-14 object-cover rounded" />
-                      )}
+                      {d.image_url && <img src={d.image_url} className="h-14 w-14 object-cover rounded" />}
                       <div className="text-sm">
                         <div className="font-medium">{d.title ?? "Untitled"}</div>
                         <div className="text-neutral-400 text-xs">id: {d.id}</div>
@@ -574,7 +601,9 @@ export default function CreateArtworkWizard() {
                     checked={ackOriginal}
                     onChange={(e) => setAckOriginal(e.target.checked)}
                   />
-                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
+                  <span className="text-sm">
+                    I am the original creator and have the rights to mint this artwork.
+                  </span>
                 </label>
               </Section>
             )}
@@ -587,10 +616,11 @@ export default function CreateArtworkWizard() {
               >
                 Continue
               </button>
+              <button className="btn" onClick={() => setStep(0)}>Change type</button>
             </div>
           </div>
 
-          {/* Right: live preview while uploading */}
+          {/* Right: live preview */}
           <div className="lg:col-span-5">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
@@ -633,19 +663,7 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            <Section title="Artwork info (optional)">
-              <div className="grid md:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm">Medium</label>
-                  <input className="input" {...register("medium")} placeholder="Oil on canvas / Digital" />
-                </div>
-                <div>
-                  <label className="block text-sm">Year created</label>
-                  <input className="input" {...register("year_created")} placeholder="2024" />
-                </div>
-              </div>
-            </Section>
-
+            {/* For physical items, the Dimensions section is especially useful */}
             <Section title="Dimensions (optional)">
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
@@ -696,6 +714,25 @@ export default function CreateArtworkWizard() {
                   </select>
                 </div>
               </div>
+              {/* Optional physical hint */}
+              {artType === "physical" && (
+                <p className="text-xs text-white/60 mt-2">
+                  This item will start with status <code>with_creator</code>. You can update shipping later.
+                </p>
+              )}
+            </Section>
+
+            <Section title="Artwork info (optional)">
+              <div className="grid md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm">Medium</label>
+                  <input className="input" {...register("medium")} placeholder="Oil on canvas / Digital" />
+                </div>
+                <div>
+                  <label className="block text-sm">Year created</label>
+                  <input className="input" {...register("year_created")} placeholder="2024" />
+                </div>
+              </div>
             </Section>
 
             <Section title="Royalties (optional)">
@@ -718,6 +755,9 @@ export default function CreateArtworkWizard() {
               </button>
               <button type="button" className="btn" onClick={() => setStep(1)}>
                 Back
+              </button>
+              <button type="button" className="btn" onClick={() => setStep(0)}>
+                Change type
               </button>
             </div>
 
@@ -753,11 +793,7 @@ export default function CreateArtworkWizard() {
                 {images.length > 1 && (
                   <div className="grid grid-cols-5 gap-2 mt-2">
                     {images.slice(1).map((im, i) => (
-                      <img
-                        key={i}
-                        src={im.previewUrl}
-                        className="h-16 w-full rounded-md object-cover border border-white/10"
-                      />
+                      <img key={i} src={im.previewUrl} className="h-16 w-full rounded-md object-cover border border-white/10" />
                     ))}
                   </div>
                 )}
@@ -784,25 +820,15 @@ export default function CreateArtworkWizard() {
               {pinMsg && <div className="text-xs text-neutral-200 mt-2">{pinMsg}</div>}
               {pinData && (
                 <div className="text-xs space-y-1 mt-2">
-                  <div>
-                    Image CID: <code>{pinData.imageCID}</code>
-                  </div>
-                  <div>
-                    Metadata CID: <code>{pinData.metadataCID}</code>
-                  </div>
-                  <div>
-                    Token URI: <code>{pinData.tokenURI}</code>
-                  </div>
+                  <div>Image CID: <code>{pinData.imageCID}</code></div>
+                  <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
+                  <div>Token URI: <code>{pinData.tokenURI}</code></div>
                 </div>
               )}
               {!pinning && artworkId && pinData?.tokenURI && (
                 <div className="flex flex-wrap gap-2 mt-3">
-                  <button className="btn" onClick={() => setShowMint(true)}>
-                    Mint now
-                  </button>
-                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>
-                    Skip (view artwork)
-                  </button>
+                  <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
+                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
                 </div>
               )}
             </Section>
@@ -810,7 +836,7 @@ export default function CreateArtworkWizard() {
         </div>
       )}
 
-      {/* Status modal */}
+      {/* Mint modal */}
       {showMint && artworkId && pinData?.tokenURI && (
         <MintModal
           artworkId={artworkId}
@@ -822,7 +848,7 @@ export default function CreateArtworkWizard() {
         />
       )}
 
-      {/* Overlays: replaced SimilarityOverlay with THICCCBOI video overlay */}
+      {/* Overlays */}
       <VideoOverlay open={overlayOpen} message={showPinOverlay ? "pin" : "scan"} />
 
       {/* Crop modal */}
@@ -833,7 +859,6 @@ export default function CreateArtworkWizard() {
           title="Crop image"
           onCancel={() => setCropTargetIdx(null)}
           onDone={(blob) => {
-            // Create the new file first so we can pass it directly to the dupe checker
             const idx = cropTargetIdx;
             const existing = images[idx];
             if (!existing) return setCropTargetIdx(null);
@@ -843,24 +868,15 @@ export default function CreateArtworkWizard() {
             });
             const nextPreview = URL.createObjectURL(nextFile);
 
-            // Update state
             setImages((arr) => {
               const copy = [...arr];
               const old = copy[idx];
               if (old?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(old.previewUrl);
-              copy[idx] = {
-                ...old,
-                current: nextFile,
-                previewUrl: nextPreview,
-                dupes: null,
-                hash: null,
-              };
+              copy[idx] = { ...old, current: nextFile, previewUrl: nextPreview, dupes: null, hash: null };
               return copy;
             });
 
             setCropTargetIdx(null);
-
-            // Re-run similarity scan for the freshly cropped image
             checkImageDupes(idx, nextFile);
           }}
         />
