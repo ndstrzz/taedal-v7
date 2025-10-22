@@ -1,6 +1,13 @@
 // app/src/components/shipping/ShipmentsPanel.tsx
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import {
+  createShipment,
+  listShipments,
+  listShipmentEvents,
+  updateShipmentStatus,
+  type ShipmentStatus,
+} from "../../lib/shipping";
 
 type Shipment = {
   id: string;
@@ -8,9 +15,35 @@ type Shipment = {
   owner_id: string | null;
   carrier: string | null;
   tracking_number: string | null;
-  status: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
+  status: ShipmentStatus | null;
   note: string | null;
   created_at: string;
+  updated_at: string;
+};
+
+type Event = {
+  id: string;
+  code: string;
+  message: string | null;
+  created_at: string;
+};
+
+/** Pretty-print statuses like "with_creator" → "With Creator" */
+function prettyStatus(s: ShipmentStatus | null | undefined) {
+  const str = String(s ?? "unknown");
+  const spaced = str.replace(/_/g, " ");
+  return spaced.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+const NEXT_STEPS: Record<ShipmentStatus, ShipmentStatus[]> = {
+  with_creator: ["handed_to_carrier"],
+  handed_to_carrier: ["in_transit"],
+  in_transit: ["out_for_delivery", "delivered"],
+  out_for_delivery: ["delivered"],
+  delivered: [],
+  failed: [],
+  returned: [],
+  unknown: [],
 };
 
 export default function ShipmentsPanel({
@@ -22,10 +55,11 @@ export default function ShipmentsPanel({
 }) {
   const [uid, setUid] = useState<string | null>(null);
   const [rows, setRows] = useState<Shipment[]>([]);
-  const [busy, setBusy] = useState(false);
+  const [events, setEvents] = useState<Record<string, Event[]>>({});
   const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // form (simple inline inputs)
+  // form
   const [carrier, setCarrier] = useState("");
   const [tracking, setTracking] = useState("");
   const [note, setNote] = useState("");
@@ -34,66 +68,60 @@ export default function ShipmentsPanel({
     (async () => {
       const { data } = await supabase.auth.getSession();
       setUid(data.session?.user?.id ?? null);
-      await load();
+      await reload();
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artworkId]);
 
-  async function load() {
+  async function reload() {
     setMsg(null);
-    const { data, error } = await supabase
-      .from("shipments")
-      .select("id,artwork_id,owner_id,carrier,tracking_number,status,note,created_at")
-      .eq("artwork_id", artworkId)
-      .order("created_at", { ascending: false });
-    if (error) {
-      setMsg(error.message);
-      setRows([]);
-      return;
+    try {
+      const list = await listShipments(artworkId);
+      setRows((list as any) ?? []);
+      // load events for each shipment
+      const all: Record<string, Event[]> = {};
+      for (const s of list ?? []) {
+        all[s.id] = (await listShipmentEvents(s.id)) as any;
+      }
+      setEvents(all);
+    } catch (e: any) {
+      setMsg(e?.message || "Failed to load shipments.");
     }
-    setRows((data ?? []) as Shipment[]);
   }
 
-  async function addShipment() {
-    if (!uid) {
-      setMsg("Please sign in.");
-      return;
-    }
-    if (!carrier && !tracking && !note) {
-      setMsg("Add at least one field (carrier, tracking, or note).");
-      return;
-    }
+  async function onCreate() {
+    if (!uid) return setMsg("Please sign in.");
+    if (!carrier && !tracking && !note) return setMsg("Add carrier, tracking, or a note.");
     setBusy(true);
     setMsg(null);
     try {
-      // create shipment row
-      const { data, error } = await supabase
-        .from("shipments")
-        .insert({
-          artwork_id: artworkId,
-          owner_id: uid,
-          carrier: carrier || null,
-          tracking_number: tracking || null,
-          status: "in_transit",
-          note: note || null,
-        })
-        .select("*")
-        .single();
-      if (error) throw error;
-
-      // optionally reflect on the artwork’s physical_status
-      await supabase
-        .from("artworks")
-        .update({ physical_status: "in_transit" })
-        .eq("id", artworkId);
-
-      // prepend in UI
-      setRows((cur) => [data as Shipment, ...cur]);
+      await createShipment({
+        artwork_id: artworkId,
+        owner_id: uid,
+        carrier,
+        tracking_number: tracking,
+        note,
+      });
       setCarrier("");
       setTracking("");
       setNote("");
+      await reload();
+      // (optional) you could also reflect on artworks.physical_status here
     } catch (e: any) {
-      setMsg(e?.message || "Failed to add shipment.");
+      setMsg(e?.message || "Failed to create shipment.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function move(shipmentId: string, next: ShipmentStatus) {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await updateShipmentStatus(shipmentId, next, `Status changed to ${next}`);
+      await reload();
+    } catch (e: any) {
+      setMsg(e?.message || "Failed to update status.");
     } finally {
       setBusy(false);
     }
@@ -123,7 +151,7 @@ export default function ShipmentsPanel({
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />
-            <button className="btn" onClick={addShipment} disabled={busy}>
+            <button className="btn" onClick={onCreate} disabled={busy}>
               {busy ? "Saving…" : "Add shipment"}
             </button>
           </div>
@@ -135,26 +163,67 @@ export default function ShipmentsPanel({
       {rows.length === 0 ? (
         <div className="text-sm text-white/70">No shipments yet.</div>
       ) : (
-        <ul className="space-y-2">
+        <div className="space-y-3">
           {rows.map((s) => (
-            <li
-              key={s.id}
-              className="p-3 rounded-xl bg-white/[0.04] border border-white/10 text-sm"
-            >
-              <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <div key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <b>#{s.id.slice(0, 6)}</b>
                 <span>
-                  <b>Status:</b> {s.status ?? "unknown"}
+                  • Status: <span className="font-medium">{prettyStatus(s.status)}</span>
                 </span>
-                {s.carrier && <span><b>Carrier:</b> {s.carrier}</span>}
-                {s.tracking_number && <span><b>Tracking:</b> {s.tracking_number}</span>}
-                <span className="text-white/60">
-                  {new Date(s.created_at).toLocaleString()}
-                </span>
+                {s.carrier && <span>• Carrier: {s.carrier}</span>}
+                {s.tracking_number && <span>• Tracking: {s.tracking_number}</span>}
+                <span className="text-white/60">• {new Date(s.created_at).toLocaleString()}</span>
               </div>
-              {s.note && <div className="text-white/80 mt-1">{s.note}</div>}
-            </li>
+
+              {/* timeline */}
+              <ul className="mt-2 space-y-1 text-sm">
+                {(events[s.id] ?? []).map((e) => (
+                  <li key={e.id} className="flex items-start gap-2">
+                    <span className="mt-1 h-2 w-2 rounded-full bg-white/60" />
+                    <div>
+                      <div className="font-medium">{prettyStatus(e.code as ShipmentStatus)}</div>
+                      {e.message && <div className="text-white/80 text-[13px]">{e.message}</div>}
+                      <div className="text-white/50 text-[11px]">
+                        {new Date(e.created_at).toLocaleString()}
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+
+              {canEdit && s.status && NEXT_STEPS[s.status].length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {NEXT_STEPS[s.status].map((n) => (
+                    <button
+                      key={n}
+                      className="btn px-2 py-1 text-xs"
+                      onClick={() => move(s.id, n)}
+                      disabled={busy}
+                    >
+                      Mark {prettyStatus(n)}
+                    </button>
+                  ))}
+                  {/* exception quick actions */}
+                  <button
+                    className="btn px-2 py-1 text-xs"
+                    onClick={() => move(s.id, "failed")}
+                    disabled={busy}
+                  >
+                    Mark Failed
+                  </button>
+                  <button
+                    className="btn px-2 py-1 text-xs"
+                    onClick={() => move(s.id, "returned")}
+                    disabled={busy}
+                  >
+                    Mark Returned
+                  </button>
+                </div>
+              )}
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </div>
   );
