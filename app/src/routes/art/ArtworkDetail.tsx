@@ -1,4 +1,3 @@
-// app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -17,6 +16,48 @@ import {
 import RequestLicenseModal from "../../components/RequestLicenseModal";
 import PhysicalBadge from "../../components/art/PhysicalBadge";
 import ShipmentsPanel from "../../components/shipping/ShipmentsPanel";
+
+/* ------------------------------ WalletModal ------------------------------ */
+
+function WalletModal({
+  open,
+  onClose,
+  onMetaMask,
+  disabledText,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onMetaMask: () => void;
+  disabledText?: string;
+}) {
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-semibold">Connect wallet</h3>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div className="space-y-3">
+          <button
+            className="btn w-full flex items-center justify-center gap-2"
+            onClick={onMetaMask}
+          >
+            <span>MetaMask</span>
+          </button>
+          {disabledText && (
+            <p className="text-xs text-white/60 text-center">{disabledText}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ config ------------------------------ */
 
 // Wallet to receive ETH on Sepolia during testing
@@ -55,8 +96,7 @@ type Artwork = {
   ipfs_image_cid?: string | null;
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
-
-  // NEW (for physical items)
+  // optional physical metadata
   type?: "digital" | "physical" | null;
   physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
 };
@@ -202,59 +242,6 @@ function HeartIcon(props: any) {
   );
 }
 
-/* ------------------------------ Wallet modal ------------------------------ */
-
-function WalletModal({
-  open,
-  onClose,
-  onMetaMask,
-  disabledText,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onMetaMask: () => Promise<void>;
-  disabledText?: string;
-}) {
-  if (!open) return null;
-  return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm grid place-items-center">
-      <div className="w-[460px] max-w-[94vw] rounded-2xl bg-neutral-900 border border-white/10 p-4">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-lg font-semibold">Choose a wallet</h3>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
-            Close
-          </button>
-        </div>
-
-        <div className="space-y-2">
-          <button
-            className="w-full px-4 py-3 rounded-xl bg-white text-black font-medium hover:bg-white/90"
-            onClick={onMetaMask}
-          >
-            MetaMask (Sepolia)
-          </button>
-
-          {/* Placeholders (disabled) */}
-          <button
-            className="w-full px-4 py-3 rounded-xl bg-white/10 text-white/40 border border-white/10 cursor-not-allowed"
-            title={disabledText || "Coming soon"}
-            disabled
-          >
-            Coinbase Wallet (soon)
-          </button>
-          <button
-            className="w-full px-4 py-3 rounded-xl bg-white/10 text-white/40 border border-white/10 cursor-not-allowed"
-            title={disabledText || "Coming soon"}
-            disabled
-          >
-            WalletConnect (soon)
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -275,14 +262,14 @@ export default function ArtworkDetail() {
         start_at?: string | null;
         reserve_price?: number | null;
         quantity?: number | null;
-        seller_wallet?: string | null; // optional DB field
+        seller_wallet?: string | null;
       })
     | null
   >(null);
 
   // bids (auction)
-  const [topBid, setTopBid] = useState<Bid | null>(null);
   const MIN_INC_BPS = 500;
+  const [topBid, setTopBid] = useState<Bid | null>(null);
 
   // bid UI
   const [bidInput, setBidInput] = useState<string>("");
@@ -340,7 +327,6 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            // NEW: select type + physical_status
             "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
           )
           .eq("id", id!)
@@ -493,7 +479,6 @@ export default function ArtworkDetail() {
       const fresh = await supabase
         .from("artworks")
         .select(
-          // NEW: also bring back type + physical_status
           "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
         )
         .eq("id", art.id)
@@ -681,9 +666,14 @@ export default function ArtworkDetail() {
 
   /* ------------------------------ computed ------------------------------ */
 
-  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction =
+    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
+  const creatorHandle = creator?.username
+    ? `/u/${creator.username}`
+    : creator
+    ? `/u/${creator.id}`
+    : "#";
   const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
@@ -728,26 +718,23 @@ export default function ArtworkDetail() {
     );
   }
 
-  // (Optional) USD approximation helper — left blank to avoid FX
   const usdApprox =
-    activeListing && activeListing.sale_currency?.toUpperCase() === "ETH" && activeListing.fixed_price
+    activeListing &&
+    activeListing.sale_currency?.toUpperCase() === "ETH" &&
+    activeListing.fixed_price
       ? ""
       : "";
 
-  const canRequestLicense = !!viewerId && viewerId !== art.creator_id; // anyone except rights holder
+  const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
 
   return (
     <>
       <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
-        {/* Left: Media & thumbs */}
+        {/* Left */}
         <div className="lg:col-span-7 space-y-3">
           <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
             {mainUrl ? (
-              <img
-                src={mainUrl}
-                alt={art.title ?? "Artwork"}
-                className="w-full h-full object-contain bg-neutral-950"
-              />
+              <img src={mainUrl} alt={art.title ?? "Artwork"} className="w-full h-full object-contain bg-neutral-950" />
             ) : (
               <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
             )}
@@ -770,18 +757,17 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Right: details & actions (OpenSea-style) */}
+        {/* Right */}
         <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
-          {/* Header line */}
+          {/* Header */}
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <h1 className="text-3xl font-semibold leading-tight truncate">
                 {art.title || "Untitled"}
               </h1>
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-                {/* Creator */}
                 {creator?.avatar_url ? (
                   <img src={creator.avatar_url} className="h-5 w-5 rounded-full object-cover" />
                 ) : (
@@ -812,7 +798,6 @@ export default function ArtworkDetail() {
                 </span>
               </div>
 
-              {/* Chips */}
               <div className="mt-2 flex flex-wrap gap-2">
                 <Pill>ERC721</Pill>
                 <Pill>ETHEREUM</Pill>
@@ -834,7 +819,6 @@ export default function ArtworkDetail() {
                   >
                     ✏️ Edit
                   </button>
-                  {/* Hide/Unhide toggle */}
                   <button
                     className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
                     onClick={() => toggleHidden(!myHidden)}
@@ -845,19 +829,15 @@ export default function ArtworkDetail() {
                   </button>
                 </>
               )}
-              <button className="rounded-lg p-2 hover:bg-white/10" title="Copy link">
-                ⧉
-              </button>
+              <button className="rounded-lg p-2 hover:bg-white/10" title="Copy link">⧉</button>
               <button className="rounded-lg p-2 hover:bg-white/10" title="Favorite">
                 <HeartIcon />
               </button>
-              <button className="rounded-lg p-2 hover:bg-white/10" title="More">
-                ⋯
-              </button>
+              <button className="rounded-lg p-2 hover:bg-white/10" title="More">⋯</button>
             </div>
           </div>
 
-          {/* Stats strip */}
+          {/* Stats */}
           <Card>
             <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
               <StatBox
@@ -866,14 +846,21 @@ export default function ArtworkDetail() {
               />
               <StatBox
                 label="Collection floor"
-                value={activeListing ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}` : "—"}
+                value={
+                  activeListing
+                    ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}`
+                    : "—"
+                }
               />
               <StatBox label="Rarity" value={"—"} />
-              <StatBox label="Last sale" value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"} />
+              <StatBox
+                label="Last sale"
+                value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"}
+              />
             </div>
           </Card>
 
-          {/* Listing / Buy card */}
+          {/* Listing / Buy */}
           <Card title="Listing" right={isAuction ? <Pill tone="warning">AUCTION</Pill> : null}>
             {activeListing ? (
               <>
@@ -914,7 +901,6 @@ export default function ArtworkDetail() {
                   ) : null}
                 </div>
 
-                {/* CTAs */}
                 <div className="mt-3 flex gap-2">
                   {isAuction ? (
                     viewerId && !isSeller ? (
@@ -951,7 +937,6 @@ export default function ArtworkDetail() {
                   )}
                 </div>
 
-                {/* License CTA */}
                 {canRequestLicense && (
                   <div className="mt-3">
                     <button className="btn w-full" onClick={() => setShowLicense(true)}>
@@ -960,7 +945,6 @@ export default function ArtworkDetail() {
                   </div>
                 )}
 
-                {/* Owner shortcut to Seller Console */}
                 {isOwner && (
                   <div className="mt-3">
                     <button className="btn w-full" onClick={() => setSellerOpen(true)}>
@@ -1056,10 +1040,9 @@ export default function ArtworkDetail() {
           </Card>
         </div>
 
-        {/* Tabs wide area */}
+        {/* Tabs area */}
         <div className="lg:col-span-12">
           <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
-            {/* Tabs header */}
             <div className="flex gap-4 px-4 pt-3 border-b border-white/10">
               {(["details", "orders", "activity"] as const).map((t) => (
                 <button
@@ -1074,10 +1057,8 @@ export default function ArtworkDetail() {
               ))}
             </div>
 
-            {/* DETAILS */}
             {tab === "details" && (
               <div className="p-4 space-y-4">
-                {/* NEW: shipping panel for physical items */}
                 {art.type === "physical" && (
                   <ShipmentsPanel
                     artworkId={art.id}
@@ -1085,7 +1066,6 @@ export default function ArtworkDetail() {
                   />
                 )}
 
-                {/* Traits (placeholder) */}
                 <Card
                   title={
                     <div className="flex items-center gap-2">
@@ -1095,26 +1075,20 @@ export default function ArtworkDetail() {
                   }
                   right={
                     <div className="flex gap-1">
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
-                        ▦
-                      </button>
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
-                        ☰
-                      </button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">▦</button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">☰</button>
                     </div>
                   }
                 >
                   <div className="text-sm text-white/70">Traits UI coming soon.</div>
                 </Card>
 
-                {/* Price history (placeholder) */}
                 <Card title={<span className="text-base font-semibold">Price history</span>}>
                   <p className="text-sm text-white/70">
                     Chart coming soon. We’ll plot points from <code>artwork_prices</code>.
                   </p>
                 </Card>
 
-                {/* About */}
                 <Card title={<span className="text-base font-semibold">About</span>}>
                   <div className="space-y-4">
                     <div>
@@ -1147,7 +1121,6 @@ export default function ArtworkDetail() {
                   </div>
                 </Card>
 
-                {/* Blockchain details */}
                 <Card title={<span className="text-base font-semibold">Blockchain details</span>}>
                   <div className="grid sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                     <div className="text-white/60">Contract Address</div>
@@ -1171,14 +1144,12 @@ export default function ArtworkDetail() {
                   </div>
                 </Card>
 
-                {/* More from this collection (placeholder) */}
                 <Card title={<span className="text-base font-semibold">More from this collection</span>}>
                   <div className="text-sm text-white/70">Collection grid coming soon.</div>
                 </Card>
               </div>
             )}
 
-            {/* ORDERS (placeholder) */}
             {tab === "orders" && (
               <div className="p-4">
                 <Card>
@@ -1187,7 +1158,6 @@ export default function ArtworkDetail() {
               </div>
             )}
 
-            {/* ACTIVITY (sales history) */}
             {tab === "activity" && (
               <div className="p-4">
                 {sales.length === 0 ? (
@@ -1197,8 +1167,7 @@ export default function ArtworkDetail() {
                     {sales.map((s) => (
                       <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
                         <div className="text-sm">
-                          Sale • <b>{s.price} {s.currency}</b>{" "}
-                          on {new Date(s.sold_at).toLocaleString()}
+                          Sale • <b>{s.price} {s.currency}</b> on {new Date(s.sold_at).toLocaleString()}
                         </div>
                         <div className="text-xs text-white/70">
                           From{" "}
@@ -1236,7 +1205,6 @@ export default function ArtworkDetail() {
         </div>
       </div>
 
-      {/* Wallet modal (ETH only) */}
       <WalletModal
         open={walletOpen}
         onClose={() => (payBusy ? null : setWalletOpen(false))}
@@ -1244,7 +1212,6 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
-      {/* Request License modal */}
       {art && (
         <RequestLicenseModal
           open={showLicense}
@@ -1254,7 +1221,6 @@ export default function ArtworkDetail() {
         />
       )}
 
-      {/* Seller Console (owner-only, UI only) */}
       {isOwner && (
         <SellerConsole
           open={sellerOpen}
@@ -1356,9 +1322,7 @@ function SellerConsole({
 
   return (
     <div className="fixed inset-0 z-[60]">
-      {/* backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      {/* drawer */}
       <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Seller tools</h3>
@@ -1383,7 +1347,6 @@ function SellerConsole({
           ))}
         </div>
 
-        {/* PRICE TAB */}
         {tab === "price" && (
           <div className="space-y-3">
             <div className="text-sm text-white/70">Create or update a fixed-price listing.</div>
@@ -1393,7 +1356,6 @@ function SellerConsole({
           </div>
         )}
 
-        {/* AUCTION TAB (disabled) */}
         {tab === "auction" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 opacity-60 pointer-events-none select-none">
             <div className="text-sm text-white/70">Configure an auction (UI only for now).</div>
@@ -1423,7 +1385,6 @@ function SellerConsole({
           </div>
         )}
 
-        {/* DETAILS TAB */}
         {tab === "details" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
             <div className="text-sm text-white/70">Update artwork metadata (title/description, tags, etc.).</div>

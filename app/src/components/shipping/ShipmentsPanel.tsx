@@ -1,35 +1,21 @@
-// app/src/components/shipping/ShipmentsPanel.tsx
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { apiListShipments, apiUpsertShipment, type Shipment } from "../../lib/api";
 
-type UIMergedShipment = Shipment & {
-  // optional UI-only or future fields
-  eta?: string | null;
-  legs?: Array<{ time?: string; location?: string | null; note?: string | null }>;
-};
-
-export default function ShipmentsPanel({
-  artworkId,
-  canEdit,
-}: {
-  artworkId: string;
-  canEdit: boolean;
-}) {
-  const [rows, setRows] = useState<UIMergedShipment[]>([]);
+export default function ShipmentsPanel({ artworkId, canEdit }: { artworkId: string; canEdit: boolean }) {
+  const [rows, setRows] = useState<Shipment[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function load() {
     const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token;
-    const res = await apiListShipments(artworkId, token || undefined);
+    const token = data.session?.access_token!;
+    const res = await apiListShipments(artworkId, token);
     setRows(res.shipments || []);
   }
 
   useEffect(() => {
     load().catch(() => {});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artworkId]);
 
   async function createOrUpdate() {
@@ -37,22 +23,16 @@ export default function ShipmentsPanel({
     const tracking_no = prompt("Tracking number (optional)") || "";
     const status =
       prompt(
-        "Status: pending | packed | in_transit | delivered | returned | cancelled"
-      ) || "pending";
-
+        "Status: label_created | in_transit | out_for_delivery | delivered | exception | canceled"
+      ) || "label_created";
     setBusy(true);
     setMsg(null);
     try {
       const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token;
+      const token = data.session?.access_token!;
       await apiUpsertShipment(
-        {
-          artwork_id: artworkId,
-          carrier: carrier || null,
-          tracking_no: tracking_no || null,
-          status,
-        },
-        token || undefined
+        { artwork_id: artworkId, carrier: carrier || null, tracking_no: tracking_no || null, status },
+        token
       );
       await load();
       setMsg("Saved ✓");
@@ -94,39 +74,18 @@ export default function ShipmentsPanel({
                 {latest.tracking_no ? ` • ${latest.tracking_no}` : ""}
               </div>
             ) : null}
-
-            {/* show either ETA (if you add it later) or last scan/location from core schema */}
             {latest.eta ? (
-              <div className="text-white/70">
-                ETA: {new Date(latest.eta).toLocaleString()}
-              </div>
-            ) : (
-              <>
-                {latest.last_location && (
-                  <div className="text-white/70">
-                    Last location: {latest.last_location}
-                  </div>
-                )}
-                {latest.last_scan_at && (
-                  <div className="text-white/70">
-                    Last update: {new Date(latest.last_scan_at).toLocaleString()}
-                  </div>
-                )}
-              </>
-            )}
+              <div className="text-white/70">ETA: {new Date(latest.eta).toLocaleString()}</div>
+            ) : null}
           </div>
 
-          {Array.isArray(latest.legs) && latest.legs.length > 0 && (
+          {(latest.legs || []).length > 0 && (
             <ul className="text-sm space-y-2">
-              {latest.legs.map((l, i) => (
-                <li
-                  key={i}
-                  className="p-2 rounded-lg bg-white/[0.03] border border-white/10"
-                >
+              {latest.legs!.map((l: any, i: number) => (
+                <li key={i} className="p-2 rounded-lg bg-white/[0.03] border border-white/10">
                   <div className="text-white/80">{l.note || "Update"}</div>
                   <div className="text-[11px] text-white/60">
-                    {l.location || "—"} •{" "}
-                    {l.time ? new Date(l.time).toLocaleString() : "—"}
+                    {l.location || "—"} • {l.time ? new Date(l.time).toLocaleString() : "—"}
                   </div>
                 </li>
               ))}
