@@ -3,13 +3,14 @@ import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-/* ----------------------------- types ----------------------------- */
 type UserBits = {
   id: string;
   username?: string | null;
   avatar_url?: string | null;
   email?: string | null;
 };
+
+// search result shapes (match your views)
 type HitUser = {
   id: string;
   username: string | null;
@@ -22,8 +23,8 @@ type HitArtwork = {
   image_url: string | null;
 };
 
-/* tiny util */
-const cx = (...xs: Array<string | false | null | undefined>) => xs.filter(Boolean).join(" ");
+const cx = (...xs: Array<string | false | null | undefined>) =>
+  xs.filter(Boolean).join(" ");
 
 export default function Navbar() {
   const nav = useNavigate();
@@ -33,11 +34,10 @@ export default function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  /* ---------------------- session + profile load ---------------------- */
+  // ---------------- Session + profile (for avatar/username) ----------------
   useEffect(() => {
     let mounted = true;
-
-    async function load() {
+    (async () => {
       const { data } = await supabase.auth.getSession();
       const u = data.session?.user ?? null;
       if (!mounted) return;
@@ -59,9 +59,7 @@ export default function Navbar() {
         username: prof?.username ?? null,
         avatar_url: prof?.avatar_url ?? null,
       });
-    }
-
-    load();
+    })();
 
     const sub = supabase.auth.onAuthStateChange((_e, s) => {
       const u = s?.user ?? null;
@@ -90,38 +88,41 @@ export default function Navbar() {
     };
   }, []);
 
-  /* Live updates to navbar avatar/username */
-  useEffect(() => {
-    if (!user?.id) return;
-    const chan = supabase
-      .channel("navbar_profile_live")
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "profiles", filter: `id=eq.${user.id}` },
-        (payload) => {
-          const rec = payload.new as { username?: string | null; avatar_url?: string | null };
-          setUser((u) =>
-            u ? { ...u, username: rec?.username ?? u.username, avatar_url: rec?.avatar_url ?? u.avatar_url } : u
-          );
-        }
-      )
-      .subscribe();
-    return () => {
-      supabase.removeChannel(chan);
-    };
-  }, [user?.id]);
+  // live avatar/username if your row updates
+useEffect(() => {
+  if (!user?.id) return;
+  const chan = supabase
+    .channel("navbar_profile_live")
+    .on(
+      "postgres_changes",
+      { event: "UPDATE", schema: "public", table: "profiles", filter: `id=eq.${user.id}` },
+      (payload) => {
+        const rec = payload.new as { username?: string | null; avatar_url?: string | null };
+        setUser((u) =>
+          u ? { ...u, username: rec?.username ?? u.username, avatar_url: rec?.avatar_url ?? u.avatar_url } : u
+        );
+      }
+    )
+    .subscribe();
 
-  /* close account dropdown + search on route change */
+  return () => {
+    // IMPORTANT: don’t return a Promise from cleanup
+    void supabase.removeChannel(chan); // or: void chan.unsubscribe();
+  };
+}, [user?.id]);
+
+
+  // close menus when route changes
   useEffect(() => {
     setMenuOpen(false);
     setOpenSearch(false);
     setUsers([]);
     setArts([]);
-    setSelIndex(-1);
+    setSel(-1);
     setQ("");
   }, [loc.pathname, loc.search]);
 
-  /* close dropdowns on outside click / Esc */
+  // close on outside click / Esc
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (menuRef.current?.contains(e.target as Node)) return;
@@ -149,41 +150,42 @@ export default function Navbar() {
     nav("/signin", { replace: true });
   };
 
-  const avatar = useMemo(() => user?.avatar_url || "/images/taedal-logo.svg", [user?.avatar_url]);
-  const myProfileUrl = user?.username ? `/profiles/${user.username}` : `/profiles/${user?.id || ""}`;
+  const avatar = useMemo(
+    () => user?.avatar_url || "/images/taedal-logo.svg",
+    [user?.avatar_url]
+  );
+  const myProfileUrl = user?.username ? `/profiles/${user.username}` : `/profiles/${user?.id ?? ""}`;
 
-  /* ----------------------------- search ----------------------------- */
+  // ------------------------------- Search -------------------------------
   const [q, setQ] = useState("");
   const [openSearch, setOpenSearch] = useState(false);
-  const [loadingSearch, setLoadingSearch] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState<HitUser[]>([]);
   const [arts, setArts] = useState<HitArtwork[]>([]);
-  const [selIndex, setSelIndex] = useState<number>(-1);
+  const [sel, setSel] = useState(-1);
 
-  // Debounced live search — queries search views you created
+  // DEBOUNCED fetch from the *views*
   useEffect(() => {
     const term = q.trim();
-
-    // open the panel as soon as there is any term
     if (term && !openSearch) setOpenSearch(true);
     if (!term) {
       setUsers([]);
       setArts([]);
       setOpenSearch(false);
-      setSelIndex(-1);
-      setLoadingSearch(false);
+      setSel(-1);
+      setLoading(false);
       return;
     }
 
     let alive = true;
-    setLoadingSearch(true);
+    setLoading(true);
 
     const t = setTimeout(async () => {
       try {
-        const likeAnywhere = `%${term}%`;
         const likePrefix = `${term}%`;
+        const likeAny = `%${term}%`;
 
-        // PROFILES via view (username prefix + anywhere in username/display_name)
+        // PROFILES: search username prefix, then contains on username/display_name
         const pPrefix = supabase
           .from("search_profiles_v")
           .select("id, username, display_name, avatar_url")
@@ -194,11 +196,11 @@ export default function Navbar() {
         const pAny = supabase
           .from("search_profiles_v")
           .select("id, username, display_name, avatar_url")
-          .or(`username.ilike.${likeAnywhere},display_name.ilike.${likeAnywhere}`)
+          .or(`username.ilike.${likeAny},display_name.ilike.${likeAny}`)
           .order("username")
           .limit(18);
 
-        // ARTWORKS via view (title prefix + anywhere)
+        // ARTWORKS: title prefix, then contains; the view already filters draft/deleted
         const aPrefix = supabase
           .from("search_artworks_v")
           .select("id, title, image_url")
@@ -209,7 +211,7 @@ export default function Navbar() {
         const aAny = supabase
           .from("search_artworks_v")
           .select("id, title, image_url")
-          .ilike("title", likeAnywhere)
+          .ilike("title", likeAny)
           .order("title")
           .limit(24);
 
@@ -217,43 +219,31 @@ export default function Navbar() {
 
         if (!alive) return;
 
+        // helpful logging if something is wrong with RLS/GRANTs
         if (pp.error) console.warn("[search] profiles prefix error:", pp.error);
         if (pa.error) console.warn("[search] profiles any error:", pa.error);
         if (ap.error) console.warn("[search] artworks prefix error:", ap.error);
         if (aa.error) console.warn("[search] artworks any error:", aa.error);
 
-        const uniqBy = <T extends { id: string }>(arr: T[]) => {
-          const seen = new Set<string>(); const out: T[] = [];
+        const uniqById = <T extends { id: string }>(arr: T[]) => {
+          const seen = new Set<string>();
+          const out: T[] = [];
           for (const x of arr) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
           return out;
         };
 
-        const pRows = uniqBy([...(pp.data ?? []), ...(pa.data ?? [])] as any[]);
-        const aRows = uniqBy([...(ap.data ?? []), ...(aa.data ?? [])] as any[]);
+        const usersRows = uniqById([...(pp.data ?? []), ...(pa.data ?? [])] as HitUser[]);
+        const artsRows  = uniqById([...(ap.data ?? []), ...(aa.data ?? [])] as HitArtwork[]);
 
-        setUsers(
-          pRows.slice(0, 20).map((r: any) => ({
-            id: r.id,
-            username: r.username ?? null,
-            display_name: r.display_name ?? null,
-            avatar_url: r.avatar_url ?? null,
-          }))
-        );
-        setArts(
-          aRows.slice(0, 32).map((r: any) => ({
-            id: r.id,
-            title: r.title ?? null,
-            image_url: r.image_url ?? null,
-          }))
-        );
-
-        setSelIndex(-1);
+        setUsers(usersRows.slice(0, 20));
+        setArts(artsRows.slice(0, 32));
+        setSel(-1);
       } catch (err) {
-        console.warn("[search] error:", err);
+        console.warn("[search] unexpected error:", err);
       } finally {
-        if (alive) setLoadingSearch(false);
+        if (alive) setLoading(false);
       }
-    }, 180);
+    }, 200);
 
     return () => {
       alive = false;
@@ -261,8 +251,8 @@ export default function Navbar() {
     };
   }, [q, openSearch]);
 
-  // flatten results for keyboard nav
-  const flatResults = useMemo(
+  // Flatten for keyboard nav
+  const flat = useMemo(
     () => [
       ...users.map((u) => ({ kind: "user" as const, data: u })),
       ...arts.map((a) => ({ kind: "art" as const, data: a })),
@@ -271,7 +261,7 @@ export default function Navbar() {
   );
 
   const goToIndex = (i: number) => {
-    const item = flatResults[i];
+    const item = flat[i];
     if (!item) return;
     if (item.kind === "user") {
       const u = item.data as HitUser;
@@ -282,48 +272,38 @@ export default function Navbar() {
       nav(`/art/${a.id}`);
     }
     setOpenSearch(false);
-    setSelIndex(-1);
+    setSel(-1);
     setQ("");
-  };
-
-  const goToFullSearch = () => {
-    const term = q.trim();
-    if (!term) return;
-    nav(`/search?q=${encodeURIComponent(term)}`);
-    setOpenSearch(false);
-    setSelIndex(-1);
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Enter") {
-      if (selIndex >= 0) {
+      if (sel >= 0) {
         e.preventDefault();
-        goToIndex(selIndex);
-      } else if (q.trim()) {
-        e.preventDefault();
-        goToFullSearch();
+        goToIndex(sel);
       }
       return;
     }
-    if (!openSearch && e.key === "ArrowDown" && flatResults.length > 0) {
+    if (!openSearch && e.key === "ArrowDown" && flat.length > 0) {
       setOpenSearch(true);
-      setSelIndex(0);
+      setSel(0);
       return;
     }
     if (!openSearch) return;
 
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      setSelIndex((i) => Math.min(i + 1, flatResults.length - 1));
+      setSel((i) => Math.min(i + 1, flat.length - 1));
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      setSelIndex((i) => Math.max(i - 1, 0));
+      setSel((i) => Math.max(i - 1, 0));
     } else if (e.key === "Escape") {
       setOpenSearch(false);
-      setSelIndex(-1);
+      setSel(-1);
     }
   };
 
+  // ------------------------------- UI -------------------------------
   return (
     <header className="w-full sticky top-0 z-40 bg-black/80 backdrop-blur supports-[backdrop-filter]:bg-black/60 border-b border-neutral-800">
       <div className="mx-auto max-w-6xl px-4 h-14 flex items-center gap-3 relative">
@@ -341,11 +321,10 @@ export default function Navbar() {
             onKeyDown={onSearchKeyDown}
           />
 
-          {/* dropdown */}
-          {openSearch ? (
+          {openSearch && (
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
               <div className="max-h-[60vh] overflow-auto">
-                {loadingSearch && (
+                {loading && (
                   <div className="px-3 py-2 text-sm text-neutral-400 border-b border-neutral-800">
                     Searching…
                   </div>
@@ -357,11 +336,11 @@ export default function Navbar() {
                     <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-400">Users</div>
                     {users.map((u, idx) => {
                       const flatIdx = idx;
-                      const active = selIndex === flatIdx;
+                      const active = sel === flatIdx;
                       return (
                         <button
                           key={`${u.id}-${idx}`}
-                          onMouseEnter={() => setSelIndex(flatIdx)}
+                          onMouseEnter={() => setSel(flatIdx)}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => goToIndex(flatIdx)}
                           className={cx(
@@ -375,8 +354,12 @@ export default function Navbar() {
                             className="h-7 w-7 rounded-full object-cover bg-neutral-800"
                           />
                           <div className="min-w-0">
-                            <div className="text-sm truncate">{u.display_name || u.username || "User"}</div>
-                            {u.username && <div className="text-xs text-neutral-400 truncate">@{u.username}</div>}
+                            <div className="text-sm truncate">
+                              {u.display_name || u.username || "User"}
+                            </div>
+                            {u.username && (
+                              <div className="text-xs text-neutral-400 truncate">@{u.username}</div>
+                            )}
                           </div>
                         </button>
                       );
@@ -390,11 +373,11 @@ export default function Navbar() {
                     <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-400">Artworks</div>
                     {arts.map((a, idx) => {
                       const flatIdx = users.length + idx;
-                      const active = selIndex === flatIdx;
+                      const active = sel === flatIdx;
                       return (
                         <button
                           key={`${a.id}-${idx}`}
-                          onMouseEnter={() => setSelIndex(flatIdx)}
+                          onMouseEnter={() => setSel(flatIdx)}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => goToIndex(flatIdx)}
                           className={cx(
@@ -417,12 +400,11 @@ export default function Navbar() {
                   </div>
                 )}
 
-                {!loadingSearch && users.length === 0 && arts.length === 0 && (
+                {!loading && users.length === 0 && arts.length === 0 && (
                   <div className="px-3 py-2 text-sm text-neutral-400">No results</div>
                 )}
               </div>
 
-              {/* footer row */}
               <div className="px-3 py-2 border-t border-neutral-800 flex items-center justify-between">
                 <div className="text-xs text-neutral-500">
                   {users.length + arts.length} result{users.length + arts.length === 1 ? "" : "s"}
@@ -430,16 +412,23 @@ export default function Navbar() {
                 <button
                   className="text-sm text-neutral-200 hover:underline"
                   onMouseDown={(e) => e.preventDefault()}
-                  onClick={goToFullSearch}
+                  onClick={() => {
+                    // Optional: add a /search route to show a full page of results
+                    const term = q.trim();
+                    if (!term) return;
+                    nav(`/search?q=${encodeURIComponent(term)}`);
+                    setOpenSearch(false);
+                    setSel(-1);
+                  }}
                 >
                   View all results
                 </button>
               </div>
             </div>
-          ) : null}
+          )}
         </div>
 
-        {/* nav links */}
+        {/* top-level links */}
         <nav className="flex items-center gap-4">
           <NavLink
             to="/contracts"
@@ -462,7 +451,7 @@ export default function Navbar() {
             Explore
           </NavLink>
 
-          {/* right side: account slot */}
+          {/* account slot */}
           {!user ? (
             <Link
               to="/signin"
