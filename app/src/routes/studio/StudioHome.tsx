@@ -1,3 +1,4 @@
+// app/src/routes/studio/StudioHome.tsx
 import { Link } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
@@ -208,7 +209,8 @@ export default function StudioHome() {
               </select>
               <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-white/40">▾</div>
             </div>
-            <Link to="/studio/create" className="btn">Create</Link>
+            {/* UPDATED: go to the new wizard that starts with Physical/Digital */}
+            <Link to="/create" className="btn">Create</Link>
           </div>
         </div>
 
@@ -241,7 +243,7 @@ export default function StudioHome() {
         {/* --------- TABLE: Your artworks --------- */}
         <SectionCard
           title="Your artworks"
-          right={<Link to="/studio/create" className="btn px-3 py-1.5 text-sm">Create artwork</Link>}
+          right={<Link to="/create" className="btn px-3 py-1.5 text-sm">Create artwork</Link>}
           loading={anyLoading && artworks.length === 0}
           empty={!anyLoading && artworks.length === 0}
           emptyText={<div className="text-sm text-white/70">You don’t have any artworks yet.</div>}
@@ -470,6 +472,8 @@ function SectionCard({
 }
 
 function pickCcy(listings: Listing[], artworkId: string): string {
-  const row = listings.find((l) => l.artwork_id === artworkId && l.status === "active" && l.sale_currency);
+  const row = listings.find(
+    (l) => l.artwork_id === artworkId && l.status === "active" && l.sale_currency
+  );
   return (row?.sale_currency || "USD").toUpperCase();
 }
