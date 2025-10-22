@@ -160,7 +160,7 @@ export default function Navbar() {
   const [arts, setArts] = useState<HitArtwork[]>([]);
   const [selIndex, setSelIndex] = useState<number>(-1);
 
-  // Debounced live search — show panel immediately (with "Searching…")
+  // Debounced live search — queries search views you created
   useEffect(() => {
     const term = q.trim();
 
@@ -183,41 +183,40 @@ export default function Navbar() {
         const likeAnywhere = `%${term}%`;
         const likePrefix = `${term}%`;
 
-        // PROFILES
+        // PROFILES via view (username prefix + anywhere in username/display_name)
         const pPrefix = supabase
-          .from("profiles")
+          .from("search_profiles_v")
           .select("id, username, display_name, avatar_url")
           .ilike("username", likePrefix)
           .order("username")
           .limit(12);
 
         const pAny = supabase
-          .from("profiles")
+          .from("search_profiles_v")
           .select("id, username, display_name, avatar_url")
           .or(`username.ilike.${likeAnywhere},display_name.ilike.${likeAnywhere}`)
           .order("username")
           .limit(18);
 
-        // ARTWORKS
+        // ARTWORKS via view (title prefix + anywhere)
         const aPrefix = supabase
-          .from("artworks")
-          .select("id, title, image_url, status, deleted_at")
+          .from("search_artworks_v")
+          .select("id, title, image_url")
           .ilike("title", likePrefix)
-          .order("created_at", { ascending: false })
+          .order("title")
           .limit(16);
 
         const aAny = supabase
-          .from("artworks")
-          .select("id, title, image_url, status, deleted_at")
+          .from("search_artworks_v")
+          .select("id, title, image_url")
           .ilike("title", likeAnywhere)
-          .order("created_at", { ascending: false })
+          .order("title")
           .limit(24);
 
         const [pp, pa, ap, aa] = await Promise.all([pPrefix, pAny, aPrefix, aAny]);
 
         if (!alive) return;
 
-        // quick error visibility in dev/console
         if (pp.error) console.warn("[search] profiles prefix error:", pp.error);
         if (pa.error) console.warn("[search] profiles any error:", pa.error);
         if (ap.error) console.warn("[search] artworks prefix error:", ap.error);
@@ -230,13 +229,7 @@ export default function Navbar() {
         };
 
         const pRows = uniqBy([...(pp.data ?? []), ...(pa.data ?? [])] as any[]);
-        const aRowsRaw = uniqBy([...(ap.data ?? []), ...(aa.data ?? [])] as any[]);
-
-        const aRows = aRowsRaw.filter((r: any) => {
-          if (r.deleted_at) return false;
-          if (typeof r.status === "string") return r.status !== "draft";
-          return true;
-        });
+        const aRows = uniqBy([...(ap.data ?? []), ...(aa.data ?? [])] as any[]);
 
         setUsers(
           pRows.slice(0, 20).map((r: any) => ({
@@ -260,7 +253,7 @@ export default function Navbar() {
       } finally {
         if (alive) setLoadingSearch(false);
       }
-    }, 180); // snappy debounce
+    }, 180);
 
     return () => {
       alive = false;
@@ -352,7 +345,6 @@ export default function Navbar() {
           {openSearch ? (
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
               <div className="max-h-[60vh] overflow-auto">
-                {/* when searching and nothing yet */}
                 {loadingSearch && (
                   <div className="px-3 py-2 text-sm text-neutral-400 border-b border-neutral-800">
                     Searching…
