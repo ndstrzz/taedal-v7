@@ -77,10 +77,8 @@ function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
   };
 }
 
-/* ---------- NEW: long-token soft wrapping (every 30 chars) ---------- */
+/* ---------- long-token soft wrapping (every 30 chars) ---------- */
 function softWrapLongTokens(s: string, chunk = 30): string {
-  // Insert a zero-width space every `chunk` chars inside runs of non-whitespace.
-  // This does NOT affect normal words; only very long tokens like "AAAA...."
   return s.replace(/\S{30,}/g, (w) => w.replace(new RegExp(`.{${chunk}}`, "g"), "$&\u200B"));
 }
 
@@ -107,7 +105,6 @@ export default function RequestDetail() {
   const [typingBy, setTypingBy] = useState<Record<string, number>>({});
   const [seenBy, setSeenBy] = useState<Record<string, { msgId: string; ts: number }>>({});
   const messagesWrapRef = useRef<HTMLDivElement>(null);
-
   const chatEndRef = useRef<HTMLDivElement>(null);
 
   const iAmOwner = useMemo(() => me && req && req.owner_id === me, [me, req]);
@@ -457,7 +454,6 @@ export default function RequestDetail() {
                 </button>
               </div>
 
-              {/* Basics */}
               <FieldRow label="Purpose">{working.purpose}</FieldRow>
               <FieldRow label="Term">{working.term_months} months</FieldRow>
               <FieldRow label="Territory">{stringifyTerritory(working.territory)}</FieldRow>
@@ -527,7 +523,8 @@ export default function RequestDetail() {
 
           {/* RIGHT: Thread */}
           <div className="flex flex-col min-w-0 overflow-hidden">
-            <div ref={messagesWrapRef} className="flex-1 overflow-auto p-4 space-y-2">
+            {/* messages area */}
+            <div ref={messagesWrapRef} className="flex-1 overflow-auto p-4">
               <ChatPane
                 me={me!}
                 msgs={msgs}
@@ -545,6 +542,7 @@ export default function RequestDetail() {
               )}
             </div>
 
+            {/* sticky composer */}
             <div className="sticky bottom-0 z-10 p-3 border-t border-white/10 bg-neutral-950 flex gap-2">
               <textarea
                 className="flex-1 input min-h-[44px]"
@@ -617,51 +615,56 @@ function ChatPane({
           return out;
         })() : [];
 
-        // NEW: display body with soft wrapping
         const bodyText = m.body ? softWrapLongTokens(m.body, 30) : "";
 
         return (
-          <div key={m.id} className={`flex ${mine ? "justify-end" : "justify-start"}`}>
-            <div className={`flex items-end gap-2 max-w-[78%] ${mine ? "flex-row-reverse" : ""}`}>
-              {showHead ? <Avatar url={author?.avatar_url} name={author ? (author.display_name || author.username || author.id) : "User"} size={32} /> : <div style={{ width: 32, height: 32 }} />}
-              <div className={`rounded-2xl px-3 py-2 ${mine ? "bg-indigo-500 text-black" : "bg-white/10"}`}>
-                {!mine && showHead && (
-                  <div className="text-[11px] text-white/70 mb-0.5">
-                    {author ? (author.display_name || author.username || author.id) : "User"}
-                  </div>
-                )}
-                {m.body && (
-                  <div className="whitespace-pre-wrap break-words text-sm mb-1">
-                    {bodyText}
-                  </div>
-                )}
-
-                {m.patch && (
-                  <div className={`rounded-lg ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
-                    <ul className="space-y-1">
-                      {diffs.map((d, idx) => (
-                        <li key={idx} className="break-words">
-                          <span className="text-white/60">{String(d.key)}:</span>{" "}
-                          <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
-                          <span>→ <b>{formatVal(d.after)}</b></span>
-                        </li>
-                      ))}
-                    </ul>
-                    <div className="mt-2">
-                      <button className={`px-2 py-1 rounded-md text-xs ${mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"}`} onClick={() => onAcceptPatch(m.patch!)}>
-                        Accept change
-                      </button>
+          <div key={m.id}
+            className={`mb-2 ${mine ? "pl-12" : "pr-12"}` /* keep gutters symmetric */}
+          >
+            <div className={`flex ${mine ? "justify-end" : "justify-start"} items-end gap-2`}>
+              {/* avatar column: shown only for first in group, otherwise a spacer to keep left edge aligned */}
+              {showHead
+                ? <Avatar url={author?.avatar_url} name={author ? (author.display_name || author.username || author.id) : "User"} size={32} />
+                : <div style={{ width: 32, height: 32 }} />}
+              {/* bubble + timestamp column */}
+              <div className={`max-w-[72%] ${mine ? "items-end" : "items-start"} flex flex-col`}>
+                {/* bubble */}
+                <div className={`rounded-2xl px-3 py-2 leading-snug break-words ${mine ? "bg-indigo-500 text-black" : "bg-white/10 text-white"}`}>
+                  {!mine && showHead && (
+                    <div className="text-[11px] text-white/70 mb-0.5">
+                      {author ? (author.display_name || author.username || author.id) : "User"}
                     </div>
-                  </div>
-                )}
+                  )}
+                  {m.body && (
+                    <div className="whitespace-pre-wrap text-sm">
+                      {bodyText}
+                    </div>
+                  )}
 
-                <div className={`text-[10px] mt-1 ${mine ? "text-black/60 text-right" : "text-white/50"}`}>
-                  {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
+                  {m.patch && (
+                    <div className={`rounded-lg mt-2 ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
+                      <ul className="space-y-1">
+                        {diffs.map((d, idx) => (
+                          <li key={idx} className="break-words">
+                            <span className="text-white/60">{String(d.key)}:</span>{" "}
+                            <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
+                            <span>→ <b>{formatVal(d.after)}</b></span>
+                          </li>
+                        ))}
+                      </ul>
+                      <div className="mt-2">
+                        <button className={`px-2 py-1 rounded-md text-xs ${mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"}`} onClick={() => onAcceptPatch(m.patch!)}>
+                          Accept change
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-
-                {mine && i === msgs.length - 1 && hasSeen(m.id) && (
-                  <div className="text-[10px] mt-1 text-black/60 text-right">Seen</div>
-                )}
+                {/* timestamp aligned to bubble edge */}
+                <div className={`mt-1 text-[10px] ${mine ? "text-right text-white/60" : "text-left text-white/50"}`}>
+                  {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
+                  {mine && i === msgs.length - 1 && hasSeen(m.id) && <span className="ml-2">• Seen</span>}
+                </div>
               </div>
             </div>
           </div>
