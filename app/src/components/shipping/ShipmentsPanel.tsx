@@ -1,100 +1,161 @@
+// app/src/components/shipping/ShipmentsPanel.tsx
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { apiListShipments, apiUpsertShipment, type Shipment } from "../../lib/api";
 
-export default function ShipmentsPanel({ artworkId, canEdit }: { artworkId: string; canEdit: boolean }) {
+type Shipment = {
+  id: string;
+  artwork_id: string;
+  owner_id: string | null;
+  carrier: string | null;
+  tracking_number: string | null;
+  status: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
+  note: string | null;
+  created_at: string;
+};
+
+export default function ShipmentsPanel({
+  artworkId,
+  canEdit,
+}: {
+  artworkId: string;
+  canEdit: boolean;
+}) {
+  const [uid, setUid] = useState<string | null>(null);
   const [rows, setRows] = useState<Shipment[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
-  async function load() {
-    const { data } = await supabase.auth.getSession();
-    const token = data.session?.access_token!;
-    const res = await apiListShipments(artworkId, token);
-    setRows(res.shipments || []);
-  }
+  // form (simple inline inputs)
+  const [carrier, setCarrier] = useState("");
+  const [tracking, setTracking] = useState("");
+  const [note, setNote] = useState("");
 
   useEffect(() => {
-    load().catch(() => {});
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      setUid(data.session?.user?.id ?? null);
+      await load();
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artworkId]);
 
-  async function createOrUpdate() {
-    const carrier = prompt("Carrier (e.g. DHL, UPS) — leave blank if manual") || "";
-    const tracking_no = prompt("Tracking number (optional)") || "";
-    const status =
-      prompt(
-        "Status: label_created | in_transit | out_for_delivery | delivered | exception | canceled"
-      ) || "label_created";
+  async function load() {
+    setMsg(null);
+    const { data, error } = await supabase
+      .from("shipments")
+      .select("id,artwork_id,owner_id,carrier,tracking_number,status,note,created_at")
+      .eq("artwork_id", artworkId)
+      .order("created_at", { ascending: false });
+    if (error) {
+      setMsg(error.message);
+      setRows([]);
+      return;
+    }
+    setRows((data ?? []) as Shipment[]);
+  }
+
+  async function addShipment() {
+    if (!uid) {
+      setMsg("Please sign in.");
+      return;
+    }
+    if (!carrier && !tracking && !note) {
+      setMsg("Add at least one field (carrier, tracking, or note).");
+      return;
+    }
     setBusy(true);
     setMsg(null);
     try {
-      const { data } = await supabase.auth.getSession();
-      const token = data.session?.access_token!;
-      await apiUpsertShipment(
-        { artwork_id: artworkId, carrier: carrier || null, tracking_no: tracking_no || null, status },
-        token
-      );
-      await load();
-      setMsg("Saved ✓");
+      // create shipment row
+      const { data, error } = await supabase
+        .from("shipments")
+        .insert({
+          artwork_id: artworkId,
+          owner_id: uid,
+          carrier: carrier || null,
+          tracking_number: tracking || null,
+          status: "in_transit",
+          note: note || null,
+        })
+        .select("*")
+        .single();
+      if (error) throw error;
+
+      // optionally reflect on the artwork’s physical_status
+      await supabase
+        .from("artworks")
+        .update({ physical_status: "in_transit" })
+        .eq("id", artworkId);
+
+      // prepend in UI
+      setRows((cur) => [data as Shipment, ...cur]);
+      setCarrier("");
+      setTracking("");
+      setNote("");
     } catch (e: any) {
-      setMsg(e?.message || "Failed");
+      setMsg(e?.message || "Failed to add shipment.");
     } finally {
       setBusy(false);
     }
   }
-
-  const latest = rows[0];
 
   return (
     <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
       <div className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Shipments</h3>
         {canEdit && (
-          <button
-            className="px-3 py-1.5 rounded-lg text-sm bg-white text-black hover:bg-white/90"
-            onClick={createOrUpdate}
-            disabled={busy}
-          >
-            {busy ? "Saving…" : rows.length ? "Update" : "Add shipment"}
-          </button>
+          <div className="flex gap-2">
+            <input
+              className="input w-36"
+              placeholder="Carrier"
+              value={carrier}
+              onChange={(e) => setCarrier(e.target.value)}
+            />
+            <input
+              className="input w-44"
+              placeholder="Tracking #"
+              value={tracking}
+              onChange={(e) => setTracking(e.target.value)}
+            />
+            <input
+              className="input w-56"
+              placeholder="Note (optional)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+            />
+            <button className="btn" onClick={addShipment} disabled={busy}>
+              {busy ? "Saving…" : "Add shipment"}
+            </button>
+          </div>
         )}
       </div>
 
-      {!rows.length ? (
+      {msg && <div className="text-xs text-amber-300 mb-2">{msg}</div>}
+
+      {rows.length === 0 ? (
         <div className="text-sm text-white/70">No shipments yet.</div>
       ) : (
-        <div className="space-y-3">
-          <div className="text-sm">
-            <div>
-              Status: <b>{latest.status}</b>
-            </div>
-            {latest.carrier || latest.tracking_no ? (
-              <div className="text-white/70">
-                {latest.carrier ?? "Manual"}
-                {latest.tracking_no ? ` • ${latest.tracking_no}` : ""}
+        <ul className="space-y-2">
+          {rows.map((s) => (
+            <li
+              key={s.id}
+              className="p-3 rounded-xl bg-white/[0.04] border border-white/10 text-sm"
+            >
+              <div className="flex flex-wrap gap-x-4 gap-y-1">
+                <span>
+                  <b>Status:</b> {s.status ?? "unknown"}
+                </span>
+                {s.carrier && <span><b>Carrier:</b> {s.carrier}</span>}
+                {s.tracking_number && <span><b>Tracking:</b> {s.tracking_number}</span>}
+                <span className="text-white/60">
+                  {new Date(s.created_at).toLocaleString()}
+                </span>
               </div>
-            ) : null}
-            {latest.eta ? (
-              <div className="text-white/70">ETA: {new Date(latest.eta).toLocaleString()}</div>
-            ) : null}
-          </div>
-
-          {(latest.legs || []).length > 0 && (
-            <ul className="text-sm space-y-2">
-              {latest.legs!.map((l: any, i: number) => (
-                <li key={i} className="p-2 rounded-lg bg-white/[0.03] border border-white/10">
-                  <div className="text-white/80">{l.note || "Update"}</div>
-                  <div className="text-[11px] text-white/60">
-                    {l.location || "—"} • {l.time ? new Date(l.time).toLocaleString() : "—"}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+              {s.note && <div className="text-white/80 mt-1">{s.note}</div>}
+            </li>
+          ))}
+        </ul>
       )}
-
-      {msg && <div className="text-xs text-neutral-200 mt-2">{msg}</div>}
     </div>
   );
 }
