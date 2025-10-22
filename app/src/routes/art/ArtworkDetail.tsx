@@ -15,7 +15,8 @@ import {
   type Bid,
 } from "../../lib/bids";
 import RequestLicenseModal from "../../components/RequestLicenseModal";
-
+import PhysicalBadge from "../../components/art/PhysicalBadge";
+import ShipmentsPanel from "../../components/shipping/ShipmentsPanel";
 /* ------------------------------ config ------------------------------ */
 
 // Wallet to receive ETH on Sepolia during testing
@@ -54,6 +55,10 @@ type Artwork = {
   ipfs_image_cid?: string | null;
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
+
+  // NEW (for physical items)
+  type?: "digital" | "physical" | null;
+  physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
 };
 
 type ArtworkFile = {
@@ -335,7 +340,8 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
+            // NEW: select type + physical_status
+            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
           )
           .eq("id", id!)
           .maybeSingle();
@@ -487,7 +493,8 @@ export default function ArtworkDetail() {
       const fresh = await supabase
         .from("artworks")
         .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri"
+          // NEW: also bring back type + physical_status
+          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
         )
         .eq("id", art.id)
         .maybeSingle();
@@ -809,7 +816,11 @@ export default function ArtworkDetail() {
               <div className="mt-2 flex flex-wrap gap-2">
                 <Pill>ERC721</Pill>
                 <Pill>ETHEREUM</Pill>
-                <Pill>TOKEN</Pill>
+                {art.type === "physical" ? (
+                  <PhysicalBadge status={art.physical_status || "with_creator"} />
+                ) : (
+                  <Pill>TOKEN</Pill>
+                )}
               </div>
             </div>
 
@@ -1066,6 +1077,14 @@ export default function ArtworkDetail() {
             {/* DETAILS */}
             {tab === "details" && (
               <div className="p-4 space-y-4">
+                {/* NEW: shipping panel for physical items */}
+                {art.type === "physical" && (
+                  <ShipmentsPanel
+                    artworkId={art.id}
+                    canEdit={!!viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)}
+                  />
+                )}
+
                 {/* Traits (placeholder) */}
                 <Card
                   title={
