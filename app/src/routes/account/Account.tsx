@@ -330,15 +330,18 @@ export default function Account() {
       if (avatarFile) {
         try {
           const resized = await resizeImage(avatarFile, 512, 512);
-          const path = `${uid}.jpg`; // <— fixed
+
+          // ⬅️ changed: write to a NEW key and DO NOT upsert
+          const path = `${uid}/avatar-${Date.now()}.jpg`;
           const { error: upErr } = await supabase.storage
             .from("avatars")
             .upload(path, resized, {
-              upsert: true,
               cacheControl: "0",
               contentType: "image/jpeg",
+              // upsert: false (default)
             });
           if (upErr) throw upErr;
+
           const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
           avatar_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
         } catch (err) {
@@ -349,12 +352,12 @@ export default function Account() {
       if (coverFile) {
         const isVid = coverMime?.startsWith("video/");
         try {
+          // ⬅️ changed: write to a NEW key and DO NOT upsert
           if (isVid) {
-            const path = `${uid}.webm`; // <— fixed
+            const path = `${uid}/cover-${Date.now()}.webm`;
             const { error: upErr } = await supabase.storage
               .from("covers")
               .upload(path, coverFile, {
-                upsert: true,
                 cacheControl: "0",
                 contentType: "video/webm",
               });
@@ -363,11 +366,10 @@ export default function Account() {
             cover_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
           } else {
             const resized = await resizeImage(coverFile, 1600, 500);
-            const path = `${uid}.jpg`; // <— fixed
+            const path = `${uid}/cover-${Date.now()}.jpg`;
             const { error: upErr } = await supabase.storage
               .from("covers")
               .upload(path, resized, {
-                upsert: true,
                 cacheControl: "0",
                 contentType: "image/jpeg",
               });
