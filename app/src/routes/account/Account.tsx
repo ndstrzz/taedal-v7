@@ -162,16 +162,6 @@ export default function Account() {
     [avatarPreview, coverPreview]
   );
 
-  function normalizeHandle(v?: string | null) {
-    if (!v) return null;
-    return v.trim().replace(/^@/, "") || null;
-  }
-  function normalizeUrlOrHandle(v?: string | null) {
-    if (!v) return null;
-    const s = v.trim();
-    return s || null;
-  }
-
   async function loadProfile(uid: string) {
     const { data, error } = await supabase
       .from("profiles")
@@ -322,7 +312,7 @@ export default function Account() {
         return;
       }
 
-      // 2) Uploads (NOTE: object names DO NOT include bucket prefix)
+      // 2) Uploads  (object names DO NOT include bucket prefix)
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
       const stamp = `v=${Date.now()}`;
@@ -331,14 +321,13 @@ export default function Account() {
         try {
           const resized = await resizeImage(avatarFile, 512, 512);
 
-          // ⬅️ changed: write to a NEW key and DO NOT upsert
+          // IMPORTANT: satisfy RLS prefix rule with `${uid}/...` and write to a NEW key (no upsert)
           const path = `${uid}/avatar-${Date.now()}.jpg`;
           const { error: upErr } = await supabase.storage
             .from("avatars")
             .upload(path, resized, {
               cacheControl: "0",
               contentType: "image/jpeg",
-              // upsert: false (default)
             });
           if (upErr) throw upErr;
 
@@ -352,7 +341,6 @@ export default function Account() {
       if (coverFile) {
         const isVid = coverMime?.startsWith("video/");
         try {
-          // ⬅️ changed: write to a NEW key and DO NOT upsert
           if (isVid) {
             const path = `${uid}/cover-${Date.now()}.webm`;
             const { error: upErr } = await supabase.storage
