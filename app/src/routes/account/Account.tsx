@@ -299,7 +299,7 @@ export default function Account() {
     };
 
     try {
-      // 1) Ensure authenticated NOW (sessions can expire during long video processing)
+      // 1) Ensure authenticated NOW
       let { data: u0 } = await supabase.auth.getUser();
       if (!u0?.user) {
         await supabase.auth.refreshSession().catch(() => {});
@@ -312,7 +312,7 @@ export default function Account() {
         return;
       }
 
-      // 2) Uploads  (object names DO NOT include bucket prefix)
+      // 2) Uploads (object keys live under {uid}/...)
       let avatar_url = form.avatar_url || null;
       let cover_url = form.cover_url || null;
       const stamp = `v=${Date.now()}`;
@@ -320,8 +320,6 @@ export default function Account() {
       if (avatarFile) {
         try {
           const resized = await resizeImage(avatarFile, 512, 512);
-
-          // IMPORTANT: satisfy RLS prefix rule with `${uid}/...` and write to a NEW key (no upsert)
           const path = `${uid}/avatar-${Date.now()}.jpg`;
           const { error: upErr } = await supabase.storage
             .from("avatars")
@@ -330,7 +328,6 @@ export default function Account() {
               contentType: "image/jpeg",
             });
           if (upErr) throw upErr;
-
           const { data: pub } = supabase.storage.from("avatars").getPublicUrl(path);
           avatar_url = `${pub.publicUrl}${pub.publicUrl.includes("?") ? "&" : "?"}${stamp}`;
         } catch (err) {
@@ -370,7 +367,7 @@ export default function Account() {
         }
       }
 
-      // 3) Save profile (include id to satisfy WITH CHECK (id = auth.uid()))
+      // 3) Save profile
       try {
         const payload = {
           id: uid,
@@ -384,7 +381,6 @@ export default function Account() {
           youtube: (form.youtube || "").trim() || null,
           telegram: (form.telegram || "").trim().replace(/^@/, "") || null,
         };
-
         const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "id" });
         if (error) throw error;
       } catch (err) {
@@ -403,6 +399,13 @@ export default function Account() {
       setSaving(false);
     }
   };
+
+  if (loading) return <div className="p-6">loading…</div>;
+
+  // decide how to render cover
+  const fromUrlIsVideo = isVideoUrl(form.cover_url || "");
+  const localIsVideo = !!coverFile && (coverMime?.startsWith("video/") || isVideoFile(coverFile));
+  const showVideo = localIsVideo || (!coverFile && fromUrlIsVideo);
 
   /* ---------- social links renderer ---------- */
   function SocialLink({
@@ -443,13 +446,6 @@ export default function Account() {
       </a>
     );
   }
-
-  if (loading) return <div className="p-6">loading…</div>;
-
-  // decide how to render cover
-  const fromUrlIsVideo = isVideoUrl(form.cover_url || "");
-  const localIsVideo = !!coverFile && (coverMime?.startsWith("video/") || isVideoFile(coverFile));
-  const showVideo = localIsVideo || (!coverFile && fromUrlIsVideo);
 
   return (
     <div className="min-h-[100dvh]">
@@ -645,9 +641,9 @@ export default function Account() {
             <button className="btn" disabled={saving} type="submit">
               {saving ? "Saving…" : "Save"}
             </button>
-            {avatarFile || coverFile ? (
+            {(avatarFile || coverFile) && (
               <span className="text-sm text-neutral-400">You have unsaved media changes.</span>
-            ) : null}
+            )}
           </div>
           {msg && <p className="text-sm text-amber-300">{msg}</p>}
         </form>
