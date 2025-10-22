@@ -14,8 +14,19 @@ export const supabase = createClient(
   }
 );
 
-// Expose the client in DEV so you can run window.supabase.auth.getSession() in the console.
-if (import.meta.env.DEV) {
+/**
+ * Expose the client to window for debugging:
+ * - Always in DEV
+ * - In PROD only when the page URL has ?dbg=1
+ * - Or when VITE_EXPOSE_SB=1 is set in env
+ */
+const shouldExpose =
+  import.meta.env.DEV ||
+  (typeof window !== "undefined" &&
+    (new URLSearchParams(window.location.search).has("dbg") ||
+      import.meta.env.VITE_EXPOSE_SB === "1"));
+
+if (shouldExpose && typeof window !== "undefined") {
   (window as any).supabase = supabase;
 }
 
