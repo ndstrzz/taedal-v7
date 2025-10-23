@@ -18,13 +18,10 @@ export async function runAction(action: AssistantAction) {
     }
 
     case "TOGGLE_THEME": {
-      // simple theming via attribute; adapt to your ThemeProvider if needed
-      const root = document.documentElement;
-      if (action.mode === "system") {
-        root.removeAttribute("data-theme");
-      } else {
-        root.setAttribute("data-theme", action.mode);
-      }
+      // Prefer going through ThemeProvider so React state stays consistent
+      const mode = action.mode;
+      const ev = new CustomEvent("assistant:setTheme", { detail: mode });
+      window.dispatchEvent(ev);
       return;
     }
 
@@ -52,7 +49,6 @@ export async function runAction(action: AssistantAction) {
           }, 120);
         });
 
-      // run a tiny guided flow using the same driver.js instance as tours
       const { driver } = await import("driver.js");
       await import("driver.js/dist/driver.css");
 

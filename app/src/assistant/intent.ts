@@ -8,23 +8,23 @@ export function classifyIntent(text: string): AssistantAction {
   if (!q) return { type: "NONE" };
 
   // theme
-  if (/\b(light|white)\b.*theme|theme.*\blight\b/.test(q)) {
+  if (/\b(light|white)\b.*(theme|mode)|(theme|mode).*\blight\b/.test(q)) {
     return { type: "TOGGLE_THEME", mode: "light" };
   }
-  if (/\b(dark|black)\b.*theme|theme.*\bdark\b/.test(q)) {
+  if (/\b(dark|black)\b.*(theme|mode)|(theme|mode).*\bdark\b/.test(q)) {
     return { type: "TOGGLE_THEME", mode: "dark" };
   }
-  if (/\bsystem\b.*theme|theme.*\bsystem\b/.test(q)) {
+  if (/\bsystem\b.*(theme|mode)|(theme|mode).*\bsystem\b/.test(q)) {
     return { type: "TOGGLE_THEME", mode: "system" };
   }
-  if (/toggle.*theme|switch.*theme|change.*theme/.test(q)) {
-    // default toggle behavior: if body is light -> dark else light
-    const isLight = document.documentElement.getAttribute("data-theme") === "light";
-    return { type: "TOGGLE_THEME", mode: isLight ? "dark" : "light" };
+  if (/toggle.*(theme|mode)|switch.*(theme|mode)|change.*(theme|mode)/.test(q)) {
+    // Default toggle by asking ThemeProvider to toggle (custom event with no detail)
+    window.dispatchEvent(new Event("assistant:toggleTheme"));
+    return { type: "NONE" };
   }
 
   // tours / help
-  if (/tour|show me around|guide me|help me/.test(q)) {
+  if (/(^|\b)(tour|show me around|guide me|help me)(\b|$)/.test(q)) {
     return { type: "START_TOUR" };
   }
 
