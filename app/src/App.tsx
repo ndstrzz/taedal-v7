@@ -6,8 +6,7 @@ import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "re
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
-import Account from "./routes/account/Account";
-import PublicProfile from "./routes/profiles/PublicProfile";
+import PublicProfile from "./routes/profiles/PublicProfile"; // ⬅️ new
 
 /* ---- libs ---- */
 import { fetchActiveListings, type JoinedListing } from "./lib/listings";
@@ -184,18 +183,10 @@ function App() {
             <Route path="/" element={<Explore />} />
             <Route path="/create" element={<CreateArtwork />} />
             <Route path="/art/:id" element={<ArtworkDetail />} />
-
-            {/* Public profiles */}
-            <Route path="/profiles/:handle" element={<PublicProfile />} />
-            {/* Optional short alias */}
+            {/* Public profile route used by Topbar search */}
             <Route path="/u/:handle" element={<PublicProfile />} />
-
-            {/* Account (owner’s settings) */}
-            <Route path="/account" element={<Account />} />
-
             {/* Stripe success landing */}
             <Route path="/checkout/success" element={<CheckoutSuccess />} />
-
             {/* Catch-all */}
             <Route path="*" element={<NotFound />} />
           </Routes>

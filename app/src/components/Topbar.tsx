@@ -3,7 +3,6 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
-/* ----------------------------- types ----------------------------- */
 type UserBits = {
   id: string;
   username?: string | null;
@@ -11,16 +10,12 @@ type UserBits = {
   email?: string | null;
 };
 
-type HitUser = {
+type SearchRow = {
   id: string;
   username: string | null;
   display_name: string | null;
   avatar_url: string | null;
 };
-
-/* tiny util */
-const cx = (...xs: Array<string | false | null | undefined>) =>
-  xs.filter(Boolean).join(" ");
 
 export default function Topbar() {
   const nav = useNavigate();
@@ -28,12 +23,9 @@ export default function Topbar() {
 
   const [user, setUser] = useState<UserBits | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
-
-  // refs for outside-click handling
   const menuRef = useRef<HTMLDivElement>(null);
-  const searchRef = useRef<HTMLDivElement>(null);
 
-  /* ---------------------- session + profile load ---------------------- */
+  /* -------------------- bootstrap user + auth listener -------------------- */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -78,129 +70,19 @@ export default function Topbar() {
     };
   }, []);
 
-  /* close account dropdown on route change */
   useEffect(() => setMenuOpen(false), [loc.pathname, loc.search]);
 
-  /* ----------------------------- search ----------------------------- */
-  const [q, setQ] = useState("");
-  const [openSearch, setOpenSearch] = useState(false);
-  const [loadingSearch, setLoadingSearch] = useState(false);
-  const [results, setResults] = useState<HitUser[]>([]);
-  const [selIndex, setSelIndex] = useState<number>(-1);
-
-  // Debounced live search — show panel immediately (with "Searching…")
-  useEffect(() => {
-    const term = q.trim();
-
-    // open the panel as soon as there is any term
-    if (term && !openSearch) setOpenSearch(true);
-    if (!term) {
-      setResults([]);
-      setOpenSearch(false);
-      setSelIndex(-1);
-      setLoadingSearch(false);
-      return;
-    }
-
-    let alive = true;
-    setLoadingSearch(true);
-
-    const t = setTimeout(async () => {
-      try {
-        const likeAnywhere = `%${term}%`;
-        const { data, error } = await supabase
-          .from("profiles")
-          .select("id, username, display_name, avatar_url")
-          .or(`username.ilike.${likeAnywhere},display_name.ilike.${likeAnywhere}`)
-          .order("username", { ascending: true })
-          .limit(20);
-
-        if (!alive) return;
-        if (error) {
-          console.warn("[search] error:", error);
-          setResults([]);
-        } else {
-          setResults(
-            (data ?? []).map((r: any) => ({
-              id: r.id,
-              username: r.username ?? null,
-              display_name: r.display_name ?? null,
-              avatar_url: r.avatar_url ?? null,
-            }))
-          );
-        }
-        setSelIndex(-1);
-      } catch (err) {
-        if (alive) console.warn("[search] error:", err);
-      } finally {
-        if (alive) setLoadingSearch(false);
-      }
-    }, 180); // snappy debounce
-
-    return () => {
-      alive = false;
-      clearTimeout(t);
-    };
-  }, [q, openSearch]);
-
-  const profileHref = (u: HitUser) =>
-    u.username ? `/profiles/${u.username}` : `/profiles/${u.id}`;
-
-  const goToIndex = (i: number) => {
-    const u = results[i];
-    if (!u) return;
-    nav(profileHref(u));
-    setOpenSearch(false);
-    setSelIndex(-1);
-    setQ("");
-  };
-
-  const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      if (selIndex >= 0) {
-        e.preventDefault();
-        goToIndex(selIndex);
-      } else if (q.trim() && results.length) {
-        e.preventDefault();
-        goToIndex(0);
-      }
-      return;
-    }
-    if (!openSearch && e.key === "ArrowDown" && results.length > 0) {
-      setOpenSearch(true);
-      setSelIndex(0);
-      return;
-    }
-    if (!openSearch) return;
-
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setSelIndex((i) => Math.min(i + 1, results.length - 1));
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setSelIndex((i) => Math.max(i - 1, 0));
-    } else if (e.key === "Escape") {
-      setOpenSearch(false);
-      setSelIndex(-1);
-    }
-  };
-
-  /* -------------------------- outside clicks -------------------------- */
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      const t = e.target as Node;
-      // keep account menu open only when clicking inside it
-      if (menuRef.current?.contains(t)) return;
-      // keep search open when clicking inside the search area
-      if (searchRef.current?.contains(t)) return;
-
+      if (!menuRef.current) return;
+      if (menuRef.current.contains(e.target as Node)) return;
       setMenuOpen(false);
-      setOpenSearch(false);
+      setOpen(false);
     }
     function onEsc(e: KeyboardEvent) {
       if (e.key === "Escape") {
         setMenuOpen(false);
-        setOpenSearch(false);
+        setOpen(false);
       }
     }
     document.addEventListener("mousedown", onDocClick);
@@ -222,9 +104,71 @@ export default function Topbar() {
     () => user?.avatar_url || "/images/taedal-logo.svg",
     [user?.avatar_url]
   );
-  const myProfileUrl = user?.username
-    ? `/profiles/${user.username}`
-    : `/profiles/${user?.id || ""}`;
+  const profileUrl = user?.username ? `/u/${user.username}` : "/account";
+
+  /* ------------------------------ Search UI ------------------------------ */
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<SearchRow[]>([]);
+  const [sel, setSel] = useState(0);
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // Fetch users for query
+  useEffect(() => {
+    let alive = true;
+    const run = async () => {
+      const term = q.trim();
+      if (!term) {
+        if (alive) setRows([]);
+        return;
+      }
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("id,username,display_name,avatar_url")
+        .or(`username.ilike.%${term}%,display_name.ilike.%${term}%`)
+        .order("username", { ascending: true })
+        .limit(20);
+
+      if (!alive) return;
+      if (error) {
+        setRows([]);
+        return;
+      }
+      setRows((data ?? []) as SearchRow[]);
+      setSel(0);
+    };
+    const t = setTimeout(run, 160);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [q]);
+
+  // keyboard navigation
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
+      setOpen(true);
+    }
+    if (!rows.length) return;
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setSel((i) => (i + 1) % rows.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setSel((i) => (i - 1 + rows.length) % rows.length);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const r = rows[Math.max(0, Math.min(sel, rows.length - 1))];
+      if (r) {
+        // Always navigate to /u/:handle (or fallback to id)
+        nav(`/u/${r.username || r.id}`);
+        setOpen(false);
+      }
+    } else if (e.key === "Escape") {
+      setOpen(false);
+    }
+  }
 
   return (
     <header className="sticky top-0 z-30 bg-black/80 backdrop-blur border-b border-neutral-800">
@@ -232,97 +176,56 @@ export default function Topbar() {
         {/* spacer to account for sidebar width */}
         <div className="w-14 shrink-0" />
 
-        {/* search */}
-        <div className="flex-1 relative" ref={searchRef}>
+        {/* search box + results */}
+        <div className="relative flex-1" ref={boxRef}>
           <input
             className="w-full input"
             placeholder="🔎 search the name of the artwork or username"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onFocus={() => (q.trim() ? setOpenSearch(true) : null)}
-            onKeyDown={onSearchKeyDown}
+            onChange={(e) => {
+              setQ(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => rows.length && setOpen(true)}
+            onKeyDown={onKeyDown}
           />
-
-          {/* dropdown */}
-          {openSearch ? (
-            <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
-              <div className="max-h-[60vh] overflow-auto">
-                {/* when searching and nothing yet */}
-                {loadingSearch && (
-                  <div className="px-3 py-2 text-sm text-neutral-400 border-b border-neutral-800">
-                    Searching…
-                  </div>
-                )}
-
-                {/* Users */}
-                {results.length > 0 && (
-                  <div className="py-2">
-                    <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-400">
-                      Users
-                    </div>
-                    {results.map((u, idx) => {
-                      const active = selIndex === idx;
-                      const href = profileHref(u);
-                      return (
-                        <Link
-                          key={`${u.id}-${idx}`}
-                          to={href}
-                          className={cx(
-                            "w-full flex items-center gap-3 px-3 py-2 text-left",
-                            active ? "bg-neutral-800" : "hover:bg-neutral-800/60"
-                          )}
-                          onMouseEnter={() => setSelIndex(idx)}
-                          onClick={() => {
-                            // let the router navigate, then close panel
-                            setOpenSearch(false);
-                            setSelIndex(-1);
-                            setQ("");
-                          }}
-                        >
-                          <img
-                            src={u.avatar_url || "/images/taedal-logo.svg"}
-                            alt=""
-                            className="h-7 w-7 rounded-full object-cover bg-neutral-800"
-                          />
-                          <div className="min-w-0">
-                            <div className="text-sm truncate">
-                              {u.display_name || u.username || "User"}
-                            </div>
-                            {u.username && (
-                              <div className="text-xs text-neutral-400 truncate">
-                                @{u.username}
-                              </div>
-                            )}
+          {open && rows.length > 0 && (
+            <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden">
+              <div className="px-3 py-2 text-xs text-neutral-400">USERS</div>
+              <ul className="max-h-80 overflow-auto">
+                {rows.map((r, i) => {
+                  const href = `/u/${r.username || r.id}`;
+                  return (
+                    <li key={r.id}>
+                      <Link
+                        to={href}
+                        onClick={() => setOpen(false)}
+                        className={[
+                          "flex items-center gap-3 px-3 py-2 hover:bg-neutral-800",
+                          i === sel ? "bg-neutral-800" : "",
+                        ].join(" ")}
+                      >
+                        <img
+                          src={r.avatar_url || "/images/taedal-logo.svg"}
+                          alt=""
+                          className="h-7 w-7 rounded-full object-cover"
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate">{r.display_name || r.username || "User"}</div>
+                          <div className="text-xs text-neutral-400 truncate">
+                            @{r.username || r.id}
                           </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {!loadingSearch && results.length === 0 && (
-                  <div className="px-3 py-2 text-sm text-neutral-400">
-                    No results
-                  </div>
-                )}
-              </div>
-
-              {/* footer row */}
-              <div className="px-3 py-2 border-t border-neutral-800 flex items-center justify-between">
-                <div className="text-xs text-neutral-500">
-                  {results.length} result{results.length === 1 ? "" : "s"}
-                </div>
-                {results.length > 0 && (
-                  <button
-                    className="text-sm text-neutral-200 hover:underline"
-                    onClick={() => goToIndex(selIndex >= 0 ? selIndex : 0)}
-                  >
-                    Open selected
-                  </button>
-                )}
+                        </div>
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+              <div className="px-3 py-2 text-xs text-neutral-500 border-t border-neutral-800">
+                Enter to open • Esc to close
               </div>
             </div>
-          ) : null}
+          )}
         </div>
 
         {/* account slot */}
@@ -345,23 +248,18 @@ export default function Topbar() {
               aria-haspopup="menu"
               aria-expanded={menuOpen}
             >
-              <img
-                src={avatar}
-                alt="avatar"
-                className="h-7 w-7 rounded-full object-cover"
-              />
+              <img src={avatar} alt="avatar" className="h-7 w-7 rounded-full object-cover" />
               <span className="text-sm text-neutral-100">
                 {user.username ? `@${user.username}` : user.email ?? "Account"}
               </span>
             </button>
-
             {menuOpen && (
               <div
                 className="absolute right-0 mt-2 w-48 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden"
                 role="menu"
               >
                 <Link
-                  to={myProfileUrl}
+                  to={profileUrl}
                   className="block px-3 py-2 text-sm hover:bg-neutral-800"
                   onClick={() => setMenuOpen(false)}
                   role="menuitem"
