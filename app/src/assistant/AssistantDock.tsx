@@ -3,120 +3,128 @@ import { useEffect, useRef, useState } from "react";
 import { classifyIntent } from "./intent";
 import { runAction } from "./actions";
 
-type Msg = { role: "user" | "assistant"; text: string };
-
 export default function AssistantDock() {
-  const [open, setOpen] = useState(false);
-  const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msgs, setMsgs] = useState<Msg[]>([
-    { role: "assistant", text: "Hi! Ask me things like “switch to light theme” or “guide me to upload an avatar”." },
-  ]);
+  const [open, setOpen] = useState<boolean>(() => {
+    // recover last state; default closed
+    const v = localStorage.getItem("assistant:open");
+    return v === "1";
+  });
+  const [msg, setMsg] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (open) inputRef.current?.focus();
+    localStorage.setItem("assistant:open", open ? "1" : "0");
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
-  async function onSend(e?: React.FormEvent) {
-    e?.preventDefault();
-    const q = input.trim();
-    if (!q || busy) return;
+  // Close on ESC
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
-    setMsgs((m) => [...m, { role: "user", text: q }]);
-    setInput("");
-    setBusy(true);
-
-    try {
-      // 1) classify text -> action
-      const action = classifyIntent(q);
-
-      // 2) execute side-effect
-      await runAction(action);
-
-      // 3) acknowledge
-      setMsgs((m) => [
-        ...m,
-        {
-          role: "assistant",
-          text:
-            action.type === "NONE"
-              ? "I couldn’t match that to an action. Try: “switch to light theme”, “start a tour”, or “guide me to upload an avatar”."
-              : "Done!",
-        },
-      ]);
-    } catch (err: any) {
-      setMsgs((m) => [
-        ...m,
-        { role: "assistant", text: `Oops: ${err?.message ?? "Something went wrong."}` },
-      ]);
-    } finally {
-      setBusy(false);
-    }
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const q = msg.trim();
+    if (!q) return;
+    setMsg("");
+    const action = classifyIntent(q);
+    await runAction(action);
   }
 
   return (
     <>
-      {/* FAB toggle */}
+      {/* Floating button */}
       <button
+        aria-label="Assistant"
         onClick={() => setOpen((v) => !v)}
-        className="fixed z-50 bottom-4 right-4 rounded-full h-12 w-12 grid place-items-center bg-neutral-800 border border-neutral-700 hover:bg-neutral-700"
-        aria-label="Open assistant"
-        title="Assistant"
+        style={{
+          position: "fixed",
+          right: 16,
+          bottom: 16,
+          zIndex: 999999, // ⬅️ above everything
+          height: 56,
+          width: 56,
+          borderRadius: 999,
+          background: "#3b82f6",
+          color: "white",
+          border: "1px solid rgba(255,255,255,0.2)",
+          boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+        }}
       >
-        ✨
+        💬
       </button>
 
       {/* Panel */}
       {open && (
-        <div className="fixed z-50 bottom-20 right-4 w-[min(92vw,380px)] rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
-          <div className="px-3 py-2 border-b border-neutral-800 flex items-center justify-between">
-            <div className="font-medium">Assistant</div>
+        <div
+          style={{
+            position: "fixed",
+            right: 16,
+            bottom: 84,
+            zIndex: 999999,
+            width: 320,
+            maxWidth: "calc(100vw - 32px)",
+            background: "rgba(17,17,17,0.95)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            borderRadius: 12,
+            backdropFilter: "blur(8px)",
+            boxShadow: "0 20px 48px rgba(0,0,0,0.45)",
+          }}
+        >
+          <div style={{ padding: 12, fontSize: 14, color: "#e5e7eb" }}>
+            <div style={{ marginBottom: 8, opacity: 0.8 }}>
+              Ask me things like:
+              <div>• “switch to light theme”</div>
+              <div>• “start a tour”</div>
+              <div>• “guide me to upload an avatar”</div>
+            </div>
+            <form onSubmit={onSubmit} style={{ display: "flex", gap: 8 }}>
+              <input
+                ref={inputRef}
+                value={msg}
+                onChange={(e) => setMsg(e.target.value)}
+                placeholder="Type a request…"
+                style={{
+                  flex: 1,
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  background: "rgba(24,24,27,0.9)",
+                  color: "white",
+                  outline: "none",
+                }}
+              />
+              <button
+                type="submit"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 8,
+                  background: "#22c55e",
+                  color: "white",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                }}
+              >
+                Run
+              </button>
+            </form>
             <button
-              className="text-sm text-neutral-400 hover:text-neutral-200"
               onClick={() => setOpen(false)}
+              style={{
+                marginTop: 8,
+                fontSize: 12,
+                opacity: 0.7,
+                textDecoration: "underline",
+                background: "transparent",
+                border: 0,
+                color: "#9ca3af",
+                cursor: "pointer",
+              }}
             >
               Close
             </button>
           </div>
-
-          <div className="max-h-[50vh] overflow-auto p-3 space-y-2 text-sm">
-            {msgs.map((m, i) => (
-              <div
-                key={i}
-                className={
-                  m.role === "user"
-                    ? "text-right"
-                    : ""
-                }
-              >
-                <span
-                  className={
-                    "inline-block px-2 py-1 rounded " +
-                    (m.role === "user"
-                      ? "bg-neutral-700 text-neutral-50"
-                      : "bg-neutral-800 text-neutral-200")
-                  }
-                >
-                  {m.text}
-                </span>
-              </div>
-            ))}
-          </div>
-
-          <form onSubmit={onSend} className="p-3 border-t border-neutral-800 flex gap-2">
-            <input
-              ref={inputRef}
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder='Try: "switch to light theme"'
-              className="input flex-1"
-              disabled={busy}
-            />
-            <button className="btn" disabled={busy || !input.trim()}>
-              {busy ? "…" : "Send"}
-            </button>
-          </form>
         </div>
       )}
     </>
