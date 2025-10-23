@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
+/* ----------------------------- types ----------------------------- */
 type UserBits = {
   id: string;
   username?: string | null;
@@ -17,16 +18,19 @@ type HitUser = {
   avatar_url: string | null;
 };
 
-const cx = (...xs: Array<string | false | null | undefined>) => xs.filter(Boolean).join(" ");
+/* tiny util */
+const cx = (...xs: Array<string | false | null | undefined>) =>
+  xs.filter(Boolean).join(" ");
 
 export default function Topbar() {
   const nav = useNavigate();
-  const loc  = useLocation();
+  const loc = useLocation();
 
   const [user, setUser] = useState<UserBits | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
+  /* ---------------------- session + profile load ---------------------- */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -71,14 +75,10 @@ export default function Topbar() {
     };
   }, []);
 
-  useEffect(() => {
-    setMenuOpen(false);
-    setOpenSearch(false);
-    setResults([]);
-    setQ("");
-    setSelIndex(-1);
-  }, [loc.pathname, loc.search]);
+  /* close account dropdown on route change */
+  useEffect(() => setMenuOpen(false), [loc.pathname, loc.search]);
 
+  /* close dropdowns on outside click / Esc */
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (menuRef.current?.contains(e.target as Node)) return;
@@ -106,19 +106,26 @@ export default function Topbar() {
     nav("/signin", { replace: true });
   };
 
-  const avatar = useMemo(() => user?.avatar_url || "/images/taedal-logo.svg", [user?.avatar_url]);
-  const profileUrl = user?.username ? `/profiles/${user.username}` : "/account";
+  const avatar = useMemo(
+    () => user?.avatar_url || "/images/taedal-logo.svg",
+    [user?.avatar_url]
+  );
+  const myProfileUrl = user?.username
+    ? `/profiles/${user.username}`
+    : `/profiles/${user?.id || ""}`;
 
-  /* ---------- live username search ---------- */
+  /* ----------------------------- search ----------------------------- */
   const [q, setQ] = useState("");
   const [openSearch, setOpenSearch] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [results, setResults] = useState<HitUser[]>([]);
-  const [selIndex, setSelIndex] = useState(-1);
+  const [selIndex, setSelIndex] = useState<number>(-1);
 
+  // Debounced live search — show panel immediately (with "Searching…")
   useEffect(() => {
     const term = q.trim();
 
+    // open the panel as soon as there is any term
     if (term && !openSearch) setOpenSearch(true);
     if (!term) {
       setResults([]);
@@ -133,41 +140,35 @@ export default function Topbar() {
 
     const t = setTimeout(async () => {
       try {
-        const likePrefix = `${term}%`;
-        const likeAny    = `%${term}%`;
-
-        const qPrefix = supabase
+        const likeAnywhere = `%${term}%`;
+        const { data, error } = await supabase
           .from("profiles")
           .select("id, username, display_name, avatar_url")
-          .ilike("username", likePrefix)
-          .order("username")
-          .limit(12);
-
-        const qAny = supabase
-          .from("profiles")
-          .select("id, username, display_name, avatar_url")
-          .or(`username.ilike.${likeAny},display_name.ilike.${likeAny}`)
-          .order("username")
+          .or(`username.ilike.${likeAnywhere},display_name.ilike.${likeAnywhere}`)
+          .order("username", { ascending: true })
           .limit(20);
 
-        const [rp, ra] = await Promise.all([qPrefix, qAny]);
         if (!alive) return;
-
-        const uniq = (arr: HitUser[]) => {
-          const seen = new Set<string>(); const out: HitUser[] = [];
-          for (const x of arr) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
-          return out;
-        };
-
-        const rows = uniq([...(rp.data ?? []), ...(ra.data ?? [])] as HitUser[]).slice(0, 20);
-        setResults(rows);
-        setSelIndex(rows.length ? 0 : -1);
+        if (error) {
+          console.warn("[search] error:", error);
+          setResults([]);
+        } else {
+          setResults(
+            (data ?? []).map((r: any) => ({
+              id: r.id,
+              username: r.username ?? null,
+              display_name: r.display_name ?? null,
+              avatar_url: r.avatar_url ?? null,
+            }))
+          );
+        }
+        setSelIndex(-1);
       } catch (err) {
-        console.warn("[search] error:", err);
+        if (alive) console.warn("[search] error:", err);
       } finally {
         if (alive) setLoadingSearch(false);
       }
-    }, 180);
+    }, 180); // snappy debounce
 
     return () => {
       alive = false;
@@ -188,11 +189,6 @@ export default function Topbar() {
   };
 
   const onSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!openSearch && e.key === "ArrowDown" && results.length > 0) {
-      setOpenSearch(true);
-      setSelIndex(0);
-      return;
-    }
     if (e.key === "Enter") {
       if (selIndex >= 0) {
         e.preventDefault();
@@ -201,6 +197,11 @@ export default function Topbar() {
         e.preventDefault();
         goToIndex(0);
       }
+      return;
+    }
+    if (!openSearch && e.key === "ArrowDown" && results.length > 0) {
+      setOpenSearch(true);
+      setSelIndex(0);
       return;
     }
     if (!openSearch) return;
@@ -219,10 +220,11 @@ export default function Topbar() {
 
   return (
     <header className="sticky top-0 z-30 bg-black/80 backdrop-blur border-b border-neutral-800">
-      <div className="h-14 flex items-center gap-3 px-4 relative">
+      <div className="h-14 flex items-center gap-3 px-4">
+        {/* spacer to account for sidebar width */}
         <div className="w-14 shrink-0" />
 
-        {/* search box */}
+        {/* search */}
         <div className="flex-1 relative">
           <input
             className="w-full input"
@@ -231,21 +233,21 @@ export default function Topbar() {
             onChange={(e) => setQ(e.target.value)}
             onFocus={() => (q.trim() ? setOpenSearch(true) : null)}
             onKeyDown={onSearchKeyDown}
-            aria-autocomplete="list"
-            aria-expanded={openSearch}
           />
 
-          {/* dropdown with results */}
-          {openSearch && (
+          {/* dropdown */}
+          {openSearch ? (
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
               <div className="max-h-[60vh] overflow-auto">
+                {/* when searching and nothing yet */}
                 {loadingSearch && (
                   <div className="px-3 py-2 text-sm text-neutral-400 border-b border-neutral-800">
                     Searching…
                   </div>
                 )}
 
-                {results.length > 0 ? (
+                {/* Users */}
+                {results.length > 0 && (
                   <div className="py-2">
                     <div className="px-3 pb-1 text-xs uppercase tracking-wider text-neutral-400">
                       Users
@@ -279,28 +281,41 @@ export default function Topbar() {
                               {u.display_name || u.username || "User"}
                             </div>
                             {u.username && (
-                              <div className="text-xs text-neutral-400 truncate">@{u.username}</div>
+                              <div className="text-xs text-neutral-400 truncate">
+                                @{u.username}
+                              </div>
                             )}
                           </div>
                         </Link>
                       );
                     })}
                   </div>
-                ) : (
-                  !loadingSearch && (
-                    <div className="px-3 py-2 text-sm text-neutral-400">No results</div>
-                  )
+                )}
+
+                {!loadingSearch && results.length === 0 && (
+                  <div className="px-3 py-2 text-sm text-neutral-400">
+                    No results
+                  </div>
                 )}
               </div>
 
+              {/* footer row */}
               <div className="px-3 py-2 border-t border-neutral-800 flex items-center justify-between">
                 <div className="text-xs text-neutral-500">
                   {results.length} result{results.length === 1 ? "" : "s"}
                 </div>
-                <div className="text-xs text-neutral-500">Enter to open • Esc to close</div>
+                {results.length > 0 && (
+                  <button
+                    className="text-sm text-neutral-200 hover:underline"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => goToIndex(selIndex >= 0 ? selIndex : 0)}
+                  >
+                    Open selected
+                  </button>
+                )}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* account slot */}
@@ -323,18 +338,23 @@ export default function Topbar() {
               aria-haspopup="menu"
               aria-expanded={menuOpen}
             >
-              <img src={avatar} alt="avatar" className="h-7 w-7 rounded-full object-cover" />
+              <img
+                src={avatar}
+                alt="avatar"
+                className="h-7 w-7 rounded-full object-cover"
+              />
               <span className="text-sm text-neutral-100">
                 {user.username ? `@${user.username}` : user.email ?? "Account"}
               </span>
             </button>
+
             {menuOpen && (
               <div
                 className="absolute right-0 mt-2 w-48 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden"
                 role="menu"
               >
                 <Link
-                  to={profileUrl}
+                  to={myProfileUrl}
                   className="block px-3 py-2 text-sm hover:bg-neutral-800"
                   onClick={() => setMenuOpen(false)}
                   role="menuitem"
