@@ -1,44 +1,44 @@
-// app/src/assistant/tours.ts (your own file – name it as you like)
+// src/assistant/tours.ts
 import { driver } from "driver.js";
 import "driver.js/dist/driver.css";
 
-export function runThemeTour() {
-  const tour = driver({
-    showProgress: true,
-    steps: [
-      {
-        element: "#theme-toggle",
-        popover: {
-          title: "Switch theme",
-          description: "Click here to toggle light/dark mode.",
-          side: "bottom",
-          align: "start",
-        },
-      },
-    ],
-  });
-  tour.drive();
-}
+export function startTour() {
+  if (typeof window === "undefined" || typeof document === "undefined") return;
 
-export function runAvatarTour() {
-  const tour = driver({
+  const d = driver({
+    allowClose: true,
+    animate: true,
+    overlayOpacity: 0.5,
     showProgress: true,
-    steps: [
-      {
-        element: "#sidebar-settings",
-        popover: {
-          title: "Open settings",
-          description: "Open your account settings.",
-        },
-      },
-      {
-        element: "#avatar-upload-button",
-        popover: {
-          title: "Upload avatar",
-          description: "Click to choose a new avatar image.",
-        },
-      },
-    ],
   });
-  tour.drive();
+
+  const steps: any[] = [];
+
+  if (document.querySelector("input[placeholder*='search the name']")) {
+    steps.push({
+      element: "input[placeholder*='search the name']",
+      popover: {
+        title: "Search",
+        description: "Find artworks or users by typing here.",
+        side: "bottom", // v1 uses side/align instead of position
+        align: "start",
+      },
+    });
+  }
+
+  if (document.querySelector(".btn, button.btn")) {
+    steps.push({
+      element: ".btn, button.btn",
+      popover: {
+        title: "Primary actions",
+        description: "Buttons like this perform primary actions.",
+        side: "bottom",
+        align: "start",
+      },
+    });
+  }
+
+  if (!steps.length) return;
+  d.setSteps(steps);
+  d.drive();
 }

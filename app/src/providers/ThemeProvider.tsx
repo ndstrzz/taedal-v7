@@ -1,39 +1,61 @@
-// /api/assistant (edge or serverless; pseudo)
-import type { NextRequest } from "next/server"; // adapt to your stack
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 
-export async function POST(req: NextRequest) {
-  const { message } = await req.json();
+type Theme = "light" | "dark";
 
-  // —— simple rule-based MVP —— //
-  const m = message.toLowerCase();
-  if (m.includes("light theme")) {
-    return Response.json({
-      assistantText: "Sure — switching to light theme.",
-      action: { type: "toggleTheme", mode: "light" }
-    });
-  }
-  if (m.includes("dark theme")) {
-    return Response.json({
-      assistantText: "Got it — dark mode on.",
-      action: { type: "toggleTheme", mode: "dark" }
-    });
-  }
-  if (m.includes("upload") && m.includes("avatar")) {
-    return Response.json({
-      assistantText: "I’ll guide you through it.",
-      action: { type: "startTour", key: "uploadAvatar" }
-    });
-  }
-  if (m.includes("go to") && m.includes("profile")) {
-    return Response.json({
-      assistantText: "Taking you to your profile page.",
-      action: { type: "goTo", path: "/account" }
-    });
-  }
+type ThemeCtx = {
+  theme: Theme;
+  setTheme: (t: Theme) => void;
+  toggleTheme: () => void;
+};
 
-  // —— fallback: call an LLM that can return a structured tool call —— //
-  // const llm = await callLLMThatReturns({ message });
-  // return Response.json(llm);
+const ThemeContext = createContext<ThemeCtx | null>(null);
 
-  return Response.json({ assistantText: "I can change themes, navigate, or start a tutorial. Try: “guide me to upload an avatar.”" });
+function applyThemeClass(theme: Theme) {
+  const root = document.documentElement;
+  if (theme === "dark") {
+    root.classList.add("dark");
+    root.setAttribute("data-theme", "dark");
+  } else {
+    root.classList.remove("dark");
+    root.setAttribute("data-theme", "light");
+  }
+}
+
+const STORAGE_KEY = "taedal:theme";
+
+const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const [theme, _setTheme] = useState<Theme>(() => {
+    const saved = (localStorage.getItem(STORAGE_KEY) as Theme | null) || null;
+    if (saved === "light" || saved === "dark") return saved;
+    // default: dark (your UI is dark-first)
+    return "dark";
+  });
+
+  useEffect(() => {
+    applyThemeClass(theme);
+    localStorage.setItem(STORAGE_KEY, theme);
+  }, [theme]);
+
+  const setTheme = useCallback((t: Theme) => _setTheme(t), []);
+  const toggleTheme = useCallback(() => {
+    _setTheme((cur) => (cur === "dark" ? "light" : "dark"));
+  }, []);
+
+  // Allow the assistant to toggle theme via a DOM CustomEvent
+  useEffect(() => {
+    const onToggle = () => toggleTheme();
+    window.addEventListener("assistant:toggleTheme", onToggle as EventListener);
+    return () => window.removeEventListener("assistant:toggleTheme", onToggle as EventListener);
+  }, [toggleTheme]);
+
+  const value = useMemo(() => ({ theme, setTheme, toggleTheme }), [theme, setTheme, toggleTheme]);
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+};
+
+export default ThemeProvider;
+
+export function useTheme() {
+  const ctx = useContext(ThemeContext);
+  if (!ctx) throw new Error("useTheme must be used inside ThemeProvider");
+  return ctx;
 }

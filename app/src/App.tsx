@@ -1,18 +1,25 @@
-// app/src/App.tsx
-import { useEffect, useState, Suspense } from "react";
-import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
+import { Suspense } from "react";
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+
+/* pages */
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
-import { fetchActiveListings, type JoinedListing } from "./lib/listings";
+
+/* styles */
 import "./App.css";
 
+/* assistant + theme */
+import AssistantDock from "./assistant/AssistantDock";
 import ThemeProvider from "./providers/ThemeProvider";
-import AssistantDock from "./assistant/AssistantDock"; // ← add
 
+/* ----------------------------------------- */
+/* Top navigation                            */
+/* ----------------------------------------- */
 function TopNav() {
   const loc = useLocation();
   const nav = useNavigate();
+
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-neutral-950/80 backdrop-blur">
       <div className="flex items-center gap-2 min-w-0">
@@ -38,18 +45,19 @@ function TopNav() {
       </div>
 
       <div className="flex items-center gap-2">
-        <button
-          id="btn-new"
-          className="btn"
-          onClick={() => nav("/create")}
-          title="Create a new artwork"
-        >
+        <button className="btn" onClick={() => nav("/create")} title="Create a new artwork">
           + New
         </button>
       </div>
     </header>
   );
 }
+
+/* ----------------------------------------- */
+/* Explore (Home)                            */
+/* ----------------------------------------- */
+import { useEffect, useState } from "react";
+import { fetchActiveListings, type JoinedListing } from "./lib/listings";
 
 function Explore() {
   const [items, setItems] = useState<JoinedListing[] | null>(null);
@@ -72,7 +80,9 @@ function Explore() {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, []);
 
   if (loading) {
@@ -110,7 +120,11 @@ function Explore() {
             >
               <div className="aspect-square bg-neutral-950">
                 {l.artworks?.image_url ? (
-                  <img src={l.artworks.image_url} alt={l.artworks.title ?? "Artwork"} className="w-full h-full object-cover" />
+                  <img
+                    src={l.artworks.image_url}
+                    alt={l.artworks.title ?? "Artwork"}
+                    className="w-full h-full object-cover"
+                  />
                 ) : (
                   <div className="w-full h-full grid place-items-center text-white/40">No image</div>
                 )}
@@ -131,6 +145,9 @@ function Explore() {
   );
 }
 
+/* ----------------------------------------- */
+/* 404                                       */
+/* ----------------------------------------- */
 function NotFound() {
   return (
     <div className="max-w-xl mx-auto p-8">
@@ -143,12 +160,16 @@ function NotFound() {
   );
 }
 
+/* ----------------------------------------- */
+/* App shell + routes                        */
+/* ----------------------------------------- */
 function App() {
   return (
     <BrowserRouter>
       <ThemeProvider>
         <div className="min-h-dvh bg-neutral-950 text-white">
           <TopNav />
+
           <Suspense
             fallback={
               <div className="max-w-7xl mx-auto p-6">
@@ -162,15 +183,17 @@ function App() {
               <Route path="/create" element={<CreateArtwork />} />
               <Route path="/art/:id" element={<ArtworkDetail />} />
               <Route path="/checkout/success" element={<CheckoutSuccess />} />
+              {/* You already have your public profile route elsewhere; keeping 404 here */}
               <Route path="*" element={<NotFound />} />
             </Routes>
           </Suspense>
 
-          {/* Floating assistant (present on all pages) */}
+          {/* Floating assistant lives above everything */}
           <AssistantDock />
         </div>
       </ThemeProvider>
     </BrowserRouter>
   );
 }
+
 export default App;

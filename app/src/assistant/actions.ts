@@ -1,27 +1,31 @@
-// app/src/assistant/actions.ts
-export type AssistantAction =
-  | { type: "toggleTheme"; mode: "light" | "dark" | "system" }
-  | { type: "goTo"; path: string }
-  | { type: "startTour"; key: "uploadAvatar" | "createListing" };
+import { startTour } from "./tours";
 
-type Env = {
-  navigate: (path: string) => void;
-  setTheme: (mode: "light" | "dark" | "system") => void;
-  startTour: (key: AssistantAction["key"]) => void;
+export type AssistantAction = {
+  key: string;            // <- this fixes "Property 'key' does not exist" errors
+  label: string;
+  run: () => void | Promise<void>;
 };
 
-export async function runAssistantAction(a: AssistantAction, env: Env) {
-  switch (a.type) {
-    case "toggleTheme":
-      env.setTheme(a.mode);
-      return { ok: true, message: `Theme set to ${a.mode}.` };
-    case "goTo":
-      env.navigate(a.path);
-      return { ok: true, message: `Navigated to ${a.path}.` };
-    case "startTour":
-      env.startTour(a.key);
-      return { ok: true, message: `Starting ${a.key} tutorial…` };
-    default:
-      return { ok: false, message: "Unknown action." };
-  }
-}
+export const actions: AssistantAction[] = [
+  {
+    key: "toggle-theme",
+    label: "Toggle light/dark theme",
+    run: () => {
+      // ThemeProvider listens for this event and toggles immediately
+      window.dispatchEvent(new CustomEvent("assistant:toggleTheme"));
+    },
+  },
+  {
+    key: "start-tour",
+    label: "Show quick tour",
+    run: () => startTour(),
+  },
+  {
+    key: "go-upload-avatar",
+    label: "Go to profile to upload avatar",
+    run: () => {
+      // Navigate the user to Account page (where avatar upload lives)
+      window.location.assign("/account");
+    },
+  },
+];
