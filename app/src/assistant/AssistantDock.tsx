@@ -13,12 +13,11 @@ function ensurePortalRoot(): HTMLElement {
   if (!el) {
     el = document.createElement("div");
     el.id = ROOT_ID;
-    // Force visibility, even if CSS tries to hide us
     Object.assign(el.style, {
       position: "fixed",
       zIndex: "2147483647",
       inset: "auto 0 0 auto", // bottom-right
-      pointerEvents: "none",  // children can override
+      pointerEvents: "none",
     } as CSSStyleDeclaration);
     document.body.appendChild(el);
     console.log("[assistant] created portal root");
@@ -29,16 +28,16 @@ function ensurePortalRoot(): HTMLElement {
 type Pos = { x: number; y: number };
 
 export default function AssistantDock() {
+  console.log("[assistant] AssistantDock() invoked");
   const [root, setRoot] = useState<HTMLElement | null>(null);
 
   useLayoutEffect(() => {
-    if (typeof window === "undefined" || typeof document === "undefined") return;
+    if (typeof window === "undefined") return;
     setRoot(ensurePortalRoot());
 
-    // Self-heal: if someone removes our root, re-create it
+    // Self-heal if the node is removed
     const mo = new MutationObserver(() => {
-      const exist = document.getElementById(ROOT_ID);
-      if (!exist) {
+      if (!document.getElementById(ROOT_ID)) {
         console.warn("[assistant] root missing, re-creating");
         setRoot(ensurePortalRoot());
       }
@@ -48,97 +47,57 @@ export default function AssistantDock() {
   }, []);
 
   const [open, setOpen] = useState<boolean>(() => {
-    try {
-      const saved = localStorage.getItem(OPEN_KEY);
-      return saved ? JSON.parse(saved) : false;
-    } catch {
-      return false;
-    }
+    try { return JSON.parse(localStorage.getItem(OPEN_KEY) || "false"); } catch { return false; }
   });
-
   const [pos, setPos] = useState<Pos>(() => {
-    try {
-      const saved = localStorage.getItem(POS_KEY);
-      return saved ? JSON.parse(saved) : { x: 16, y: 16 };
-    } catch {
-      return { x: 16, y: 16 };
-    }
+    try { return JSON.parse(localStorage.getItem(POS_KEY) || '{"x":16,"y":16}'); } catch { return { x:16, y:16 }; }
   });
 
-  useEffect(() => {
-    localStorage.setItem(OPEN_KEY, JSON.stringify(open));
-    // global toggle for quick manual testing
-    (window as any).__taeAssistantOpen = open;
-  }, [open]);
+  useEffect(() => { localStorage.setItem(OPEN_KEY, JSON.stringify(open)); (window as any).__taeAssistantOpen = open; }, [open]);
+  useEffect(() => { localStorage.setItem(POS_KEY, JSON.stringify(pos)); }, [pos]);
 
-  useEffect(() => {
-    localStorage.setItem(POS_KEY, JSON.stringify(pos));
-  }, [pos]);
-
-  // Drag (pointer events)
-  const dragData = useRef<{ startX: number; startY: number; origin: Pos } | null>(null);
+  // Dragging
+  const drag = useRef<{ startX:number; startY:number; origin:Pos }|null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {}
-    dragData.current = { startX: e.clientX, startY: e.clientY, origin: { ...pos } };
+    try {(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);} catch {}
+    drag.current = { startX: e.clientX, startY: e.clientY, origin: { ...pos } };
   };
   const onPointerMove = (e: React.PointerEvent) => {
-    if (!dragData.current) return;
-    const dx = e.clientX - dragData.current.startX;
-    const dy = e.clientY - dragData.current.startY;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    const nextX = Math.min(Math.max(dragData.current.origin.x - dx, 8), vw - 64);
-    const nextY = Math.min(Math.max(dragData.current.origin.y - dy, 8), vh - 64);
-    setPos({ x: nextX, y: nextY });
+    if (!drag.current) return;
+    const dx = e.clientX - drag.current.startX;
+    const dy = e.clientY - drag.current.startY;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    setPos({
+      x: Math.min(Math.max(drag.current.origin.x - dx, 8), vw - 64),
+      y: Math.min(Math.max(drag.current.origin.y - dy, 8), vh - 64),
+    });
   };
   const onPointerUp = (e: React.PointerEvent) => {
-    try {
-      (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {}
-    dragData.current = null;
+    try {(e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);} catch {}
+    drag.current = null;
   };
 
   const bubbleBox: React.CSSProperties = useMemo(
-    () => ({
-      position: "fixed",
-      right: pos.x,
-      bottom: pos.y,
-      zIndex: 2147483647, // always on top
-      pointerEvents: "auto",
-    }),
+    () => ({ position: "fixed", right: pos.x, bottom: pos.y, zIndex: 2147483647, pointerEvents: "auto" }),
     [pos]
   );
 
   // Input -> intent -> action
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<string>("");
+  const [status, setStatus] = useState("");
 
   async function handleRun(text: string) {
     const action = classifyIntent(text);
-    if (action.type === "NONE") {
-      setStatus('Didn’t catch that. Try: "light theme", "go to account", "tour".');
-      return;
-    }
-    if (action.type === "NAVIGATE") {
-      const ok = confirm(`Go to ${action.to}?`);
-      if (!ok) return;
-    }
+    if (action.type === "NONE") { setStatus('Try: "light theme", "go to account", "tour".'); return; }
+    if (action.type === "NAVIGATE" && !confirm(`Go to ${action.to}?`)) return;
     setStatus("Running…");
     await runAction(action);
     setStatus("Done.");
     setTimeout(() => setStatus(""), 800);
   }
 
-  // Log diagnostics once we mount
   useEffect(() => {
-    console.log("[assistant] mounted", {
-      hasRoot: !!root,
-      open,
-      pos,
-      path: window.location.pathname,
-    });
+    console.log("[assistant] mounted", { hasRoot: !!root, open, pos, path: window.location.pathname });
   }, [root]);
 
   if (!root) return null;
@@ -161,7 +120,7 @@ export default function AssistantDock() {
 
   return createPortal(
     <>
-      {/* ALWAYS-VISIBLE BUBBLE */}
+      {/* Bubble */}
       <button
         aria-label="Open taedal assistant"
         title="Taedal Assistant"
@@ -180,19 +139,15 @@ export default function AssistantDock() {
           display: "grid",
           placeItems: "center",
           overflow: "hidden",
-          outline: "0",
+          outline: 0,
         }}
       >
-        <span
-          role="img"
-          aria-label="assistant"
-          style={{ fontSize: 20, opacity: 0.95, userSelect: "none" }}
-        >
+        <span role="img" aria-label="assistant" style={{ fontSize: 20, opacity: 0.95, userSelect: "none" }}>
           🦊
         </span>
       </button>
 
-      {/* PANEL */}
+      {/* Panel */}
       {open && (
         <div role="dialog" aria-label="Taedal assistant" style={panelStyle}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -212,25 +167,14 @@ export default function AssistantDock() {
           </p>
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
-            <button className="assistant-action" onClick={() => handleRun("light theme")}>
-              Light theme
-            </button>
-            <button className="assistant-action" onClick={() => handleRun("dark theme")}>
-              Dark theme
-            </button>
-            <button className="assistant-action" onClick={() => handleRun("go to account")}>
-              Go to Account
-            </button>
-            <button className="assistant-action" onClick={() => handleRun("tour")}>
-              Start tour
-            </button>
+            <button className="assistant-action" onClick={() => handleRun("light theme")}>Light theme</button>
+            <button className="assistant-action" onClick={() => handleRun("dark theme")}>Dark theme</button>
+            <button className="assistant-action" onClick={() => handleRun("go to account")}>Go to Account</button>
+            <button className="assistant-action" onClick={() => handleRun("tour")}>Start tour</button>
           </div>
 
           <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (query.trim()) handleRun(query);
-            }}
+            onSubmit={(e) => { e.preventDefault(); if (query.trim()) handleRun(query); }}
             style={{ display: "flex", gap: 6 }}
           >
             <input
@@ -253,11 +197,7 @@ export default function AssistantDock() {
             </button>
           </form>
 
-          {status && (
-            <div style={{ fontSize: 12, color: "#bbb", marginTop: 6 }} aria-live="polite">
-              {status}
-            </div>
-          )}
+          {status && <div style={{ fontSize: 12, color: "#bbb", marginTop: 6 }} aria-live="polite">{status}</div>}
         </div>
       )}
     </>,

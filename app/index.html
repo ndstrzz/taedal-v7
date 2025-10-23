@@ -20,5 +20,42 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+
+    <!-- Fallback bubble if React dock never mounts -->
+    <script>
+      (function () {
+        function injectFallback() {
+          if (document.getElementById('assistant-dock-root')) return; // React mounted
+          if (document.getElementById('assistant-fallback')) return;
+          var host = document.createElement('div');
+          host.id = 'assistant-fallback';
+          Object.assign(host.style, {
+            position: 'fixed',
+            right: '16px',
+            bottom: '16px',
+            zIndex: 2147483647,
+            height: '56px',
+            width: '56px',
+            borderRadius: '9999px',
+            border: '1px solid rgba(255,255,255,0.18)',
+            background: 'rgba(17,17,17,0.95)',
+            color: '#fff',
+            display: 'grid',
+            placeItems: 'center',
+            boxShadow: '0 10px 32px rgba(0,0,0,0.45)',
+            cursor: 'pointer'
+          });
+          host.title = 'Assistant (fallback)';
+          host.textContent = '🦊';
+          host.onclick = function () {
+            alert('Assistant fallback: React dock did not mount.\nCheck console for [assistant] logs.');
+          };
+          document.body.appendChild(host);
+          console.warn('[assistant] Fallback bubble injected (React dock not found).');
+        }
+        // Give React a moment to mount, then inject if missing
+        window.addEventListener('load', function () { setTimeout(injectFallback, 1200); });
+      })();
+    </script>
   </body>
 </html>

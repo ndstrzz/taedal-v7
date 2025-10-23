@@ -26,6 +26,16 @@ import ThemeProvider from "./providers/ThemeProvider";
 import { fetchActiveListings, type JoinedListing } from "./lib/listings";
 
 /* ----------------------------------------- */
+/* Debug (for non-visual logs)               */
+/* ----------------------------------------- */
+function DebugMount({ msg }: { msg: string }) {
+  useEffect(() => {
+    console.log(msg);
+  }, [msg]);
+  return null;
+}
+
+/* ----------------------------------------- */
 /* Utilities                                 */
 /* ----------------------------------------- */
 function ScrollToTop() {
@@ -257,6 +267,7 @@ function App() {
           </Suspense>
 
           {/* Floating assistant lives above everything */}
+          <DebugMount msg="[assistant] <AssistantDock /> rendered in App" />
           <AssistantDock />
         </div>
       </ThemeProvider>
