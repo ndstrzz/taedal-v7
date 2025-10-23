@@ -16,6 +16,9 @@
     <!-- Preloads -->
     <link rel="preload" href="/media/similarity.webm" as="video" type="video/webm" />
     <link rel="preload" href="/media/taedal-coin.glb" as="fetch" crossorigin="anonymous" />
+    <!-- Assistant video preloads -->
+    <link rel="preload" href="/images/chatbot.webm" as="video" type="video/webm" />
+    <link rel="preload" href="/images/chatbot.mp4"  as="video" type="video/mp4" />
   </head>
   <body>
     <div id="root"></div>
@@ -53,7 +56,6 @@
           document.body.appendChild(host);
           console.warn('[assistant] Fallback bubble injected (React dock not found).');
         }
-        // Give React a moment to mount, then inject if missing
         window.addEventListener('load', function () { setTimeout(injectFallback, 1200); });
       })();
     </script>

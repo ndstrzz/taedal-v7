@@ -120,7 +120,7 @@ export default function AssistantDock() {
 
   return createPortal(
     <>
-      {/* Bubble */}
+      {/* Bubble with video */}
       <button
         aria-label="Open taedal assistant"
         title="Taedal Assistant"
@@ -134,15 +134,41 @@ export default function AssistantDock() {
           width: 56,
           borderRadius: 9999,
           border: "1px solid rgba(255,255,255,0.18)",
-          background: "rgba(17,17,17,0.95)",
-          boxShadow: "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset",
+          background: "rgba(17,17,17,0.5)", // base in case video fails
+          boxShadow:
+            "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset",
           display: "grid",
           placeItems: "center",
           overflow: "hidden",
           outline: 0,
         }}
       >
-        <span role="img" aria-label="assistant" style={{ fontSize: 20, opacity: 0.95, userSelect: "none" }}>
+        <video
+          className="assistant-bot-video key-black mask-soft"
+          autoPlay
+          loop
+          muted
+          playsInline
+          preload="metadata"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            pointerEvents: "none",
+          }}
+        >
+          {/* If you later add a transparent WebM, it will be preferred */}
+          <source src="/images/chatbot.webm" type="video/webm" />
+          <source src="/images/chatbot.mp4" type="video/mp4" />
+        </video>
+
+        {/* emoji fallback if video fails */}
+        <span
+          className="assistant-bot-fallback"
+          role="img"
+          aria-label="assistant"
+          style={{ pointerEvents: "none" }}
+        >
           🦊
         </span>
       </button>
