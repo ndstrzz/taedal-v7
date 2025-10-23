@@ -112,6 +112,7 @@ export default function Topbar() {
   const [rows, setRows] = useState<SearchRow[]>([]);
   const [sel, setSel] = useState(0);
   const boxRef = useRef<HTMLDivElement>(null);
+  const blurTimer = useRef<number | null>(null);
 
   // Fetch users for query
   useEffect(() => {
@@ -137,35 +138,45 @@ export default function Topbar() {
       setRows((data ?? []) as SearchRow[]);
       setSel(0);
     };
-    const t = setTimeout(run, 160);
+    const t = setTimeout(run, 140);
     return () => {
       alive = false;
       clearTimeout(t);
     };
   }, [q]);
 
-  // keyboard navigation
-  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (!open && (e.key === "ArrowDown" || e.key === "Enter")) {
-      setOpen(true);
-    }
-    if (!rows.length) return;
+  function go(row: SearchRow | undefined) {
+    if (!row) return;
+    nav(`/u/${row.username || row.id}`);
+    setOpen(false);
+    setQ("");
+  }
 
-    if (e.key === "ArrowDown") {
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "ArrowDown" && rows.length) {
       e.preventDefault();
+      setOpen(true);
       setSel((i) => (i + 1) % rows.length);
-    } else if (e.key === "ArrowUp") {
+      return;
+    }
+    if (e.key === "ArrowUp" && rows.length) {
       e.preventDefault();
+      setOpen(true);
       setSel((i) => (i - 1 + rows.length) % rows.length);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
+      return;
+    }
+    if (e.key === "Enter") {
+      // Always navigate to the top result if available
       const r = rows[Math.max(0, Math.min(sel, rows.length - 1))];
       if (r) {
-        // Always navigate to /u/:handle (or fallback to id)
-        nav(`/u/${r.username || r.id}`);
-        setOpen(false);
+        e.preventDefault();
+        go(r);
+      } else {
+        // no results → do nothing special
       }
-    } else if (e.key === "Escape") {
+      return;
+    }
+    if (e.key === "Escape") {
       setOpen(false);
     }
   }
@@ -187,10 +198,14 @@ export default function Topbar() {
               setOpen(true);
             }}
             onFocus={() => rows.length && setOpen(true)}
+            onBlur={() => {
+              // small delay so clicks on items still register
+              blurTimer.current = window.setTimeout(() => setOpen(false), 120);
+            }}
             onKeyDown={onKeyDown}
           />
           {open && rows.length > 0 && (
-            <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden">
+            <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden z-50">
               <div className="px-3 py-2 text-xs text-neutral-400">USERS</div>
               <ul className="max-h-80 overflow-auto">
                 {rows.map((r, i) => {
@@ -199,7 +214,14 @@ export default function Topbar() {
                     <li key={r.id}>
                       <Link
                         to={href}
-                        onClick={() => setOpen(false)}
+                        onMouseDown={() => {
+                          // cancel pending blur-close
+                          if (blurTimer.current) {
+                            clearTimeout(blurTimer.current);
+                            blurTimer.current = null;
+                          }
+                        }}
+                        onClick={() => go(r)}
                         className={[
                           "flex items-center gap-3 px-3 py-2 hover:bg-neutral-800",
                           i === sel ? "bg-neutral-800" : "",
@@ -222,7 +244,7 @@ export default function Topbar() {
                 })}
               </ul>
               <div className="px-3 py-2 text-xs text-neutral-500 border-t border-neutral-800">
-                Enter to open • Esc to close
+                Enter to open selected • Esc to close
               </div>
             </div>
           )}
