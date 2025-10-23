@@ -4,10 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 
-    <!-- Tab title -->
     <title>taedal</title>
 
-    <!-- Favicons (served from /public) -->
     <link rel="icon" type="image/svg+xml" href="/images/taedal-static.svg" />
     <link rel="icon" type="image/png" href="/images/taedal-logo-32.png" sizes="32x32" />
     <link rel="apple-touch-icon" href="/images/taedal-logo-180.png" />
@@ -16,18 +14,13 @@
     <!-- Preloads -->
     <link rel="preload" href="/media/similarity.webm" as="video" type="video/webm" />
     <link rel="preload" href="/media/taedal-coin.glb" as="fetch" crossorigin="anonymous" />
-    <!-- Assistant video preloads -->
     <link rel="preload" href="/images/chatbot.webm" as="video" type="video/webm" />
     <link rel="preload" href="/images/chatbot.mp4"  as="video" type="video/mp4" />
   </head>
   <body>
     <div id="root"></div>
-
     <!-- Your app -->
     <script type="module" src="/src/main.tsx"></script>
-
-    <!-- Standalone assistant bootstrap (renders AssistantDock even if App doesn't) -->
-    <script type="module" src="/src/assistant/bootstrap.tsx"></script>
 
     <!-- Fallback bubble if nothing mounted after a moment -->
     <script>

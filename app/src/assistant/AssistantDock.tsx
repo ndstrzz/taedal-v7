@@ -16,7 +16,7 @@ function ensurePortalRoot(): HTMLElement {
     Object.assign(el.style, {
       position: "fixed",
       zIndex: "2147483647",
-      inset: "auto 0 0 auto", // bottom-right
+      inset: "auto 0 0 auto",
       pointerEvents: "none",
     } as CSSStyleDeclaration);
     document.body.appendChild(el);
@@ -34,8 +34,6 @@ export default function AssistantDock() {
   useLayoutEffect(() => {
     if (typeof window === "undefined") return;
     setRoot(ensurePortalRoot());
-
-    // Self-heal if the node is removed
     const mo = new MutationObserver(() => {
       if (!document.getElementById(ROOT_ID)) {
         console.warn("[assistant] root missing, re-creating");
@@ -134,9 +132,8 @@ export default function AssistantDock() {
           width: 56,
           borderRadius: 9999,
           border: "1px solid rgba(255,255,255,0.18)",
-          background: "rgba(17,17,17,0.5)", // base in case video fails
-          boxShadow:
-            "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset",
+          background: "rgba(17,17,17,0.5)",
+          boxShadow: "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset",
           display: "grid",
           placeItems: "center",
           overflow: "hidden",
@@ -150,27 +147,12 @@ export default function AssistantDock() {
           muted
           playsInline
           preload="metadata"
-          style={{
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            pointerEvents: "none",
-          }}
+          style={{ width: "100%", height: "100%", objectFit: "cover", pointerEvents: "none" }}
         >
-          {/* If you later add a transparent WebM, it will be preferred */}
           <source src="/images/chatbot.webm" type="video/webm" />
           <source src="/images/chatbot.mp4" type="video/mp4" />
         </video>
-
-        {/* emoji fallback if video fails */}
-        <span
-          className="assistant-bot-fallback"
-          role="img"
-          aria-label="assistant"
-          style={{ pointerEvents: "none" }}
-        >
-          🦊
-        </span>
+        <span className="assistant-bot-fallback" role="img" aria-label="assistant" style={{ pointerEvents: "none" }}>🦊</span>
       </button>
 
       {/* Panel */}
@@ -178,14 +160,7 @@ export default function AssistantDock() {
         <div role="dialog" aria-label="Taedal assistant" style={panelStyle}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <strong>Taedal Assistant</strong>
-            <button
-              onClick={() => setOpen(false)}
-              style={{ background: "transparent", border: 0, color: "#aaa", fontSize: 18 }}
-              aria-label="Close assistant"
-              title="Close"
-            >
-              ✕
-            </button>
+            <button onClick={() => setOpen(false)} style={{ background: "transparent", border: 0, color: "#aaa", fontSize: 18 }} aria-label="Close assistant" title="Close">✕</button>
           </div>
 
           <p style={{ fontSize: 12, color: "#bbb", margin: "6px 0 10px" }}>
@@ -199,28 +174,10 @@ export default function AssistantDock() {
             <button className="assistant-action" onClick={() => handleRun("tour")}>Start tour</button>
           </div>
 
-          <form
-            onSubmit={(e) => { e.preventDefault(); if (query.trim()) handleRun(query); }}
-            style={{ display: "flex", gap: 6 }}
-          >
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder='Type a command… e.g. "upload avatar"'
-              aria-label="Assistant command"
-              style={{
-                flex: 1,
-                padding: "10px 12px",
-                borderRadius: 10,
-                border: "1px solid rgba(255,255,255,.12)",
-                background: "rgba(24,24,24,.9)",
-                color: "#fff",
-                fontSize: 13,
-              }}
-            />
-            <button className="assistant-action" type="submit" style={{ padding: "10px 14px" }}>
-              Run
-            </button>
+          <form onSubmit={(e) => { e.preventDefault(); if (query.trim()) handleRun(query); }} style={{ display: "flex", gap: 6 }}>
+            <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder='Type a command… e.g. "upload avatar"' aria-label="Assistant command"
+              style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: "1px solid rgba(255,255,255,.12)", background: "rgba(24,24,24,.9)", color: "#fff", fontSize: 13 }} />
+            <button className="assistant-action" type="submit" style={{ padding: "10px 14px" }}>Run</button>
           </form>
 
           {status && <div style={{ fontSize: 12, color: "#bbb", marginTop: 6 }} aria-live="polite">{status}</div>}
