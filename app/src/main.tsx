@@ -1,7 +1,13 @@
 // app/src/main.tsx
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, RouterProvider, Outlet } from "react-router-dom";
+import {
+  createBrowserRouter,
+  RouterProvider,
+  Outlet,
+  useRouteError,
+  isRouteErrorResponse,
+} from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
 
@@ -34,7 +40,7 @@ import Discover from "./routes/discover/Discover";
 /* Assistant always-on */
 import "./assistant/standalone";
 
-/* Debug */
+/* Optional global safety net (still useful for non-route errors) */
 import ErrorBoundary from "./components/_debug/ErrorBoundary";
 
 function Layout() {
@@ -49,9 +55,38 @@ function Layout() {
   );
 }
 
+/** Route-level error UI (this is what React Router will render) */
+function RouteErrorPage() {
+  const err = useRouteError();
+  // Keep a console for quick diagnosis in prod (maps with sourcemaps)
+  // eslint-disable-next-line no-console
+  console.error("[RouteError]", err);
+
+  let title = "Unexpected Application Error";
+  let detail: string;
+
+  if (isRouteErrorResponse(err)) {
+    title = `${err.status} ${err.statusText}`;
+    detail = typeof err.data === "string" ? err.data : JSON.stringify(err.data);
+  } else if (err instanceof Error) {
+    detail = err.message + (err.stack ? `\n\n${err.stack}` : "");
+  } else {
+    detail = String(err);
+  }
+
+  return (
+    <div className="p-6">
+      <h1 className="text-xl font-semibold mb-2">{title}</h1>
+      <pre className="text-xs whitespace-pre-wrap">{detail}</pre>
+    </div>
+  );
+}
+
 const router = createBrowserRouter([
   {
     element: <Layout />,
+    /** 👇 this catches render/loader/action errors in this branch */
+    errorElement: <RouteErrorPage />,
     children: [
       { path: "/", element: <Home /> },
       { path: "/discover", element: <Discover /> },
@@ -82,7 +117,6 @@ const qc = new QueryClient();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    {/* Global error boundary (simpler than per-route errorElement) */}
     <ErrorBoundary>
       <QueryClientProvider client={qc}>
         <AuthProvider>
