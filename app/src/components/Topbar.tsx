@@ -111,7 +111,6 @@ export default function Topbar() {
   const [open, setOpen] = useState(false);
   const [rows, setRows] = useState<SearchRow[]>([]);
   const [sel, setSel] = useState(0);
-  const boxRef = useRef<HTMLDivElement>(null);
   const blurTimer = useRef<number | null>(null);
 
   // Fetch users for query
@@ -147,7 +146,8 @@ export default function Topbar() {
 
   function go(row: SearchRow | undefined) {
     if (!row) return;
-    nav(`/u/${row.username || row.id}`);
+    const target = `/u/${row.username || row.id}`;
+    nav(target);
     setOpen(false);
     setQ("");
   }
@@ -166,19 +166,14 @@ export default function Topbar() {
       return;
     }
     if (e.key === "Enter") {
-      // Always navigate to the top result if available
       const r = rows[Math.max(0, Math.min(sel, rows.length - 1))];
       if (r) {
         e.preventDefault();
         go(r);
-      } else {
-        // no results → do nothing special
       }
       return;
     }
-    if (e.key === "Escape") {
-      setOpen(false);
-    }
+    if (e.key === "Escape") setOpen(false);
   }
 
   return (
@@ -188,7 +183,7 @@ export default function Topbar() {
         <div className="w-14 shrink-0" />
 
         {/* search box + results */}
-        <div className="relative flex-1" ref={boxRef}>
+        <div className="relative flex-1">
           <input
             className="w-full input"
             placeholder="🔎 search the name of the artwork or username"
@@ -199,8 +194,8 @@ export default function Topbar() {
             }}
             onFocus={() => rows.length && setOpen(true)}
             onBlur={() => {
-              // small delay so clicks on items still register
-              blurTimer.current = window.setTimeout(() => setOpen(false), 120);
+              // close a tick later so clicks can fire first
+              blurTimer.current = window.setTimeout(() => setOpen(false), 100);
             }}
             onKeyDown={onKeyDown}
           />
@@ -208,40 +203,40 @@ export default function Topbar() {
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-lg overflow-hidden z-50">
               <div className="px-3 py-2 text-xs text-neutral-400">USERS</div>
               <ul className="max-h-80 overflow-auto">
-                {rows.map((r, i) => {
-                  const href = `/u/${r.username || r.id}`;
-                  return (
-                    <li key={r.id}>
-                      <Link
-                        to={href}
-                        onMouseDown={() => {
-                          // cancel pending blur-close
-                          if (blurTimer.current) {
-                            clearTimeout(blurTimer.current);
-                            blurTimer.current = null;
-                          }
-                        }}
-                        onClick={() => go(r)}
-                        className={[
-                          "flex items-center gap-3 px-3 py-2 hover:bg-neutral-800",
-                          i === sel ? "bg-neutral-800" : "",
-                        ].join(" ")}
-                      >
-                        <img
-                          src={r.avatar_url || "/images/taedal-logo.svg"}
-                          alt=""
-                          className="h-7 w-7 rounded-full object-cover"
-                        />
-                        <div className="min-w-0">
-                          <div className="truncate">{r.display_name || r.username || "User"}</div>
-                          <div className="text-xs text-neutral-400 truncate">
-                            @{r.username || r.id}
-                          </div>
+                {rows.map((r, i) => (
+                  <li key={r.id}>
+                    {/* Use button and navigate onMouseDown so blur cannot cancel it */}
+                    <button
+                      type="button"
+                      onMouseDown={(ev) => {
+                        ev.preventDefault(); // stop focusing button and stop blur sequence
+                        if (blurTimer.current) {
+                          clearTimeout(blurTimer.current);
+                          blurTimer.current = null;
+                        }
+                        go(r);
+                      }}
+                      className={[
+                        "w-full text-left flex items-center gap-3 px-3 py-2 hover:bg-neutral-800",
+                        i === sel ? "bg-neutral-800" : "",
+                      ].join(" ")}
+                    >
+                      <img
+                        src={r.avatar_url || "/images/taedal-logo.svg"}
+                        alt=""
+                        className="h-7 w-7 rounded-full object-cover"
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate">
+                          {r.display_name || r.username || "User"}
                         </div>
-                      </Link>
-                    </li>
-                  );
-                })}
+                        <div className="text-xs text-neutral-400 truncate">
+                          @{r.username || r.id}
+                        </div>
+                      </div>
+                    </button>
+                  </li>
+                ))}
               </ul>
               <div className="px-3 py-2 text-xs text-neutral-500 border-t border-neutral-800">
                 Enter to open selected • Esc to close

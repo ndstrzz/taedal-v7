@@ -1,62 +1,26 @@
 // app/src/App.tsx
-import { useEffect, useState, Suspense } from "react";
-import { BrowserRouter, Routes, Route, Link, useNavigate, useLocation } from "react-router-dom";
+import { Suspense, useEffect, useState } from "react";
+import {
+  BrowserRouter,
+  Routes,
+  Route,
+  Link,
+} from "react-router-dom";
+
+/* ---- layout ---- */
+import Topbar from "./components/Topbar";
 
 /* ---- pages ---- */
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
-import PublicProfile from "./routes/profiles/PublicProfile"; // ⬅️ new
+import PublicProfile from "./routes/profiles/PublicProfile";
 
 /* ---- libs ---- */
 import { fetchActiveListings, type JoinedListing } from "./lib/listings";
 
 /* ---- styles ---- */
 import "./App.css";
-
-/* ----------------------------------------- */
-/* Top navigation                            */
-/* ----------------------------------------- */
-function TopNav() {
-  const loc = useLocation();
-  const nav = useNavigate();
-
-  return (
-    <header className="sticky top-0 z-40 flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-neutral-950/80 backdrop-blur">
-      <div className="flex items-center gap-2 min-w-0">
-        <Link to="/" className="flex items-center gap-2">
-          <div className="h-7 w-7 rounded-xl bg-white text-black grid place-items-center font-black">T</div>
-          <span className="font-semibold tracking-wide">Taedal</span>
-        </Link>
-        <span className="mx-3 text-white/20">|</span>
-        <nav className="flex items-center gap-1 text-sm">
-          <Link
-            to="/"
-            className={`px-2 py-1 rounded hover:bg-white/10 ${loc.pathname === "/" ? "bg-white text-black" : "text-white/80"}`}
-          >
-            Explore
-          </Link>
-          <Link
-            to="/create"
-            className={`px-2 py-1 rounded hover:bg-white/10 ${loc.pathname.startsWith("/create") ? "bg-white text-black" : "text-white/80"}`}
-          >
-            Create
-          </Link>
-        </nav>
-      </div>
-
-      <div className="flex items-center gap-2">
-        <button
-          className="btn"
-          onClick={() => nav("/create")}
-          title="Create a new artwork"
-        >
-          + New
-        </button>
-      </div>
-    </header>
-  );
-}
 
 /* ----------------------------------------- */
 /* Explore (Home)                            */
@@ -110,8 +74,11 @@ function Explore() {
     <div className="max-w-7xl mx-auto p-6">
       <h1 className="text-2xl font-semibold mb-4">Explore</h1>
       {msg && <p className="text-amber-300 text-sm mb-3">{msg}</p>}
-      {(!items || items.length === 0) ? (
-        <div className="text-white/70">No active listings yet. Be the first to <Link className="underline" to="/create">create</Link> one.</div>
+      {!items || items.length === 0 ? (
+        <div className="text-white/70">
+          No active listings yet. Be the first to{" "}
+          <Link className="underline" to="/create">create</Link> one.
+        </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {items.map((l) => (
@@ -128,15 +95,21 @@ function Explore() {
                     className="w-full h-full object-cover"
                   />
                 ) : (
-                  <div className="w-full h-full grid place-items-center text-white/40">No image</div>
+                  <div className="w-full h-full grid place-items-center text-white/40">
+                    No image
+                  </div>
                 )}
               </div>
               <div className="p-3">
-                <div className="truncate font-medium">{l.artworks?.title || "Untitled"}</div>
+                <div className="truncate font-medium">
+                  {l.artworks?.title || "Untitled"}
+                </div>
                 <div className="text-sm text-white/70 mt-0.5">
                   {l.fixed_price != null && l.sale_currency
                     ? `${l.fixed_price} ${l.sale_currency}`
-                    : (l.type === "auction" ? "Auction" : "—")}
+                    : l.type === "auction"
+                      ? "Auction"
+                      : "—"}
                 </div>
               </div>
             </Link>
@@ -169,7 +142,7 @@ function App() {
   return (
     <BrowserRouter>
       <div className="min-h-dvh bg-neutral-950 text-white">
-        <TopNav />
+        <Topbar />
 
         <Suspense
           fallback={
@@ -183,11 +156,15 @@ function App() {
             <Route path="/" element={<Explore />} />
             <Route path="/create" element={<CreateArtwork />} />
             <Route path="/art/:id" element={<ArtworkDetail />} />
-            {/* Public profile route used by Topbar search */}
+
+            {/* Public profile routes (support both /u/:handle and legacy /profiles/:handle) */}
             <Route path="/u/:handle" element={<PublicProfile />} />
+            <Route path="/profiles/:handle" element={<PublicProfile />} />
+
             {/* Stripe success landing */}
             <Route path="/checkout/success" element={<CheckoutSuccess />} />
-            {/* Catch-all */}
+
+            {/* 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </Suspense>
