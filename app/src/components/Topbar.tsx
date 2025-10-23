@@ -28,7 +28,10 @@ export default function Topbar() {
 
   const [user, setUser] = useState<UserBits | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // refs for outside-click handling
   const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLDivElement>(null);
 
   /* ---------------------- session + profile load ---------------------- */
   useEffect(() => {
@@ -77,42 +80,6 @@ export default function Topbar() {
 
   /* close account dropdown on route change */
   useEffect(() => setMenuOpen(false), [loc.pathname, loc.search]);
-
-  /* close dropdowns on outside click / Esc */
-  useEffect(() => {
-    function onDocClick(e: MouseEvent) {
-      if (menuRef.current?.contains(e.target as Node)) return;
-      setMenuOpen(false);
-      setOpenSearch(false);
-    }
-    function onEsc(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        setMenuOpen(false);
-        setOpenSearch(false);
-      }
-    }
-    document.addEventListener("mousedown", onDocClick);
-    document.addEventListener("keydown", onEsc);
-    return () => {
-      document.removeEventListener("mousedown", onDocClick);
-      document.removeEventListener("keydown", onEsc);
-    };
-  }, []);
-
-  const signOut = async () => {
-    await supabase.auth.signOut({ scope: "global" });
-    setUser(null);
-    setMenuOpen(false);
-    nav("/signin", { replace: true });
-  };
-
-  const avatar = useMemo(
-    () => user?.avatar_url || "/images/taedal-logo.svg",
-    [user?.avatar_url]
-  );
-  const myProfileUrl = user?.username
-    ? `/profiles/${user.username}`
-    : `/profiles/${user?.id || ""}`;
 
   /* ----------------------------- search ----------------------------- */
   const [q, setQ] = useState("");
@@ -218,6 +185,47 @@ export default function Topbar() {
     }
   };
 
+  /* -------------------------- outside clicks -------------------------- */
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      const t = e.target as Node;
+      // keep account menu open only when clicking inside it
+      if (menuRef.current?.contains(t)) return;
+      // keep search open when clicking inside the search area
+      if (searchRef.current?.contains(t)) return;
+
+      setMenuOpen(false);
+      setOpenSearch(false);
+    }
+    function onEsc(e: KeyboardEvent) {
+      if (e.key === "Escape") {
+        setMenuOpen(false);
+        setOpenSearch(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    document.addEventListener("keydown", onEsc);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      document.removeEventListener("keydown", onEsc);
+    };
+  }, []);
+
+  const signOut = async () => {
+    await supabase.auth.signOut({ scope: "global" });
+    setUser(null);
+    setMenuOpen(false);
+    nav("/signin", { replace: true });
+  };
+
+  const avatar = useMemo(
+    () => user?.avatar_url || "/images/taedal-logo.svg",
+    [user?.avatar_url]
+  );
+  const myProfileUrl = user?.username
+    ? `/profiles/${user.username}`
+    : `/profiles/${user?.id || ""}`;
+
   return (
     <header className="sticky top-0 z-30 bg-black/80 backdrop-blur border-b border-neutral-800">
       <div className="h-14 flex items-center gap-3 px-4">
@@ -225,7 +233,7 @@ export default function Topbar() {
         <div className="w-14 shrink-0" />
 
         {/* search */}
-        <div className="flex-1 relative">
+        <div className="flex-1 relative" ref={searchRef}>
           <input
             className="w-full input"
             placeholder="🔎 search the name of the artwork or username"
@@ -259,17 +267,17 @@ export default function Topbar() {
                         <Link
                           key={`${u.id}-${idx}`}
                           to={href}
-                          onMouseEnter={() => setSelIndex(idx)}
-                          onMouseDown={(e) => e.preventDefault()} // keep focus in input
-                          onClick={() => {
-                            setOpenSearch(false);
-                            setSelIndex(-1);
-                            setQ("");
-                          }}
                           className={cx(
                             "w-full flex items-center gap-3 px-3 py-2 text-left",
                             active ? "bg-neutral-800" : "hover:bg-neutral-800/60"
                           )}
+                          onMouseEnter={() => setSelIndex(idx)}
+                          onClick={() => {
+                            // let the router navigate, then close panel
+                            setOpenSearch(false);
+                            setSelIndex(-1);
+                            setQ("");
+                          }}
                         >
                           <img
                             src={u.avatar_url || "/images/taedal-logo.svg"}
@@ -307,7 +315,6 @@ export default function Topbar() {
                 {results.length > 0 && (
                   <button
                     className="text-sm text-neutral-200 hover:underline"
-                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => goToIndex(selIndex >= 0 ? selIndex : 0)}
                   >
                     Open selected
