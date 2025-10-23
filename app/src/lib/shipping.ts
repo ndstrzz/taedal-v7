@@ -11,8 +11,9 @@ export type ShipmentStatus =
   | "in_transit"
   | "out_for_delivery"
   | "delivered"
-  | "failed"
   | "returned"
+  | "exception"
+  | "failed"        // legacy alias → maps to 'exception'
   | "unknown";
 
 export const SHIPMENT_STATUSES: readonly ShipmentStatus[] = [
@@ -21,12 +22,13 @@ export const SHIPMENT_STATUSES: readonly ShipmentStatus[] = [
   "in_transit",
   "out_for_delivery",
   "delivered",
-  "failed",
   "returned",
+  "exception",
+  "failed",   // legacy
   "unknown",
 ] as const;
 
-/** Accept a few human strings and coerce → enum */
+/** Coerce human strings → enum (with legacy aliases) */
 function normalizeStatus(s?: string | null): ShipmentStatus | null {
   if (!s) return null;
   const k = s.toLowerCase().replace(/\s+/g, "_");
@@ -39,12 +41,12 @@ function normalizeStatus(s?: string | null): ShipmentStatus | null {
     transit: "in_transit",
     out_for_delivery: "out_for_delivery",
     delivered: "delivered",
-    failed: "failed",
+    failed: "exception",      // map to exception
+    exception: "exception",
     returned: "returned",
     unknown: "unknown",
   };
-  const val = map[k] ?? (SHIPMENT_STATUSES.includes(k as ShipmentStatus) ? (k as ShipmentStatus) : null);
-  return val;
+  return (map[k] ?? null) as ShipmentStatus | null;
 }
 
 function assertStatus(status: ShipmentStatus) {
@@ -53,10 +55,9 @@ function assertStatus(status: ShipmentStatus) {
   }
 }
 
-/** Date helpers: accept yyyy-mm-dd or empty */
+/** yyyy-mm-dd or null */
 function toDateOrNull(d?: string | null): string | null {
   if (!d) return null;
-  // keep yyyy-mm-dd as-is; ignore obviously bad strings
   return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
 }
 
@@ -71,12 +72,10 @@ export async function createShipment(input: {
   tracking_number?: string | null;
   note?: string | null;
   estimated_delivery_date?: string | null; // yyyy-mm-dd
-  /** Optional override for first status; defaults to 'with_creator' */
-  status?: ShipmentStatus | string | null;
+  status?: ShipmentStatus | string | null; // optional override
 }) {
-  // Always start with a valid status to satisfy CHECK constraints.
-  const status = normalizeStatus(input.status) ?? "with_creator";
-  assertStatus(status);
+  const next = normalizeStatus(input.status) ?? "with_creator";
+  assertStatus(next);
 
   const payload = {
     artwork_id: input.artwork_id,
@@ -85,26 +84,30 @@ export async function createShipment(input: {
     tracking_number: input.tracking_number ?? null,
     note: input.note ?? null,
     estimated_delivery_date: toDateOrNull(input.estimated_delivery_date),
-    status,
+    status: next,            // keep legacy column in sync
+    status_v2: normalizeStatus(next) === "exception" ? "exception" : (next as any),
   };
 
   const { data, error } = await supabase
     .from("shipments")
     .insert(payload)
-    .select("id,artwork_id,owner_id,carrier,tracking_number,status,note,estimated_delivery_date,created_at,updated_at")
+    .select(`
+      id, artwork_id, owner_id, carrier, tracking_number,
+      status, status_v2, note, estimated_delivery_date,
+      created_at, updated_at, delivered_at, buyer_confirmed_at, buyer_confirmed_by
+    `)
     .single();
   if (error) throw error;
 
-  // Seed the timeline with the initial status event (best-effort).
+  // seed timeline
   try {
     await supabase.from("shipment_events").insert({
       shipment_id: data.id,
-      code: status,
+      code: normalizeStatus(next) ?? next,
       message: input.note ?? null,
+      source: "system",
     });
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
 
   return data;
 }
@@ -112,9 +115,11 @@ export async function createShipment(input: {
 export async function listShipments(artworkId: string) {
   const { data, error } = await supabase
     .from("shipments")
-    .select(
-      "id,artwork_id,owner_id,carrier,tracking_number,status,note,estimated_delivery_date,created_at,updated_at"
-    )
+    .select(`
+      id, artwork_id, owner_id, carrier, tracking_number,
+      status, status_v2, note, estimated_delivery_date,
+      created_at, updated_at, delivered_at, buyer_confirmed_at
+    `)
     .eq("artwork_id", artworkId)
     .order("created_at", { ascending: false });
   if (error) throw error;
@@ -124,9 +129,13 @@ export async function listShipments(artworkId: string) {
 export async function getShipmentById(id: string) {
   const { data, error } = await supabase
     .from("shipments")
-    .select(
-      "id,artwork_id,owner_id,carrier,tracking_number,status,note,estimated_delivery_date,created_at,updated_at"
-    )
+    .select(`
+      id, artwork_id, owner_id, carrier, tracking_number,
+      status, status_v2, note, estimated_delivery_date,
+      created_at, updated_at, delivered_at,
+      buyer_confirmed_at, buyer_confirmed_by,
+      tracking_slug, last_checkpoint
+    `)
     .eq("id", id)
     .single();
   if (error) throw error;
@@ -136,14 +145,13 @@ export async function getShipmentById(id: string) {
 export async function listShipmentEvents(shipmentId: string) {
   const { data, error } = await supabase
     .from("shipment_events")
-    .select("id,code,message,created_at")
+    .select("id, code, message, source, created_at")
     .eq("shipment_id", shipmentId)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data;
 }
 
-/** Minimal “move forward” status update with optional note */
 export async function updateShipmentStatus(
   shipmentId: string,
   status: ShipmentStatus | string,
@@ -153,18 +161,25 @@ export async function updateShipmentStatus(
   if (!next) throw new Error(`Invalid status: ${status}`);
   assertStatus(next);
 
-  const { error } = await supabase.from("shipments").update({ status: next }).eq("id", shipmentId);
+  const { error } = await supabase
+    .from("shipments")
+    .update({
+      status: next,            // legacy
+      status_v2: next === "failed" ? "exception" : (next as any),
+      delivered_at: next === "delivered" ? new Date().toISOString() : undefined,
+    })
+    .eq("id", shipmentId);
   if (error) throw error;
 
   const { error: e2 } = await supabase.from("shipment_events").insert({
     shipment_id: shipmentId,
     code: next,
     message: message ?? null,
+    source: "seller",
   });
   if (e2) throw e2;
 }
 
-/** Partial update for carrier/tracking/date/note and (optionally) status */
 export async function updateShipmentDetails(
   shipmentId: string,
   fields: {
@@ -182,24 +197,51 @@ export async function updateShipmentDetails(
     note: fields.note ?? undefined,
   };
 
-  // include status if provided
+  let changedStatus: ShipmentStatus | null = null;
   if (fields.status != null) {
     const s = normalizeStatus(fields.status);
     if (!s) throw new Error(`Invalid status: ${fields.status}`);
     assertStatus(s);
+    changedStatus = s;
     patch.status = s;
+    patch.status_v2 = s === "failed" ? "exception" : (s as any);
+    if (s === "delivered") patch.delivered_at = new Date().toISOString();
   }
 
   const { error } = await supabase.from("shipments").update(patch).eq("id", shipmentId);
   if (error) throw error;
 
-  // If status was changed, log an event too.
-  if (patch.status) {
+  if (changedStatus) {
     const { error: e2 } = await supabase.from("shipment_events").insert({
       shipment_id: shipmentId,
-      code: patch.status as ShipmentStatus,
+      code: changedStatus,
       message: fields.note ?? null,
+      source: "seller",
     });
     if (e2) throw e2;
   }
+}
+
+/** Buyer confirmation (calls SECURITY DEFINER RPC) */
+export async function confirmShipmentReceived(shipment_id: string) {
+  const { data, error } = await supabase.rpc("confirm_shipment_received", {
+    p_shipment_id: shipment_id,
+  });
+  if (error) throw error;
+  return data as boolean;
+}
+
+/** Public tracking (tokenized) — optional endpoint you can build a route on */
+export async function getShipmentByPublicToken(token: string) {
+  const { data, error } = await supabase
+    .from("shipments")
+    .select(`
+      id, artwork_id, status, status_v2,
+      carrier, tracking_number, tracking_slug,
+      last_checkpoint, delivered_at, buyer_confirmed_at
+    `)
+    .eq("public_token", token)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
 }

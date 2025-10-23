@@ -1,5 +1,5 @@
 // app/src/components/shipping/ShipmentsPanel.tsx
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { supabase } from "../../lib/supabase";
 import {
   createShipment,
@@ -14,13 +14,25 @@ type Shipment = {
   id: string;
   artwork_id: string;
   owner_id: string | null;
-  carrier: string | null;
+  carrier: string | null;              // manual carrier label
+  tracking_slug?: string | null;       // normalized carrier code from webhook
   tracking_number: string | null;
-  status: ShipmentStatus | null;
+  status: ShipmentStatus | null;       // legacy text column
+  status_v2?: ShipmentStatus | null;   // new enum column
   note: string | null;
   estimated_delivery_date?: string | null;
   created_at: string;
   updated_at: string;
+  delivered_at?: string | null;
+  buyer_confirmed_at?: string | null;
+  last_checkpoint?: {
+    code?: string;
+    message?: string;
+    checkpoint_time?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+  } | null;
 };
 
 type Event = {
@@ -28,16 +40,19 @@ type Event = {
   code: string;
   message: string | null;
   created_at: string;
+  source?: string | null;
 };
 
+// “happy path” next steps, plus exception/returned handled as dedicated buttons.
 const NEXT_STEPS: Record<ShipmentStatus, ShipmentStatus[]> = {
   with_creator: ["handed_to_carrier"],
   handed_to_carrier: ["in_transit"],
   in_transit: ["out_for_delivery", "delivered"],
   out_for_delivery: ["delivered"],
   delivered: [],
-  failed: [],
   returned: [],
+  exception: [],
+  failed: [], // legacy alias; we keep empty here (use “Mark failed” button)
   unknown: [],
 };
 
@@ -125,13 +140,38 @@ export default function ShipmentsPanel({
     }
   }
 
+  const StatusPill = ({ v }: { v: ShipmentStatus | null }) => {
+    const code = (v || "unknown") as ShipmentStatus;
+    const t = code.replace(/_/g, " ");
+    const tone =
+      code === "delivered" ? "bg-emerald-400 text-black" :
+      code === "returned" || code === "exception" ? "bg-rose-300 text-black" :
+      "bg-white/10 text-white";
+    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${tone}`}>{t}</span>;
+  };
+
+  const carrierLabel = (s: Shipment) =>
+    s.tracking_slug || s.carrier || "—";
+
+  const checkpointLine = (s: Shipment) => {
+    const c = s.last_checkpoint;
+    if (!c) return null;
+    const where = [c.city, c.state, c.country].filter(Boolean).join(", ");
+    const when = c.checkpoint_time ? new Date(c.checkpoint_time).toLocaleString() : null;
+    return (
+      <div className="text-xs text-white/60">
+        {c.message || "Update"} {where ? `• ${where}` : ""} {when ? `• ${when}` : ""}
+      </div>
+    );
+  };
+
   return (
     <>
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-semibold">Shipments</h3>
           {canEdit && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <input className="input w-36" placeholder="Carrier" value={carrier} onChange={(e)=>setCarrier(e.target.value)} />
               <input className="input w-44" placeholder="Tracking #" value={tracking} onChange={(e)=>setTracking(e.target.value)} />
               <input className="input w-56" placeholder="Note (optional)" value={note} onChange={(e)=>setNote(e.target.value)} />
@@ -146,56 +186,71 @@ export default function ShipmentsPanel({
           <div className="text-sm text-white/70">No shipments yet.</div>
         ) : (
           <div className="space-y-3">
-            {rows.map((s) => (
-              <div key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
-                <div className="flex flex-wrap items-center gap-3 text-sm">
-                  <b>#{s.id.slice(0, 6)}</b>
-                  <span>• Status: <span className="font-medium">{s.status ?? "unknown"}</span></span>
-                  {s.carrier && <span>• Carrier: {s.carrier}</span>}
-                  {s.tracking_number && <span>• Tracking: {s.tracking_number}</span>}
-                  {s.estimated_delivery_date && <span>• ETA: {s.estimated_delivery_date}</span>}
-                  <span className="text-white/60">• {new Date(s.created_at).toLocaleString()}</span>
-                  <span className="ml-auto" />
-                  <button
-                    className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                    onClick={() => { setManagerShipmentId(s.id); setManagerOpen(true); }}
-                  >
-                    View shipment options
-                  </button>
-                </div>
+            {rows.map((s) => {
+              const curStatus: ShipmentStatus =
+                (s.status_v2 as ShipmentStatus) || (s.status as ShipmentStatus) || "unknown";
 
-                {/* tiny timeline preview */}
-                <ul className="mt-2 space-y-1 text-sm">
-                  {(events[s.id] ?? []).slice(0,3).map((e) => (
-                    <li key={e.id} className="flex items-start gap-2">
-                      <span className="mt-1 h-2 w-2 rounded-full bg-white/60" />
-                      <div>
-                        <div className="font-medium">{e.code.replace(/_/g, " ")}</div>
-                        {e.message && <div className="text-white/80 text-[13px]">{e.message}</div>}
-                        <div className="text-white/50 text-[11px]">{new Date(e.created_at).toLocaleString()}</div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+              const nexts = useMemo(
+                () => (NEXT_STEPS[curStatus] ?? []),
+                [curStatus]
+              );
 
-                {canEdit && s.status && NEXT_STEPS[s.status].length > 0 && (
-                  <div className="mt-2 flex flex-wrap gap-2">
-                    {NEXT_STEPS[s.status].map((n) => (
-                      <button key={n} className="btn px-2 py-1 text-xs" onClick={() => move(s.id, n)} disabled={busy}>
-                        Mark {`${n}`.replace(/_/g, " ")}
-                      </button>
-                    ))}
-                    {/* exception quick actions */}
-                    <button className="btn px-2 py-1 text-xs" onClick={() => move(s.id, "failed")} disabled={busy}>
-                      Mark failed
-                    </button>
-                    <button className="btn px-2 py-1 text-xs" onClick={() => move(s.id, "returned")} disabled={busy}>
-                      Mark returned
+              return (
+                <div key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
+                  <div className="flex flex-wrap items-center gap-3 text-sm">
+                    <b>#{s.id.slice(0, 6)}</b>
+                    <span className="flex items-center gap-1">
+                      • Status: <StatusPill v={curStatus} />
+                    </span>
+                    <span>• Carrier: {carrierLabel(s)}</span>
+                    {s.tracking_number && <span>• Tracking: {s.tracking_number}</span>}
+                    {s.estimated_delivery_date && <span>• ETA: {s.estimated_delivery_date}</span>}
+                    <span className="text-white/60">• {new Date(s.created_at).toLocaleString()}</span>
+                    <span className="ml-auto" />
+                    <button
+                      className="btn bg-white/0 border border-white/20 hover:bg-white/10"
+                      onClick={() => { setManagerShipmentId(s.id); setManagerOpen(true); }}
+                    >
+                      View shipment options
                     </button>
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {/* tiny timeline / checkpoint preview */}
+                  <div className="mt-2">
+                    {checkpointLine(s)}
+                    <ul className="mt-2 space-y-1 text-sm">
+                      {(events[s.id] ?? []).slice(0,3).map((e) => (
+                        <li key={e.id} className="flex items-start gap-2">
+                          <span className="mt-1 h-2 w-2 rounded-full bg-white/60" />
+                          <div>
+                            <div className="font-medium">{e.code.replace(/_/g, " ")}</div>
+                            {e.message && <div className="text-white/80 text-[13px]">{e.message}</div>}
+                            <div className="text-white/50 text-[11px]">{new Date(e.created_at).toLocaleString()}</div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  {canEdit && nexts.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {nexts.map((n) => (
+                        <button key={n} className="btn px-2 py-1 text-xs" onClick={() => move(s.id, n)} disabled={busy}>
+                          Mark {`${n}`.replace(/_/g, " ")}
+                        </button>
+                      ))}
+                      {/* exception quick actions */}
+                      <button className="btn px-2 py-1 text-xs" onClick={() => move(s.id, "exception")} disabled={busy}>
+                        Mark exception
+                      </button>
+                      <button className="btn px-2 py-1 text-xs" onClick={() => move(s.id, "returned")} disabled={busy}>
+                        Mark returned
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

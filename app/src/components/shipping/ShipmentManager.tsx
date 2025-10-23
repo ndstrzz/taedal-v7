@@ -5,6 +5,7 @@ import {
   getShipmentById,
   listShipmentEvents,
   updateShipmentDetails,
+  confirmShipmentReceived,
   type ShipmentStatus,
   SHIPMENT_STATUSES,
 } from "../../lib/shipping";
@@ -15,17 +16,31 @@ type Shipment = {
   owner_id: string | null;
   carrier: string | null;
   tracking_number: string | null;
-  status: ShipmentStatus | null;
+  status: ShipmentStatus | null;       // legacy
+  status_v2?: ShipmentStatus | null;   // new enum
   note: string | null;
   estimated_delivery_date: string | null;
   created_at: string;
   updated_at: string;
+  delivered_at?: string | null;
+  buyer_confirmed_at?: string | null;
+  buyer_confirmed_by?: string | null;
+  tracking_slug?: string | null;
+  last_checkpoint?: {
+    code?: string;
+    message?: string;
+    checkpoint_time?: string;
+    city?: string;
+    state?: string;
+    country?: string;
+  } | null;
 };
 
 type EventRow = {
   id: string;
   code: string;
   message: string | null;
+  source?: string | null;
   created_at: string;
 };
 
@@ -58,11 +73,14 @@ export default function ShipmentManager({
   canEdit: boolean;
   onChanged?: () => void | Promise<void>;
 }) {
+  const [viewerId, setViewerId] = useState<string | null>(null);
+
   const [shipment, setShipment] = useState<Shipment | null>(null);
   const [events, setEvents] = useState<EventRow[]>([]);
   const [art, setArt] = useState<Artwork | null>(null);
   const [buyer, setBuyer] = useState<Profile | null>(null);
   const [busy, setBusy] = useState(false);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   // form fields
@@ -73,13 +91,21 @@ export default function ShipmentManager({
   const [note, setNote] = useState("");
 
   useEffect(() => {
+    (async () => {
+      const { data } = await supabase.auth.getSession();
+      setViewerId(data.session?.user?.id ?? null);
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!open) return;
     (async () => {
       setMsg(null);
       try {
         const s = (await getShipmentById(shipmentId)) as Shipment;
         setShipment(s);
-        setStatus((s.status as ShipmentStatus) || "with_creator");
+        const initial = (s.status_v2 as ShipmentStatus) || (s.status as ShipmentStatus) || "with_creator";
+        setStatus(initial);
         setCarrier(s.carrier || "");
         setTracking(s.tracking_number || "");
         setEta(s.estimated_delivery_date || "");
@@ -111,10 +137,12 @@ export default function ShipmentManager({
 
   const statusOptions = useMemo(
     () =>
-      SHIPMENT_STATUSES.filter((s) => s !== "unknown").map((s) => ({
-        key: s,
-        label: s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()),
-      })),
+      SHIPMENT_STATUSES
+        .filter((s) => s !== "unknown")
+        .map((s) => ({
+          key: s,
+          label: s.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase()),
+        })),
     []
   );
 
@@ -135,7 +163,7 @@ export default function ShipmentManager({
       // refresh
       const fresh = (await getShipmentById(shipment.id)) as Shipment;
       setShipment(fresh);
-      setStatus((fresh.status as ShipmentStatus) || "");
+      setStatus((fresh.status_v2 as ShipmentStatus) || (fresh.status as ShipmentStatus) || "");
       const ev = (await listShipmentEvents(shipment.id)) as EventRow[];
       setEvents(ev);
       setNote("");
@@ -148,11 +176,16 @@ export default function ShipmentManager({
 
   if (!open) return null;
 
+  const currentStatus = (shipment?.status_v2 as ShipmentStatus) || (shipment?.status as ShipmentStatus) || "unknown";
+  const isDelivered = currentStatus === "delivered";
+  const viewerIsBuyer = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
+
   const StatusPill = ({ v }: { v: ShipmentStatus | null }) => {
-    const t = (v || "unknown").replace(/_/g, " ");
+    const code = (v || "unknown") as ShipmentStatus;
+    const t = code.replace(/_/g, " ");
     const tone =
-      v === "delivered" ? "bg-emerald-400 text-black" :
-      v === "failed" || v === "returned" ? "bg-rose-300 text-black" :
+      code === "delivered" ? "bg-emerald-400 text-black" :
+      code === "returned" || code === "exception" ? "bg-rose-300 text-black" :
       "bg-white/10 text-white";
     return <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${tone}`}>{t}</span>;
   };
@@ -173,7 +206,7 @@ export default function ShipmentManager({
                 <div className="text-xs text-white/60">Update and track artwork shipment status</div>
               </div>
               <div className="ml-3">
-                <StatusPill v={shipment?.status ?? null} />
+                <StatusPill v={currentStatus as ShipmentStatus} />
               </div>
             </div>
             <button
@@ -188,9 +221,43 @@ export default function ShipmentManager({
 
         {/* Body */}
         <div className="p-5 grid gap-5 lg:grid-cols-12">
-          {/* Left: form */}
+          {/* Left: buyer confirm + form */}
           <div className="lg:col-span-7 space-y-5">
-            {/* Update box */}
+            {/* Buyer confirm block */}
+            {isDelivered && viewerIsBuyer && !shipment?.buyer_confirmed_at && (
+              <div className="rounded-2xl border border-emerald-500/30 bg-emerald-400/10 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-medium">Mark as received</div>
+                    <div className="text-sm text-white/70">Confirm you’ve received the artwork.</div>
+                  </div>
+                  <button
+                    className="btn"
+                    disabled={confirmBusy}
+                    onClick={async () => {
+                      try {
+                        setConfirmBusy(true);
+                        await confirmShipmentReceived(shipment!.id);
+                        if (onChanged) await onChanged();
+                        const fresh = (await getShipmentById(shipment!.id)) as Shipment;
+                        setShipment(fresh);
+                        const ev = (await listShipmentEvents(shipment!.id)) as EventRow[];
+                        setEvents(ev);
+                        setMsg("Thanks — receipt confirmed ✅");
+                      } catch (e: any) {
+                        setMsg(e?.message || "Failed to confirm.");
+                      } finally {
+                        setConfirmBusy(false);
+                      }
+                    }}
+                  >
+                    {confirmBusy ? "Confirming…" : "Confirm received"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Update box (seller/creator) */}
             <div className="rounded-2xl border border-white/10 bg-white/[0.04]">
               <div className="px-4 py-3 border-b border-white/10 flex items-center gap-2">
                 <span className="text-base font-semibold">Update Shipment Status</span>
@@ -290,7 +357,12 @@ export default function ShipmentManager({
                       <li key={e.id} className="flex items-start gap-3">
                         <div className="mt-1 h-3 w-3 rounded-full bg-white/30" />
                         <div className="flex-1">
-                          <div className="font-medium">{e.code.replace(/_/g, " ")}</div>
+                          <div className="font-medium">
+                            {e.code.replace(/_/g, " ")}{" "}
+                            <span className="text-xs text-white/50">
+                              {e.source ? `• ${e.source}` : null}
+                            </span>
+                          </div>
                           {e.message && <div className="text-white/80 text-[13px]">{e.message}</div>}
                           <div className="text-white/50 text-[11px]">{new Date(e.created_at).toLocaleString()}</div>
                         </div>
@@ -345,11 +417,29 @@ export default function ShipmentManager({
               </div>
               <div className="p-4 text-sm space-y-2">
                 <div className="text-white/60">Carrier</div>
-                <div>{shipment?.carrier || "—"}</div>
+                <div>{shipment?.carrier || shipment?.tracking_slug || "—"}</div>
                 <div className="text-white/60">Tracking Number</div>
                 <div>{shipment?.tracking_number || "—"}</div>
                 <div className="text-white/60">Estimated Delivery</div>
                 <div>{shipment?.estimated_delivery_date || "—"}</div>
+                {shipment?.last_checkpoint && (
+                  <>
+                    <div className="text-white/60">Last Checkpoint</div>
+                    <div>
+                      {shipment.last_checkpoint.message || "—"}
+                      <div className="text-xs text-white/50">
+                        {[
+                          shipment.last_checkpoint.city,
+                          shipment.last_checkpoint.state,
+                          shipment.last_checkpoint.country,
+                        ].filter(Boolean).join(", ")}
+                        {shipment.last_checkpoint.checkpoint_time
+                          ? ` • ${new Date(shipment.last_checkpoint.checkpoint_time).toLocaleString()}`
+                          : ""}
+                      </div>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 
