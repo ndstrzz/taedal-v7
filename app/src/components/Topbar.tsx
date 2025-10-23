@@ -27,7 +27,6 @@ export default function Topbar() {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  /* ---------- load session + small profile bits ---------- */
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -72,7 +71,6 @@ export default function Topbar() {
     };
   }, []);
 
-  /* ---------- close dropdowns on route change / outside click / Esc ---------- */
   useEffect(() => {
     setMenuOpen(false);
     setOpenSearch(false);
@@ -101,7 +99,6 @@ export default function Topbar() {
     };
   }, []);
 
-  /* ---------- sign out ---------- */
   const signOut = async () => {
     await supabase.auth.signOut({ scope: "global" });
     setUser(null);
@@ -110,18 +107,15 @@ export default function Topbar() {
   };
 
   const avatar = useMemo(() => user?.avatar_url || "/images/taedal-logo.svg", [user?.avatar_url]);
-  const profileUrl = user?.username ? `/u/${user.username}` : "/account";
+  const profileUrl = user?.username ? `/profiles/${user.username}` : "/account";
 
-  /* --------------------------------------------------------------------------
-   *                           LIVE USERNAME SEARCH
-   * ------------------------------------------------------------------------*/
+  /* ---------- live username search ---------- */
   const [q, setQ] = useState("");
   const [openSearch, setOpenSearch] = useState(false);
   const [loadingSearch, setLoadingSearch] = useState(false);
   const [results, setResults] = useState<HitUser[]>([]);
   const [selIndex, setSelIndex] = useState(-1);
 
-  // Debounced fetch (prefix match first, then contains)
   useEffect(() => {
     const term = q.trim();
 
@@ -157,19 +151,11 @@ export default function Topbar() {
           .limit(20);
 
         const [rp, ra] = await Promise.all([qPrefix, qAny]);
-
         if (!alive) return;
 
         const uniq = (arr: HitUser[]) => {
-          const seen = new Set<string>();
-          const out: HitUser[] = [];
-          for (const x of arr) {
-            const key = x.id;
-            if (!seen.has(key)) {
-              seen.add(key);
-              out.push(x);
-            }
-          }
+          const seen = new Set<string>(); const out: HitUser[] = [];
+          for (const x of arr) if (!seen.has(x.id)) { seen.add(x.id); out.push(x); }
           return out;
         };
 
@@ -189,11 +175,13 @@ export default function Topbar() {
     };
   }, [q, openSearch]);
 
+  const profileHref = (u: HitUser) =>
+    u.username ? `/profiles/${u.username}` : `/profiles/${u.id}`;
+
   const goToIndex = (i: number) => {
     const u = results[i];
     if (!u) return;
-    const url = u.username ? `/u/${u.username}` : `/profiles/${u.id}`;
-    nav(url);
+    nav(profileHref(u));
     setOpenSearch(false);
     setSelIndex(-1);
     setQ("");
@@ -232,10 +220,9 @@ export default function Topbar() {
   return (
     <header className="sticky top-0 z-30 bg-black/80 backdrop-blur border-b border-neutral-800">
       <div className="h-14 flex items-center gap-3 px-4 relative">
-        {/* spacer to account for sidebar width */}
         <div className="w-14 shrink-0" />
 
-        {/* search */}
+        {/* search box */}
         <div className="flex-1 relative">
           <input
             className="w-full input"
@@ -248,7 +235,7 @@ export default function Topbar() {
             aria-expanded={openSearch}
           />
 
-          {/* dropdown */}
+          {/* dropdown with results */}
           {openSearch && (
             <div className="absolute left-0 right-0 mt-2 rounded-xl border border-neutral-700 bg-neutral-900 shadow-xl overflow-hidden">
               <div className="max-h-[60vh] overflow-auto">
@@ -265,12 +252,18 @@ export default function Topbar() {
                     </div>
                     {results.map((u, idx) => {
                       const active = selIndex === idx;
+                      const href = profileHref(u);
                       return (
-                        <button
+                        <Link
                           key={`${u.id}-${idx}`}
+                          to={href}
                           onMouseEnter={() => setSelIndex(idx)}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => goToIndex(idx)}
+                          onMouseDown={(e) => e.preventDefault()} // keep focus in input
+                          onClick={() => {
+                            setOpenSearch(false);
+                            setSelIndex(-1);
+                            setQ("");
+                          }}
                           className={cx(
                             "w-full flex items-center gap-3 px-3 py-2 text-left",
                             active ? "bg-neutral-800" : "hover:bg-neutral-800/60"
@@ -289,7 +282,7 @@ export default function Topbar() {
                               <div className="text-xs text-neutral-400 truncate">@{u.username}</div>
                             )}
                           </div>
-                        </button>
+                        </Link>
                       );
                     })}
                   </div>
