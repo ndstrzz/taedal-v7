@@ -1,132 +1,132 @@
-// src/assistant/AssistantDock.tsx
 import { useEffect, useRef, useState } from "react";
-import { classifyIntent } from "./intent";
-import { runAction } from "./actions";
+import { runAction, type AssistantAction } from "./actions";
 
+// Simple, visible, bottom-right floating chatbot with a video avatar.
 export default function AssistantDock() {
-  const [open, setOpen] = useState<boolean>(() => {
-    // recover last state; default closed
-    const v = localStorage.getItem("assistant:open");
-    return v === "1";
-  });
-  const [msg, setMsg] = useState("");
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // Close on Esc
   useEffect(() => {
-    localStorage.setItem("assistant:open", open ? "1" : "0");
-    if (open) setTimeout(() => inputRef.current?.focus(), 0);
-  }, [open]);
-
-  // Close on ESC
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setOpen(false);
+    }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  async function onSubmit(e: React.FormEvent) {
+  // Focus input when opening
+  useEffect(() => {
+    if (open) {
+      const id = setTimeout(() => inputRef.current?.focus(), 0);
+      return () => clearTimeout(id);
+    }
+  }, [open]);
+
+  // Naive intent parser — wire to your intents later
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const q = msg.trim();
-    if (!q) return;
-    setMsg("");
-    const action = classifyIntent(q);
-    await runAction(action);
+    const text = inputRef.current?.value?.trim() ?? "";
+    if (!text) return;
+
+    // Very simple demo routing
+    let action: AssistantAction = { type: "NONE" };
+    const msg = text.toLowerCase();
+
+    if (msg.includes("light theme")) {
+      action = { type: "TOGGLE_THEME", mode: "light" };
+    } else if (msg.includes("dark theme")) {
+      action = { type: "TOGGLE_THEME", mode: "dark" };
+    } else if (msg.includes("system theme")) {
+      action = { type: "TOGGLE_THEME", mode: "system" };
+    } else if (msg.includes("upload") && msg.includes("avatar")) {
+      action = { type: "GUIDE_UPLOAD_AVATAR" };
+    } else if (msg.includes("tour")) {
+      action = { type: "START_TOUR" };
+    }
+
+    setBusy(true);
+    try {
+      await runAction(action);
+    } finally {
+      setBusy(false);
+    }
+
+    // Keep panel open so the user sees the effect; clear the input
+    if (inputRef.current) inputRef.current.value = "";
   }
 
   return (
-    <>
-      {/* Floating button */}
-      <button
-        aria-label="Assistant"
-        onClick={() => setOpen((v) => !v)}
-        style={{
-          position: "fixed",
-          right: 16,
-          bottom: 16,
-          zIndex: 999999, // ⬅️ above everything
-          height: 56,
-          width: 56,
-          borderRadius: 999,
-          background: "#3b82f6",
-          color: "white",
-          border: "1px solid rgba(255,255,255,0.2)",
-          boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
-        }}
-      >
-        💬
-      </button>
-
+    <div
+      className="fixed right-5 bottom-5 z-[99999] pointer-events-none"
+      aria-live="polite"
+    >
       {/* Panel */}
       {open && (
         <div
-          style={{
-            position: "fixed",
-            right: 16,
-            bottom: 84,
-            zIndex: 999999,
-            width: 320,
-            maxWidth: "calc(100vw - 32px)",
-            background: "rgba(17,17,17,0.95)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 12,
-            backdropFilter: "blur(8px)",
-            boxShadow: "0 20px 48px rgba(0,0,0,0.45)",
-          }}
+          className="mb-3 w-[min(92vw,360px)] rounded-2xl border border-neutral-700 bg-neutral-900/95 backdrop-blur shadow-2xl pointer-events-auto"
+          role="dialog"
+          aria-label="Assistant"
         >
-          <div style={{ padding: 12, fontSize: 14, color: "#e5e7eb" }}>
-            <div style={{ marginBottom: 8, opacity: 0.8 }}>
-              Ask me things like:
-              <div>• “switch to light theme”</div>
-              <div>• “start a tour”</div>
-              <div>• “guide me to upload an avatar”</div>
+          <div className="p-3 border-b border-neutral-800">
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-full overflow-hidden bg-neutral-800">
+                <video
+                  src="/images/chatbot.mp4"
+                  autoPlay
+                  loop
+                  muted
+                  playsInline
+                  className="h-full w-full object-cover"
+                />
+              </div>
+              <div className="text-sm font-medium">Taedal Assistant</div>
+              <button
+                className="ml-auto px-2 py-1 text-xs rounded bg-neutral-800 hover:bg-neutral-700"
+                onClick={() => setOpen(false)}
+                aria-label="Close assistant"
+              >
+                Close
+              </button>
             </div>
-            <form onSubmit={onSubmit} style={{ display: "flex", gap: 8 }}>
+          </div>
+
+          <div className="p-3 text-sm text-neutral-300 space-y-2">
+            <p>Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.</p>
+            <form onSubmit={handleSubmit} className="flex gap-2">
               <input
                 ref={inputRef}
-                value={msg}
-                onChange={(e) => setMsg(e.target.value)}
-                placeholder="Type a request…"
-                style={{
-                  flex: 1,
-                  padding: "10px 12px",
-                  borderRadius: 8,
-                  border: "1px solid rgba(255,255,255,0.15)",
-                  background: "rgba(24,24,27,0.9)",
-                  color: "white",
-                  outline: "none",
-                }}
+                className="flex-1 input"
+                placeholder="Ask me anything…"
+                disabled={busy}
               />
-              <button
-                type="submit"
-                style={{
-                  padding: "10px 12px",
-                  borderRadius: 8,
-                  background: "#22c55e",
-                  color: "white",
-                  border: "1px solid rgba(255,255,255,0.2)",
-                }}
-              >
-                Run
+              <button className="btn" disabled={busy} type="submit">
+                {busy ? "…" : "Send"}
               </button>
             </form>
-            <button
-              onClick={() => setOpen(false)}
-              style={{
-                marginTop: 8,
-                fontSize: 12,
-                opacity: 0.7,
-                textDecoration: "underline",
-                background: "transparent",
-                border: 0,
-                color: "#9ca3af",
-                cursor: "pointer",
-              }}
-            >
-              Close
-            </button>
           </div>
         </div>
       )}
-    </>
+
+      {/* FAB */}
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="pointer-events-auto h-14 w-14 rounded-full border border-neutral-700 bg-neutral-900/90 shadow-xl hover:bg-neutral-800 grid place-items-center"
+        aria-label="Open assistant"
+      >
+        <div className="h-10 w-10 rounded-full overflow-hidden">
+          <video
+            src="/images/chatbot.mp4"
+            autoPlay
+            loop
+            muted
+            playsInline
+            className="h-full w-full object-cover"
+          />
+        </div>
+      </button>
+    </div>
   );
 }
