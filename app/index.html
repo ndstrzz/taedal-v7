@@ -22,13 +22,18 @@
   </head>
   <body>
     <div id="root"></div>
+
+    <!-- Your app -->
     <script type="module" src="/src/main.tsx"></script>
 
-    <!-- Fallback bubble if React dock never mounts -->
+    <!-- Standalone assistant bootstrap (renders AssistantDock even if App doesn't) -->
+    <script type="module" src="/src/assistant/bootstrap.tsx"></script>
+
+    <!-- Fallback bubble if nothing mounted after a moment -->
     <script>
       (function () {
         function injectFallback() {
-          if (document.getElementById('assistant-dock-root')) return; // React mounted
+          if (document.getElementById('assistant-dock-root')) return; // React dock exists
           if (document.getElementById('assistant-fallback')) return;
           var host = document.createElement('div');
           host.id = 'assistant-fallback';
@@ -56,7 +61,7 @@
           document.body.appendChild(host);
           console.warn('[assistant] Fallback bubble injected (React dock not found).');
         }
-        window.addEventListener('load', function () { setTimeout(injectFallback, 1200); });
+        window.addEventListener('load', function () { setTimeout(injectFallback, 1500); });
       })();
     </script>
   </body>
