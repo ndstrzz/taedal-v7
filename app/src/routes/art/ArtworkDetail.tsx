@@ -1,3 +1,4 @@
+// app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -43,15 +44,10 @@ function WalletModal({
           </button>
         </div>
         <div className="space-y-3">
-          <button
-            className="btn w-full flex items-center justify-center gap-2"
-            onClick={onMetaMask}
-          >
+          <button className="btn w-full flex items-center justify-center gap-2" onClick={onMetaMask}>
             <span>MetaMask</span>
           </button>
-          {disabledText && (
-            <p className="text-xs text-white/60 text-center">{disabledText}</p>
-          )}
+          {disabledText && <p className="text-xs text-white/60 text-center">{disabledText}</p>}
         </div>
       </div>
     </div>
@@ -324,12 +320,13 @@ export default function ArtworkDetail() {
       setLoading(true);
       setMsg(null);
       try {
+        if (!id) throw new Error("Missing artwork id");
         const { data, error } = await supabase
           .from("artworks")
           .select(
             "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
           )
-          .eq("id", id!)
+          .eq("id", id)
           .maybeSingle();
         if (error) throw error;
         if (!data) {
@@ -339,7 +336,7 @@ export default function ArtworkDetail() {
         }
         if (!alive) return;
         setArt(data as Artwork);
-        setMainUrl((data as Artwork).image_url);
+        setMainUrl((data as Artwork).image_url || null);
 
         const [c, o, l, af] = await Promise.all([
           supabase
@@ -366,7 +363,7 @@ export default function ArtworkDetail() {
         setCreator((c.data as any) ?? null);
         setOwner((o?.data as any) ?? null);
         setActiveListing(l as any);
-        setFiles((af.data as any[]) ?? []);
+        setFiles(((af.data as any[]) ?? []).filter((f) => !!f?.url));
 
         await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
 
@@ -485,7 +482,7 @@ export default function ArtworkDetail() {
         .maybeSingle();
       if (fresh.data) {
         setArt(fresh.data as Artwork);
-        setMainUrl((fresh.data as Artwork).image_url);
+        setMainUrl((fresh.data as Artwork).image_url || null);
       }
     } catch (e: any) {
       setPinErr(e?.message ?? "Pin failed.");
@@ -727,6 +724,14 @@ export default function ArtworkDetail() {
 
   const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
 
+  const galleryThumbs = useMemo(
+    () =>
+      ([{ url: art.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
+        .filter((f) => !!f?.url)
+        .slice(0, 10),
+    [art.image_url, files]
+  );
+
   return (
     <>
       <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
@@ -734,22 +739,29 @@ export default function ArtworkDetail() {
         <div className="lg:col-span-7 space-y-3">
           <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
             {mainUrl ? (
-              <img src={mainUrl} alt={art.title ?? "Artwork"} className="w-full h-full object-contain bg-neutral-950" />
+              <img
+                src={mainUrl}
+                alt={art.title ?? "Artwork"}
+                className="w-full h-full object-contain bg-neutral-950"
+                onError={() => setMainUrl(art.image_url || null)}
+              />
             ) : (
               <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
             )}
           </div>
 
-          {(files?.length || 0) > 0 && (
+          {galleryThumbs.length > 0 && (
             <div className="grid grid-cols-5 gap-2">
-              {[{ url: art.image_url } as any, ...files].slice(0, 10).map((f, i) => (
+              {galleryThumbs.map((f, i) => (
                 <button
                   key={i}
-                  onClick={() => setMainUrl(f.url)}
+                  onClick={() => setMainUrl(f.url || null)}
                   className={`aspect-square overflow-hidden rounded-xl border transition ${
                     mainUrl === f.url ? "border-white/50" : "border-white/10 hover:border-white/30"
                   } bg-neutral-900`}
                 >
+                  {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+                  {/* @ts-ignore — url is guaranteed by filter */}
                   <img src={f.url} className="h-full w-full object-cover" />
                 </button>
               ))}
