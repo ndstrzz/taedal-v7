@@ -1,165 +1,135 @@
-// src/assistant/AssistantDock.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import React, { useEffect, useRef, useState } from "react";
 import { runAction, type AssistantAction } from "./actions";
 
-function DockInner() {
+/**
+ * Floating assistant dock — always on top, bottom-right, draggable.
+ * Uses an MP4 (public/images/chatbot.mp4) as the floating “bot”.
+ */
+export default function AssistantDock() {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
+  const startRef = useRef<{ x: number; y: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement | null>(null);
 
+  // Helpful visibility confirmation in DevTools
   useEffect(() => {
-    // visible signal in DevTools
-    console.log("[AssistantDock] mounted");
+    // eslint-disable-next-line no-console
+    console.log("%c[assistant] dock mounted", "color:#8b5cf6");
   }, []);
 
+  // Ensure we never hide under other UI
   useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onEsc);
-    return () => window.removeEventListener("keydown", onEsc);
-  }, []);
-
-  useEffect(() => {
-    if (open) setTimeout(() => inputRef.current?.focus(), 0);
-  }, [open]);
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const text = inputRef.current?.value?.trim() || "";
-    if (!text) return;
-
-    let action: AssistantAction = { type: "NONE" };
-    const m = text.toLowerCase();
-
-    if (m.includes("light theme")) action = { type: "TOGGLE_THEME", mode: "light" };
-    else if (m.includes("dark theme")) action = { type: "TOGGLE_THEME", mode: "dark" };
-    else if (m.includes("system theme")) action = { type: "TOGGLE_THEME", mode: "system" };
-    else if (m.includes("upload") && m.includes("avatar")) action = { type: "GUIDE_UPLOAD_AVATAR" };
-    else if (m.includes("tour")) action = { type: "START_TOUR" };
-
-    setBusy(true);
-    try {
-      await runAction(action);
-    } finally {
-      setBusy(false);
-      if (inputRef.current) inputRef.current.value = "";
+    const el = btnRef.current?.parentElement;
+    if (el) {
+      el.style.zIndex = "99999";
+      el.id = "assistant-dock-root";
     }
-  };
+  }, []);
 
-  // styles isolated in Shadow DOM
-  const css = `
-:host, * { box-sizing: border-box; }
-.assist-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 2147483647; pointer-events: none; }
-.assist-fab {
-  height: 64px; width: 64px; border-radius: 999px; border: 1px solid rgba(120,120,120,.45);
-  background: rgba(20,20,20,.95); box-shadow: 0 12px 40px rgba(0,0,0,.6);
-  display: grid; place-items: center; cursor: pointer; pointer-events: auto;
-}
-.fab-vid { height: 48px; width: 48px; border-radius: 999px; overflow: hidden; background:#222; display:grid; place-items:center; color:#fff; font-weight:700; }
-.panel {
-  width: 360px; max-width: 92vw; margin-bottom: 12px; border-radius: 16px;
-  border: 1px solid rgba(120,120,120,.45); background: rgba(18,18,18,.98); color:#eee;
-  pointer-events: auto; backdrop-filter: blur(6px); box-shadow: 0 12px 40px rgba(0,0,0,.6);
-}
-.hdr { padding: 12px; border-bottom: 1px solid rgba(120,120,120,.35); display:flex; align-items:center; gap:8px; }
-.dot { height: 32px; width: 32px; border-radius: 999px; overflow:hidden; background:#222; }
-.close { margin-left:auto; padding:6px 10px; font-size:12px; border-radius:8px; background:#2a2a2a; color:#eee;
-  border: 1px solid rgba(120,120,120,.35); cursor:pointer; }
-.body { padding: 12px; font-size: 14px; color: #ddd; }
-.row { display:flex; gap:8px; margin-top:8px; }
-.inp { flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(120,120,120,.35); background:#141414; color:#eee; outline:none; }
-.btn { padding:10px 12px; border-radius:10px; background:#3a3a3a; color:#fff; border:1px solid rgba(120,120,120,.35); cursor:pointer; }
-  `;
+  // Simple drag (pointer events)
+  useEffect(() => {
+    function onMove(e: PointerEvent) {
+      if (!dragging || !startRef.current) return;
+      e.preventDefault();
+      const dx = e.clientX - startRef.current.x;
+      const dy = e.clientY - startRef.current.y;
+      const next = {
+        x: Math.max(8, Math.min(window.innerWidth - 72, (pos?.x ?? window.innerWidth - 88) + dx)),
+        y: Math.max(8, Math.min(window.innerHeight - 72, (pos?.y ?? window.innerHeight - 88) + dy)),
+      };
+      setPos(next);
+      startRef.current = { x: e.clientX, y: e.clientY };
+    }
+    function onUp() {
+      setDragging(false);
+      startRef.current = null;
+    }
+    window.addEventListener("pointermove", onMove, { passive: false });
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [dragging, pos]);
 
-  const [videoOk, setVideoOk] = useState(true);
+  const style: React.CSSProperties = pos
+    ? { left: pos.x, top: pos.y, right: "auto", bottom: "auto" }
+    : { right: 16, bottom: 16 };
+
+  const quickActions: { label: string; action: AssistantAction }[] = [
+    { label: "Start tour", action: { type: "START_TOUR" } },
+    { label: "Light theme", action: { type: "TOGGLE_THEME", mode: "light" } },
+    { label: "Dark theme", action: { type: "TOGGLE_THEME", mode: "dark" } },
+    { label: "Guide: upload avatar", action: { type: "GUIDE_UPLOAD_AVATAR" } },
+  ];
 
   return (
-    <>
-      <style>{css}</style>
+    <div
+      className="assistant-fixed"
+      style={style}
+      aria-live="polite"
+      aria-label="Assistant dock"
+    >
+      {/* Floating bot button (draggable) */}
+      <button
+        ref={btnRef}
+        className="assistant-bot"
+        onClick={() => setOpen((v) => !v)}
+        onPointerDown={(e) => {
+          // drag only when you hold Alt (so normal click still opens panel)
+          if (e.altKey) {
+            setDragging(true);
+            startRef.current = { x: e.clientX, y: e.clientY };
+          }
+        }}
+        title="Assistant (Alt+drag to move)"
+      >
+        {/* Prefer MP4 if available; fallback to logo/emoji */}
+        <video
+          className="assistant-bot-video"
+          src="/images/chatbot.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+          onError={(ev) => {
+            // eslint-disable-next-line no-console
+            console.warn("[assistant] chatbot.mp4 not found or failed to load", ev);
+          }}
+        />
+        <span className="assistant-bot-fallback" aria-hidden>🤖</span>
+      </button>
 
-      <div className="assist-wrap" aria-live="polite">
-        {open && (
-          <div className="panel" role="dialog" aria-label="Assistant">
-            <div className="hdr">
-              <div className="dot">
-                {videoOk ? (
-                  <video
-                    src="/images/chatbot.mp4"
-                    autoPlay
-                    loop
-                    muted
-                    playsInline
-                    onError={() => setVideoOk(false)}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                ) : (
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center" }}>?</div>
-                )}
-              </div>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>Taedal Assistant</div>
-              <button className="close" onClick={() => setOpen(false)} aria-label="Close assistant">
-                Close
-              </button>
-            </div>
+      {/* Panel */}
+      {open && (
+        <div className="assistant-panel">
+          <div className="assistant-panel-header">
+            <div className="assistant-panel-title">taedal assistant</div>
+            <button className="assistant-close" onClick={() => setOpen(false)} aria-label="Close assistant">
+              ✕
+            </button>
+          </div>
 
-            <div className="body">
-              Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.
-              <form className="row" onSubmit={submit}>
-                <input className="inp" ref={inputRef} placeholder="Ask me anything…" disabled={busy} />
-                <button className="btn" type="submit" disabled={busy}>{busy ? "…" : "Send"}</button>
-              </form>
+          <div className="assistant-panel-body">
+            <p className="assistant-hint">
+              Try: <code>“Switch to light theme”</code> or <code>“Guide me to upload an avatar”</code>
+            </p>
+
+            <div className="assistant-actions">
+              {quickActions.map((qa) => (
+                <button
+                  key={qa.label}
+                  className="assistant-action"
+                  onClick={() => runAction(qa.action)}
+                >
+                  {qa.label}
+                </button>
+              ))}
             </div>
           </div>
-        )}
-
-        <button className="assist-fab" type="button" onClick={() => setOpen(v => !v)} aria-label="Open assistant">
-          <div className="fab-vid">
-            {videoOk ? (
-              <video
-                src="/images/chatbot.mp4"
-                autoPlay
-                loop
-                muted
-                playsInline
-                onError={() => setVideoOk(false)}
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
-            ) : (
-              "?"
-            )}
-          </div>
-        </button>
-      </div>
-    </>
+        </div>
+      )}
+    </div>
   );
-}
-
-export default function AssistantDock() {
-  // Create a shadow host mounted on body to escape app z-index/overflow traps
-  const host = useMemo(() => {
-    if (typeof document === "undefined") return null;
-    let el = document.getElementById("assistant-root") as (HTMLElement | null);
-    if (!el) {
-      el = document.createElement("div");
-      el.id = "assistant-root";
-      document.body.appendChild(el);
-    }
-    return el;
-  }, []);
-
-  const shadowRef = useRef<ShadowRoot | null>(null);
-
-  useEffect(() => {
-    if (!host || shadowRef.current) return;
-    shadowRef.current = host.attachShadow ? host.attachShadow({ mode: "open" }) : null;
-  }, [host]);
-
-  if (!host) return null;
-
-  // If Shadow DOM is supported (most modern browsers), render inside it.
-  if (shadowRef.current) {
-    return createPortal(<DockInner />, shadowRef.current as unknown as Element);
-  }
-  // Fallback: render as a normal portal to body.
-  return createPortal(<DockInner />, host);
 }
