@@ -22,6 +22,9 @@ import "./App.css";
 import AssistantDock from "./assistant/AssistantDock";
 import ThemeProvider from "./providers/ThemeProvider";
 
+/* data */
+import { fetchActiveListings, type JoinedListing } from "./lib/listings";
+
 /* ----------------------------------------- */
 /* Utilities                                 */
 /* ----------------------------------------- */
@@ -88,8 +91,6 @@ function TopNav() {
 /* ----------------------------------------- */
 /* Explore (Home)                            */
 /* ----------------------------------------- */
-import { fetchActiveListings, type JoinedListing } from "./lib/listings";
-
 function Explore() {
   const [items, setItems] = useState<JoinedListing[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -244,7 +245,7 @@ function App() {
               <Route path="/u/:handle" element={<PublicProfile />} />
               <Route path="/profiles/:handle" element={<PublicProfile />} />
 
-              {/* Optional redirect /profile/:handle -> /u/:handle if you had older links */}
+              {/* Optional redirect for legacy links */}
               <Route
                 path="/profile/:handle"
                 element={<Navigate to="/u/:handle" replace />}

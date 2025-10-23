@@ -1,27 +1,31 @@
 // src/assistant/AssistantDock.tsx
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { runAction, type AssistantAction } from "./actions";
 
-function DockUI() {
+function DockInner() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // Close on Esc
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // visible signal in DevTools
+    console.log("[AssistantDock] mounted");
+  }, []);
+
+  useEffect(() => {
+    const onEsc = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    window.addEventListener("keydown", onEsc);
+    return () => window.removeEventListener("keydown", onEsc);
   }, []);
 
   useEffect(() => {
     if (open) setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
-  async function handleSubmit(e: React.FormEvent) {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const text = inputRef.current?.value?.trim() ?? "";
+    const text = inputRef.current?.value?.trim() || "";
     if (!text) return;
 
     let action: AssistantAction = { type: "NONE" };
@@ -34,146 +38,128 @@ function DockUI() {
     else if (m.includes("tour")) action = { type: "START_TOUR" };
 
     setBusy(true);
-    try { await runAction(action); } finally { setBusy(false); }
-    if (inputRef.current) inputRef.current.value = "";
-  }
+    try {
+      await runAction(action);
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
 
-  // styles
-  const wrap: React.CSSProperties = {
-    position: "fixed",
-    right: 20,
-    bottom: 20,
-    zIndex: 2147483647, // max it out
-    pointerEvents: "none",
-  };
-  const panel: React.CSSProperties = {
-    width: 360,
-    maxWidth: "92vw",
-    marginBottom: 12,
-    borderRadius: 16,
-    border: "1px solid rgba(120,120,120,0.4)",
-    background: "rgba(18,18,18,0.95)",
-    backdropFilter: "blur(6px)",
-    color: "#eee",
-    boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
-    pointerEvents: "auto",
-  };
-  const header: React.CSSProperties = {
-    padding: 12,
-    borderBottom: "1px solid rgba(120,120,120,0.35)",
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-  };
-  const videoDot: React.CSSProperties = {
-    height: 32,
-    width: 32,
-    borderRadius: "999px",
-    overflow: "hidden",
-    background: "#222",
-  };
-  const closeBtn: React.CSSProperties = {
-    marginLeft: "auto",
-    padding: "6px 10px",
-    fontSize: 12,
-    borderRadius: 8,
-    background: "#2a2a2a",
-    color: "#eee",
-    border: "1px solid rgba(120,120,120,0.35)",
-    cursor: "pointer",
-  };
-  const body: React.CSSProperties = { padding: 12, fontSize: 14, color: "#ddd" };
-  const row: React.CSSProperties = { display: "flex", gap: 8, marginTop: 8 };
-  const input: React.CSSProperties = {
-    flex: 1,
-    padding: "10px 12px",
-    borderRadius: 10,
-    border: "1px solid rgba(120,120,120,0.35)",
-    background: "#141414",
-    color: "#eee",
-    outline: "none",
-  };
-  const sendBtn: React.CSSProperties = {
-    padding: "10px 12px",
-    borderRadius: 10,
-    background: "#3a3a3a",
-    color: "#fff",
-    border: "1px solid rgba(120,120,120,0.35)",
-    cursor: "pointer",
-  };
-  const fab: React.CSSProperties = {
-    height: 64,
-    width: 64,
-    borderRadius: 999,
-    border: "1px solid rgba(120,120,120,0.4)",
-    background: "rgba(22,22,22,0.9)",
-    boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
-    display: "grid",
-    placeItems: "center",
-    cursor: "pointer",
-    pointerEvents: "auto",
-  };
-  const fabVidWrap: React.CSSProperties = {
-    height: 48,
-    width: 48,
-    borderRadius: 999,
-    overflow: "hidden",
-    background: "#222",
-  };
+  // styles isolated in Shadow DOM
+  const css = `
+:host, * { box-sizing: border-box; }
+.assist-wrap { position: fixed; right: 20px; bottom: 20px; z-index: 2147483647; pointer-events: none; }
+.assist-fab {
+  height: 64px; width: 64px; border-radius: 999px; border: 1px solid rgba(120,120,120,.45);
+  background: rgba(20,20,20,.95); box-shadow: 0 12px 40px rgba(0,0,0,.6);
+  display: grid; place-items: center; cursor: pointer; pointer-events: auto;
+}
+.fab-vid { height: 48px; width: 48px; border-radius: 999px; overflow: hidden; background:#222; display:grid; place-items:center; color:#fff; font-weight:700; }
+.panel {
+  width: 360px; max-width: 92vw; margin-bottom: 12px; border-radius: 16px;
+  border: 1px solid rgba(120,120,120,.45); background: rgba(18,18,18,.98); color:#eee;
+  pointer-events: auto; backdrop-filter: blur(6px); box-shadow: 0 12px 40px rgba(0,0,0,.6);
+}
+.hdr { padding: 12px; border-bottom: 1px solid rgba(120,120,120,.35); display:flex; align-items:center; gap:8px; }
+.dot { height: 32px; width: 32px; border-radius: 999px; overflow:hidden; background:#222; }
+.close { margin-left:auto; padding:6px 10px; font-size:12px; border-radius:8px; background:#2a2a2a; color:#eee;
+  border: 1px solid rgba(120,120,120,.35); cursor:pointer; }
+.body { padding: 12px; font-size: 14px; color: #ddd; }
+.row { display:flex; gap:8px; margin-top:8px; }
+.inp { flex:1; padding:10px 12px; border-radius:10px; border:1px solid rgba(120,120,120,.35); background:#141414; color:#eee; outline:none; }
+.btn { padding:10px 12px; border-radius:10px; background:#3a3a3a; color:#fff; border:1px solid rgba(120,120,120,.35); cursor:pointer; }
+  `;
+
+  const [videoOk, setVideoOk] = useState(true);
 
   return (
-    <div style={wrap} aria-live="polite">
-      {open && (
-        <div style={panel} role="dialog" aria-label="Assistant">
-          <div style={header}>
-            <div style={videoDot}>
+    <>
+      <style>{css}</style>
+
+      <div className="assist-wrap" aria-live="polite">
+        {open && (
+          <div className="panel" role="dialog" aria-label="Assistant">
+            <div className="hdr">
+              <div className="dot">
+                {videoOk ? (
+                  <video
+                    src="/images/chatbot.mp4"
+                    autoPlay
+                    loop
+                    muted
+                    playsInline
+                    onError={() => setVideoOk(false)}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                ) : (
+                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center" }}>?</div>
+                )}
+              </div>
+              <div style={{ fontWeight: 600, fontSize: 14 }}>Taedal Assistant</div>
+              <button className="close" onClick={() => setOpen(false)} aria-label="Close assistant">
+                Close
+              </button>
+            </div>
+
+            <div className="body">
+              Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.
+              <form className="row" onSubmit={submit}>
+                <input className="inp" ref={inputRef} placeholder="Ask me anything…" disabled={busy} />
+                <button className="btn" type="submit" disabled={busy}>{busy ? "…" : "Send"}</button>
+              </form>
+            </div>
+          </div>
+        )}
+
+        <button className="assist-fab" type="button" onClick={() => setOpen(v => !v)} aria-label="Open assistant">
+          <div className="fab-vid">
+            {videoOk ? (
               <video
                 src="/images/chatbot.mp4"
                 autoPlay
                 loop
                 muted
                 playsInline
-                style={{ height: "100%", width: "100%", objectFit: "cover" }}
+                onError={() => setVideoOk(false)}
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
               />
-            </div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Taedal Assistant</div>
-            <button style={closeBtn} onClick={() => setOpen(false)} aria-label="Close assistant">
-              Close
-            </button>
+            ) : (
+              "?"
+            )}
           </div>
-          <div style={body}>
-            Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.
-            <form onSubmit={handleSubmit} style={row}>
-              <input ref={inputRef} style={input} placeholder="Ask me anything…" disabled={busy} />
-              <button style={sendBtn} disabled={busy} type="submit">{busy ? "…" : "Send"}</button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      <button
-        type="button"
-        onClick={() => setOpen(v => !v)}
-        style={fab}
-        aria-label="Open assistant"
-      >
-        <div style={fabVidWrap}>
-          <video
-            src="/images/chatbot.mp4"
-            autoPlay
-            loop
-            muted
-            playsInline
-            style={{ height: "100%", width: "100%", objectFit: "cover" }}
-          />
-        </div>
-      </button>
-    </div>
+        </button>
+      </div>
+    </>
   );
 }
 
 export default function AssistantDock() {
-  // Render into <body> to avoid any parent stacking/overflow issues
-  if (typeof document === "undefined") return null;
-  return createPortal(<DockUI />, document.body);
+  // Create a shadow host mounted on body to escape app z-index/overflow traps
+  const host = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    let el = document.getElementById("assistant-root") as (HTMLElement | null);
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "assistant-root";
+      document.body.appendChild(el);
+    }
+    return el;
+  }, []);
+
+  const shadowRef = useRef<ShadowRoot | null>(null);
+
+  useEffect(() => {
+    if (!host || shadowRef.current) return;
+    shadowRef.current = host.attachShadow ? host.attachShadow({ mode: "open" }) : null;
+  }, [host]);
+
+  if (!host) return null;
+
+  // If Shadow DOM is supported (most modern browsers), render inside it.
+  if (shadowRef.current) {
+    return createPortal(<DockInner />, shadowRef.current as unknown as Element);
+  }
+  // Fallback: render as a normal portal to body.
+  return createPortal(<DockInner />, host);
 }
