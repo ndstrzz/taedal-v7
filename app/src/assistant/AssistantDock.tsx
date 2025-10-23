@@ -1,34 +1,52 @@
 // src/assistant/AssistantDock.tsx
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { classifyIntent } from "./intent";
 import { runAction } from "./actions";
 
-function usePortalRoot(id = "assistant-dock-root") {
-  const elRef = useRef<HTMLElement | null>(null);
-  if (!elRef.current && typeof document !== "undefined") {
-    const existing = document.getElementById(id) as HTMLElement | null;
-    if (existing) {
-      elRef.current = existing;
-    } else {
-      const div = document.createElement("div");
-      div.id = id;
-      div.style.position = "fixed";
-      div.style.zIndex = String(2147483647);
-      div.style.inset = "auto 0 0 auto";
-      document.body.appendChild(div);
-      elRef.current = div;
-    }
-  }
-  return elRef.current;
-}
-
-type Pos = { x: number; y: number };
+const ROOT_ID = "assistant-dock-root";
 const POS_KEY = "taedal:assistant:pos";
 const OPEN_KEY = "taedal:assistant:open";
 
+function ensurePortalRoot(): HTMLElement {
+  let el = document.getElementById(ROOT_ID) as HTMLElement | null;
+  if (!el) {
+    el = document.createElement("div");
+    el.id = ROOT_ID;
+    // Force visibility, even if CSS tries to hide us
+    Object.assign(el.style, {
+      position: "fixed",
+      zIndex: "2147483647",
+      inset: "auto 0 0 auto", // bottom-right
+      pointerEvents: "none",  // children can override
+    } as CSSStyleDeclaration);
+    document.body.appendChild(el);
+    console.log("[assistant] created portal root");
+  }
+  return el;
+}
+
+type Pos = { x: number; y: number };
+
 export default function AssistantDock() {
-  const root = usePortalRoot();
+  const [root, setRoot] = useState<HTMLElement | null>(null);
+
+  useLayoutEffect(() => {
+    if (typeof window === "undefined" || typeof document === "undefined") return;
+    setRoot(ensurePortalRoot());
+
+    // Self-heal: if someone removes our root, re-create it
+    const mo = new MutationObserver(() => {
+      const exist = document.getElementById(ROOT_ID);
+      if (!exist) {
+        console.warn("[assistant] root missing, re-creating");
+        setRoot(ensurePortalRoot());
+      }
+    });
+    mo.observe(document.body, { childList: true });
+    return () => mo.disconnect();
+  }, []);
+
   const [open, setOpen] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem(OPEN_KEY);
@@ -49,6 +67,8 @@ export default function AssistantDock() {
 
   useEffect(() => {
     localStorage.setItem(OPEN_KEY, JSON.stringify(open));
+    // global toggle for quick manual testing
+    (window as any).__taeAssistantOpen = open;
   }, [open]);
 
   useEffect(() => {
@@ -58,7 +78,9 @@ export default function AssistantDock() {
   // Drag (pointer events)
   const dragData = useRef<{ startX: number; startY: number; origin: Pos } | null>(null);
   const onPointerDown = (e: React.PointerEvent) => {
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {}
     dragData.current = { startX: e.clientX, startY: e.clientY, origin: { ...pos } };
   };
   const onPointerMove = (e: React.PointerEvent) => {
@@ -78,141 +100,164 @@ export default function AssistantDock() {
     dragData.current = null;
   };
 
-  const bubbleStyle: React.CSSProperties = useMemo(
+  const bubbleBox: React.CSSProperties = useMemo(
     () => ({
       position: "fixed",
       right: pos.x,
       bottom: pos.y,
-      zIndex: 2147483647,
+      zIndex: 2147483647, // always on top
+      pointerEvents: "auto",
     }),
     [pos]
   );
 
-  // Simple input -> intent -> action
+  // Input -> intent -> action
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<string>(""); // tiny feedback line
+  const [status, setStatus] = useState<string>("");
 
   async function handleRun(text: string) {
     const action = classifyIntent(text);
     if (action.type === "NONE") {
-      setStatus("Didn’t catch that. Try: “light theme”, “go to account”, “tour”.");
+      setStatus('Didn’t catch that. Try: "light theme", "go to account", "tour".');
       return;
     }
-    // Soft confirmation: for NAVIGATE or anything that might change state
     if (action.type === "NAVIGATE") {
       const ok = confirm(`Go to ${action.to}?`);
       if (!ok) return;
     }
-    if (action.type === "TOGGLE_THEME") {
-      // No confirm; harmless
-    }
     setStatus("Running…");
     await runAction(action);
     setStatus("Done.");
-    // Clear quickly so it doesn’t linger
-    setTimeout(() => setStatus(""), 900);
+    setTimeout(() => setStatus(""), 800);
   }
+
+  // Log diagnostics once we mount
+  useEffect(() => {
+    console.log("[assistant] mounted", {
+      hasRoot: !!root,
+      open,
+      pos,
+      path: window.location.pathname,
+    });
+  }, [root]);
 
   if (!root) return null;
 
+  const panelStyle: React.CSSProperties = {
+    position: "fixed",
+    right: (bubbleBox.right as number) + 68,
+    bottom: bubbleBox.bottom,
+    zIndex: 2147483647,
+    pointerEvents: "auto",
+    background: "rgba(12,12,12,0.94)",
+    border: "1px solid rgba(255,255,255,0.14)",
+    backdropFilter: "blur(10px)",
+    borderRadius: 16,
+    boxShadow: "0 16px 48px rgba(0,0,0,0.6)",
+    color: "#fff",
+    padding: 12,
+    width: Math.min(360, window.innerWidth - 24),
+  };
+
   return createPortal(
     <>
-      {/* Bubble */}
+      {/* ALWAYS-VISIBLE BUBBLE */}
       <button
         aria-label="Open taedal assistant"
-        className="assistant-bot"
-        style={bubbleStyle}
+        title="Taedal Assistant"
         onClick={() => setOpen((v) => !v)}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
-        title="Taedal Assistant"
+        style={{
+          ...bubbleBox,
+          height: 56,
+          width: 56,
+          borderRadius: 9999,
+          border: "1px solid rgba(255,255,255,0.18)",
+          background: "rgba(17,17,17,0.95)",
+          boxShadow: "0 10px 32px rgba(0,0,0,0.45), 0 0 0 1px rgba(255,255,255,0.06) inset",
+          display: "grid",
+          placeItems: "center",
+          overflow: "hidden",
+          outline: "0",
+        }}
       >
-        {/* If you add /public/media/assistant-bot.webm, uncomment: */}
-        {/* <video className="assistant-bot-video" autoPlay loop muted playsInline src="/media/assistant-bot.webm" /> */}
-        <span className="assistant-bot-fallback" role="img" aria-label="assistant">🦊</span>
+        <span
+          role="img"
+          aria-label="assistant"
+          style={{ fontSize: 20, opacity: 0.95, userSelect: "none" }}
+        >
+          🦊
+        </span>
       </button>
 
-      {/* Panel */}
+      {/* PANEL */}
       {open && (
-        <div
-          className="assistant-panel assistant-fixed"
-          style={{ right: (bubbleStyle.right as number) + 68, bottom: bubbleStyle.bottom }}
-          role="dialog"
-          aria-label="Taedal assistant"
-        >
-          <div className="assistant-panel-header">
-            <strong className="assistant-panel-title">Taedal Assistant</strong>
+        <div role="dialog" aria-label="Taedal assistant" style={panelStyle}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <strong>Taedal Assistant</strong>
             <button
               onClick={() => setOpen(false)}
-              className="assistant-close"
-              title="Close"
+              style={{ background: "transparent", border: 0, color: "#aaa", fontSize: 18 }}
               aria-label="Close assistant"
+              title="Close"
             >
               ✕
             </button>
           </div>
 
-          <div className="assistant-panel-body">
-            <p className="assistant-hint">
-              Try: “change to light theme”, “go to account”, “tour”, “upload avatar”.
-            </p>
+          <p style={{ fontSize: 12, color: "#bbb", margin: "6px 0 10px" }}>
+            Try: “light theme”, “dark theme”, “go to account”, “tour”.
+          </p>
 
-            {/* Quick actions */}
-            <div className="assistant-actions" style={{ marginBottom: 8 }}>
-              <button className="assistant-action" onClick={() => handleRun("light theme")}>
-                Light theme
-              </button>
-              <button className="assistant-action" onClick={() => handleRun("dark theme")}>
-                Dark theme
-              </button>
-              <button className="assistant-action" onClick={() => handleRun("go to account")}>
-                Go to Account
-              </button>
-              <button className="assistant-action" onClick={() => handleRun("tour")}>
-                Start tour
-              </button>
-            </div>
-
-            {/* Free-text command */}
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (query.trim()) handleRun(query);
-              }}
-              style={{ display: "flex", gap: 6 }}
-            >
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder='Type a command… e.g. "upload avatar"'
-                aria-label="Assistant command"
-                style={{
-                  flex: 1,
-                  padding: "10px 12px",
-                  borderRadius: 10,
-                  border: "1px solid rgba(255,255,255,.12)",
-                  background: "rgba(24,24,24,.9)",
-                  color: "#fff",
-                  fontSize: 13,
-                }}
-              />
-              <button
-                className="assistant-action"
-                type="submit"
-                style={{ padding: "10px 14px" }}
-                aria-label="Run command"
-              >
-                Run
-              </button>
-            </form>
-
-            {status && (
-              <div style={{ fontSize: 12, color: "#bbb", marginTop: 6 }} aria-live="polite">
-                {status}
-              </div>
-            )}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+            <button className="assistant-action" onClick={() => handleRun("light theme")}>
+              Light theme
+            </button>
+            <button className="assistant-action" onClick={() => handleRun("dark theme")}>
+              Dark theme
+            </button>
+            <button className="assistant-action" onClick={() => handleRun("go to account")}>
+              Go to Account
+            </button>
+            <button className="assistant-action" onClick={() => handleRun("tour")}>
+              Start tour
+            </button>
           </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              if (query.trim()) handleRun(query);
+            }}
+            style={{ display: "flex", gap: 6 }}
+          >
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder='Type a command… e.g. "upload avatar"'
+              aria-label="Assistant command"
+              style={{
+                flex: 1,
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,.12)",
+                background: "rgba(24,24,24,.9)",
+                color: "#fff",
+                fontSize: 13,
+              }}
+            />
+            <button className="assistant-action" type="submit" style={{ padding: "10px 14px" }}>
+              Run
+            </button>
+          </form>
+
+          {status && (
+            <div style={{ fontSize: 12, color: "#bbb", marginTop: 6 }} aria-live="polite">
+              {status}
+            </div>
+          )}
         </div>
       )}
     </>,
