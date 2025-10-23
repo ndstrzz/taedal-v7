@@ -31,9 +31,11 @@ import Deploying from "./routes/studio/Deploying";
 import CheckoutSuccess from "./routes/checkout/Success";
 import Discover from "./routes/discover/Discover";
 
-/* 🔹 Ensure the Assistant mounts even if the app fails to render for any reason.
-   This module is side-effect only; it will NOOP if the in-app portal already exists. */
-import "./assistant/standalone"; // <-- NEW
+/* Assistant always-on */
+import "./assistant/standalone";
+
+/* Debug */
+import ErrorBoundary from "./components/_debug/ErrorBoundary";
 
 function Layout() {
   return (
@@ -80,10 +82,13 @@ const qc = new QueryClient();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <QueryClientProvider client={qc}>
-      <AuthProvider>
-        <RouterProvider router={router} />
-      </AuthProvider>
-    </QueryClientProvider>
+    {/* Global error boundary (simpler than per-route errorElement) */}
+    <ErrorBoundary>
+      <QueryClientProvider client={qc}>
+        <AuthProvider>
+          <RouterProvider router={router} />
+        </AuthProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   </StrictMode>
 );
