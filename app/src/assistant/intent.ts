@@ -1,40 +1,42 @@
-// app/src/assistant/intent.ts
+// src/assistant/intent.ts
 import type { AssistantAction } from "./actions";
 
-const contains = (s: string, ...xs: string[]) => xs.some(x => s.includes(x));
+/** very small rules-based classifier */
+export function classifyIntent(text: string): AssistantAction {
+  const q = (text || "").toLowerCase().trim();
 
-export function inferActionFromText(text: string): { reply?: string; action?: AssistantAction } {
-  const m = text.toLowerCase().trim();
+  if (!q) return { type: "NONE" };
 
   // theme
-  if (contains(m, "light theme", "go light", "light mode", "switch to light")) {
-    return { reply: "Sure — switching to light theme.", action: { type: "toggleTheme", mode: "light" } };
+  if (/\b(light|white)\b.*theme|theme.*\blight\b/.test(q)) {
+    return { type: "TOGGLE_THEME", mode: "light" };
   }
-  if (contains(m, "dark theme", "go dark", "dark mode", "switch to dark")) {
-    return { reply: "Got it — dark mode on.", action: { type: "toggleTheme", mode: "dark" } };
+  if (/\b(dark|black)\b.*theme|theme.*\bdark\b/.test(q)) {
+    return { type: "TOGGLE_THEME", mode: "dark" };
   }
-  if (contains(m, "system theme", "follow system")) {
-    return { reply: "Okay — following your system theme.", action: { type: "toggleTheme", mode: "system" } };
+  if (/\bsystem\b.*theme|theme.*\bsystem\b/.test(q)) {
+    return { type: "TOGGLE_THEME", mode: "system" };
   }
-
-  // navigation
-  if (contains(m, "go to account", "open account", "profile settings", "edit profile")) {
-    return { reply: "Taking you to your account page.", action: { type: "goTo", path: "/account" } };
-  }
-  if (contains(m, "go home", "go to home", "open explore", "explore")) {
-    return { reply: "Heading to Explore.", action: { type: "goTo", path: "/" } };
-  }
-  if (contains(m, "create artwork", "new artwork", "open studio", "create page")) {
-    return { reply: "Opening Create page.", action: { type: "goTo", path: "/create" } };
+  if (/toggle.*theme|switch.*theme|change.*theme/.test(q)) {
+    // default toggle behavior: if body is light -> dark else light
+    const isLight = document.documentElement.getAttribute("data-theme") === "light";
+    return { type: "TOGGLE_THEME", mode: isLight ? "dark" : "light" };
   }
 
-  // tutorial
-  if (contains(m, "guide", "how", "help") && contains(m, "avatar")) {
-    return { reply: "I’ll guide you to upload an avatar.", action: { type: "startTour", key: "uploadAvatar" } };
+  // tours / help
+  if (/tour|show me around|guide me|help me/.test(q)) {
+    return { type: "START_TOUR" };
   }
 
-  return {
-    reply:
-      "I can change themes, navigate pages, or start an in-app tutorial. Try “switch to light theme”, “go to account”, or “guide me to upload an avatar”."
-  };
+  // avatar onboarding
+  if (/upload.*avatar|change.*avatar|set.*avatar|profile.*picture/.test(q)) {
+    return { type: "GUIDE_UPLOAD_AVATAR" };
+  }
+
+  // go to account/profile
+  if (/\b(go|open|take|navigate)\b.*\b(account|profile)\b/.test(q)) {
+    return { type: "NAVIGATE", to: "/account" };
+  }
+
+  return { type: "NONE" };
 }
