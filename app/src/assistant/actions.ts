@@ -9,6 +9,20 @@ export type AssistantAction =
   | { type: "NAVIGATE"; to: string }
   | { type: "NONE" };
 
+const THEME_KEY = "taedal:theme";
+
+/** Apply and persist theme */
+function setThemeAttr(mode: "light" | "dark" | "system") {
+  const root = document.documentElement;
+  if (mode === "system") {
+    root.removeAttribute("data-theme");
+    localStorage.removeItem(THEME_KEY);
+  } else {
+    root.setAttribute("data-theme", mode);
+    localStorage.setItem(THEME_KEY, mode);
+  }
+}
+
 /** Side-effects for each action (DOM-only; no global state required) */
 export async function runAction(action: AssistantAction) {
   switch (action.type) {
@@ -18,10 +32,7 @@ export async function runAction(action: AssistantAction) {
     }
 
     case "TOGGLE_THEME": {
-      // Prefer going through ThemeProvider so React state stays consistent
-      const mode = action.mode;
-      const ev = new CustomEvent("assistant:setTheme", { detail: mode });
-      window.dispatchEvent(ev);
+      setThemeAttr(action.mode);
       return;
     }
 
@@ -58,7 +69,9 @@ export async function runAction(action: AssistantAction) {
         showProgress: true,
       });
 
-      const changeAvatarLabel = await wait('label:has(input[type="file"][accept^="image/"])');
+      const changeAvatarLabel = await wait(
+        'label:has(input[type="file"][accept^="image/"])'
+      );
 
       const steps: any[] = [
         {

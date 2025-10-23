@@ -22,3 +22,61 @@ a { @apply text-indigo-400; }
 @media (prefers-reduced-motion: reduce) {
   .tae-glow-icon { animation: none; filter: drop-shadow(0 0 16px rgba(210, 203, 240, 0.5)); }
 }
+
+/* ---------------- Light theme (minimal overrides) ---------------- */
+:root { color-scheme: dark; } /* default dark */
+[data-theme="light"] { color-scheme: light; }
+
+[data-theme="light"] body { background: #f7f7f8; color: #0f172a; } /* slate-900 text */
+[data-theme="light"] a { color: #4f46e5; } /* indigo-600 */
+[data-theme="light"] .btn {
+  background: #4f46e5; /* indigo-600 */
+}
+[data-theme="light"] .btn:hover {
+  background: #6366f1; /* indigo-500 */
+}
+[data-theme="light"] .input {
+  background: #ffffff;
+  border-color: #e5e7eb; /* gray-200 */
+  color: #0f172a;
+}
+[data-theme="light"] .card {
+  background: #ffffff;
+  border-color: #e5e7eb;
+  color: #0f172a;
+}
+
+/* Top bars / shells that used dark colors */
+[data-theme="light"] .bg-neutral-950 { background-color: #ffffff !important; }
+[data-theme="light"] .text-white { color: #0f172a !important; }
+[data-theme="light"] .text-white\/70 { color: rgba(15,23,42,.7) !important; }
+[data-theme="light"] .border-white\/10 { border-color: rgba(0,0,0,.10) !important; }
+[data-theme="light"] .hover\:bg-white\/10:hover { background-color: rgba(0,0,0,.06) !important; }
+
+/* Assistant panel vars for easy theming */
+:root {
+  --assistant-panel-bg: rgba(12,12,12,0.94);
+  --assistant-panel-fg: #fff;
+  --assistant-panel-border: rgba(255,255,255,0.14);
+  --assistant-input-bg: rgba(24,24,24,.9);
+  --assistant-input-fg: #fff;
+  --assistant-input-border: rgba(255,255,255,.12);
+  --assistant-hint: #bbb;
+  --assistant-close: #aaa;
+  --assistant-avatar-border: rgba(255,255,255,0.2);
+}
+[data-theme="light"] {
+  --assistant-panel-bg: #ffffff;
+  --assistant-panel-fg: #111827; /* gray-900 */
+  --assistant-panel-border: rgba(0,0,0,0.12);
+  --assistant-input-bg: #f3f4f6; /* gray-100 */
+  --assistant-input-fg: #111827;
+  --assistant-input-border: rgba(0,0,0,0.12);
+  --assistant-hint: #6b7280; /* gray-500 */
+  --assistant-close: #6b7280;
+  --assistant-avatar-border: rgba(0,0,0,0.12);
+}
+
+/* Video helpers (already added previously) */
+.assistant-bot-video.key-black { mix-blend-mode: screen; opacity: .98; filter: contrast(1.1) brightness(1.05); }
+.mask-soft { -webkit-mask-image: radial-gradient(circle at 50% 50%, #000 72%, transparent 100%); mask-image: radial-gradient(circle at 50% 50%, #000 72%, transparent 100%); }
