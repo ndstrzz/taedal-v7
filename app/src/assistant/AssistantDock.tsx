@@ -1,132 +1,179 @@
+// src/assistant/AssistantDock.tsx
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { runAction, type AssistantAction } from "./actions";
 
-// Simple, visible, bottom-right floating chatbot with a video avatar.
-export default function AssistantDock() {
+function DockUI() {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Close on Esc
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") setOpen(false);
-    }
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Focus input when opening
   useEffect(() => {
-    if (open) {
-      const id = setTimeout(() => inputRef.current?.focus(), 0);
-      return () => clearTimeout(id);
-    }
+    if (open) setTimeout(() => inputRef.current?.focus(), 0);
   }, [open]);
 
-  // Naive intent parser — wire to your intents later
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const text = inputRef.current?.value?.trim() ?? "";
     if (!text) return;
 
-    // Very simple demo routing
     let action: AssistantAction = { type: "NONE" };
-    const msg = text.toLowerCase();
+    const m = text.toLowerCase();
 
-    if (msg.includes("light theme")) {
-      action = { type: "TOGGLE_THEME", mode: "light" };
-    } else if (msg.includes("dark theme")) {
-      action = { type: "TOGGLE_THEME", mode: "dark" };
-    } else if (msg.includes("system theme")) {
-      action = { type: "TOGGLE_THEME", mode: "system" };
-    } else if (msg.includes("upload") && msg.includes("avatar")) {
-      action = { type: "GUIDE_UPLOAD_AVATAR" };
-    } else if (msg.includes("tour")) {
-      action = { type: "START_TOUR" };
-    }
+    if (m.includes("light theme")) action = { type: "TOGGLE_THEME", mode: "light" };
+    else if (m.includes("dark theme")) action = { type: "TOGGLE_THEME", mode: "dark" };
+    else if (m.includes("system theme")) action = { type: "TOGGLE_THEME", mode: "system" };
+    else if (m.includes("upload") && m.includes("avatar")) action = { type: "GUIDE_UPLOAD_AVATAR" };
+    else if (m.includes("tour")) action = { type: "START_TOUR" };
 
     setBusy(true);
-    try {
-      await runAction(action);
-    } finally {
-      setBusy(false);
-    }
-
-    // Keep panel open so the user sees the effect; clear the input
+    try { await runAction(action); } finally { setBusy(false); }
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  return (
-    <div
-      className="fixed right-5 bottom-5 z-[99999] pointer-events-none"
-      aria-live="polite"
-    >
-      {/* Panel */}
-      {open && (
-        <div
-          className="mb-3 w-[min(92vw,360px)] rounded-2xl border border-neutral-700 bg-neutral-900/95 backdrop-blur shadow-2xl pointer-events-auto"
-          role="dialog"
-          aria-label="Assistant"
-        >
-          <div className="p-3 border-b border-neutral-800">
-            <div className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-full overflow-hidden bg-neutral-800">
-                <video
-                  src="/images/chatbot.mp4"
-                  autoPlay
-                  loop
-                  muted
-                  playsInline
-                  className="h-full w-full object-cover"
-                />
-              </div>
-              <div className="text-sm font-medium">Taedal Assistant</div>
-              <button
-                className="ml-auto px-2 py-1 text-xs rounded bg-neutral-800 hover:bg-neutral-700"
-                onClick={() => setOpen(false)}
-                aria-label="Close assistant"
-              >
-                Close
-              </button>
-            </div>
-          </div>
+  // styles
+  const wrap: React.CSSProperties = {
+    position: "fixed",
+    right: 20,
+    bottom: 20,
+    zIndex: 2147483647, // max it out
+    pointerEvents: "none",
+  };
+  const panel: React.CSSProperties = {
+    width: 360,
+    maxWidth: "92vw",
+    marginBottom: 12,
+    borderRadius: 16,
+    border: "1px solid rgba(120,120,120,0.4)",
+    background: "rgba(18,18,18,0.95)",
+    backdropFilter: "blur(6px)",
+    color: "#eee",
+    boxShadow: "0 12px 40px rgba(0,0,0,0.6)",
+    pointerEvents: "auto",
+  };
+  const header: React.CSSProperties = {
+    padding: 12,
+    borderBottom: "1px solid rgba(120,120,120,0.35)",
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  };
+  const videoDot: React.CSSProperties = {
+    height: 32,
+    width: 32,
+    borderRadius: "999px",
+    overflow: "hidden",
+    background: "#222",
+  };
+  const closeBtn: React.CSSProperties = {
+    marginLeft: "auto",
+    padding: "6px 10px",
+    fontSize: 12,
+    borderRadius: 8,
+    background: "#2a2a2a",
+    color: "#eee",
+    border: "1px solid rgba(120,120,120,0.35)",
+    cursor: "pointer",
+  };
+  const body: React.CSSProperties = { padding: 12, fontSize: 14, color: "#ddd" };
+  const row: React.CSSProperties = { display: "flex", gap: 8, marginTop: 8 };
+  const input: React.CSSProperties = {
+    flex: 1,
+    padding: "10px 12px",
+    borderRadius: 10,
+    border: "1px solid rgba(120,120,120,0.35)",
+    background: "#141414",
+    color: "#eee",
+    outline: "none",
+  };
+  const sendBtn: React.CSSProperties = {
+    padding: "10px 12px",
+    borderRadius: 10,
+    background: "#3a3a3a",
+    color: "#fff",
+    border: "1px solid rgba(120,120,120,0.35)",
+    cursor: "pointer",
+  };
+  const fab: React.CSSProperties = {
+    height: 64,
+    width: 64,
+    borderRadius: 999,
+    border: "1px solid rgba(120,120,120,0.4)",
+    background: "rgba(22,22,22,0.9)",
+    boxShadow: "0 10px 30px rgba(0,0,0,0.6)",
+    display: "grid",
+    placeItems: "center",
+    cursor: "pointer",
+    pointerEvents: "auto",
+  };
+  const fabVidWrap: React.CSSProperties = {
+    height: 48,
+    width: 48,
+    borderRadius: 999,
+    overflow: "hidden",
+    background: "#222",
+  };
 
-          <div className="p-3 text-sm text-neutral-300 space-y-2">
-            <p>Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.</p>
-            <form onSubmit={handleSubmit} className="flex gap-2">
-              <input
-                ref={inputRef}
-                className="flex-1 input"
-                placeholder="Ask me anything…"
-                disabled={busy}
+  return (
+    <div style={wrap} aria-live="polite">
+      {open && (
+        <div style={panel} role="dialog" aria-label="Assistant">
+          <div style={header}>
+            <div style={videoDot}>
+              <video
+                src="/images/chatbot.mp4"
+                autoPlay
+                loop
+                muted
+                playsInline
+                style={{ height: "100%", width: "100%", objectFit: "cover" }}
               />
-              <button className="btn" disabled={busy} type="submit">
-                {busy ? "…" : "Send"}
-              </button>
+            </div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Taedal Assistant</div>
+            <button style={closeBtn} onClick={() => setOpen(false)} aria-label="Close assistant">
+              Close
+            </button>
+          </div>
+          <div style={body}>
+            Try: “switch to light theme”, “guide me to upload an avatar”, or “start tour”.
+            <form onSubmit={handleSubmit} style={row}>
+              <input ref={inputRef} style={input} placeholder="Ask me anything…" disabled={busy} />
+              <button style={sendBtn} disabled={busy} type="submit">{busy ? "…" : "Send"}</button>
             </form>
           </div>
         </div>
       )}
 
-      {/* FAB */}
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="pointer-events-auto h-14 w-14 rounded-full border border-neutral-700 bg-neutral-900/90 shadow-xl hover:bg-neutral-800 grid place-items-center"
+        onClick={() => setOpen(v => !v)}
+        style={fab}
         aria-label="Open assistant"
       >
-        <div className="h-10 w-10 rounded-full overflow-hidden">
+        <div style={fabVidWrap}>
           <video
             src="/images/chatbot.mp4"
             autoPlay
             loop
             muted
             playsInline
-            className="h-full w-full object-cover"
+            style={{ height: "100%", width: "100%", objectFit: "cover" }}
           />
         </div>
       </button>
     </div>
   );
+}
+
+export default function AssistantDock() {
+  // Render into <body> to avoid any parent stacking/overflow issues
+  if (typeof document === "undefined") return null;
+  return createPortal(<DockUI />, document.body);
 }
