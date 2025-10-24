@@ -1,6 +1,7 @@
 // app/src/routes/discover/Discover.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { supabase } from "../../lib/supabase";
 
 /** ----------------------------------------------------------------
  * Types
@@ -10,192 +11,332 @@ type Status = "buy-now" | "on-auction" | "new" | "has-offers" | "all";
 type TimeRange = "24h" | "7d" | "30d";
 type Sort = "trending" | "recent" | "price-asc" | "price-desc";
 
-type CollectionCard = {
-  id: string;
-  name: string;
-  logo: string;
-  banner: string;
-  floor: number;
-  volume: number;
-  volumeChangePct: number; // over selected time window
-  items: number;
-  owners: number;
-  sparkline: number[]; // 20 points
+/** Supabase view shapes */
+type MVTrendingRow = {
+  collection_id: string;
+  floor_native: number | null;
+  vol_24h_native: number | null;
+  vol_7d_native: number | null;
+  vol_30d_native: number | null;
+  tx_24h: number | null;
+  tx_7d: number | null;
+  tx_30d: number | null;
+  owners: number | null;
+  items: number | null;
+  refreshed_at: string;
 };
 
-type ActivityRow = {
+type CollectionMeta = {
+  id: string;
+  name?: string | null;     // optional, not always present
+  title?: string | null;
+  logo_url?: string | null;
+  banner_url?: string | null;
+};
+
+type LiveActivityRow = {
   id: string;
   kind: "sale" | "mint" | "list";
-  artId: string;
-  artTitle: string;
-  img: string;
-  price: number;
-  currency: "ETH" | "SOL" | "MATIC" | "USD";
-  ts: number; // ms
-  from?: string;
-  to?: string;
-  chain: Chain;
+  artwork_id: string;
+  title: string | null;
+  image_url: string | null;
+  price_eth: number | null;
+  actor: string | null;
+  created_at: string;
+  actor_name: string | null;
 };
 
-type GridItem = {
-  id: string;
-  title: string;
-  img: string;
-  price?: number | null;
-  currency?: "ETH" | "SOL" | "MATIC" | "USD" | null;
-  listed?: boolean;
-  chain: Chain;
-  status: Status;
+type DiscoverItem = {
+  artwork_id: string;
+  title: string | null;
+  image_url: string | null;
+  creator_id: string | null;
+  creator_name: string | null;
+  creator_handle: string | null;
+  listing_id: string | null;
+  listing_status: string | null;
+  currency: string | null;
+  price_native: number | null;
+  listed_at: string | null;
+  updated_at: string | null;
+  // from view:
+  chain?: string | null;
+  is_auction?: boolean | null;
+
+  // placeholders you had (fine to keep):
+  ships_worldwide?: boolean | null;
+  ships_from_country?: string | null;
+  is_licensable?: boolean | null;
+  contract_address?: string | null;
+  collection_id?: string | null;
+  is_phygital?: boolean | null;
 };
 
 /** ----------------------------------------------------------------
- * Mock data helpers (replace with Supabase later)
+ * Small helpers
  * ---------------------------------------------------------------- */
-function rand(min: number, max: number) {
-  return Math.random() * (max - min) + min;
-}
-function pick<T>(arr: T[]) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
-function fakeAddress() {
-  const hex = [...Array(40)].map(() => pick("abcdef0123456789".split(""))).join("");
-  return `0x${hex.slice(0, 6)}…${hex.slice(-4)}`;
-}
-
 function makeSparkline(n = 20) {
   const pts: number[] = [];
-  let v = rand(0.6, 1.0);
+  let v = 0.9;
   for (let i = 0; i < n; i++) {
-    v += rand(-0.08, 0.09);
+    v += (Math.random() - 0.48) * 0.12;
     v = Math.max(0.2, Math.min(1.3, v));
-    pts.push(v);
+    pts.push(Number(v.toFixed(3)));
   }
   return pts;
 }
 
-const CHAINS: Chain[] = ["ethereum", "polygon", "solana"];
+function percentDelta(cur: number | null | undefined, ref: number | null | undefined) {
+  const a = Number(cur ?? 0);
+  const b = Number(ref ?? 0);
+  if (!isFinite(a) || !isFinite(b) || b === 0) return 0;
+  return Number((((a - b) / b) * 100).toFixed(1));
+}
 
-function useTrendingCollections(time: TimeRange, chain: Chain | "all") {
-  const [data, setData] = useState<CollectionCard[] | null>(null);
+/** ----------------------------------------------------------------
+ * Data hooks (Supabase)
+ * ---------------------------------------------------------------- */
+function useTrendingCollections(time: TimeRange) {
+  const [data, setData] = useState<
+    Array<{
+      id: string;
+      name: string;
+      logo: string | null;
+      banner: string | null;
+      floor: number;
+      volume: number;
+      volumeChangePct: number;
+      items: number;
+      owners: number;
+      sparkline: number[];
+    }>
+  >([]);
   const [loading, setLoading] = useState(true);
+
   useEffect(() => {
-    setLoading(true);
-    const id = setTimeout(() => {
-      const rows = Array.from({ length: 8 }).map((_, i) => {
-        const c = chain === "all" ? pick(CHAINS) : chain;
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+
+      const volCol =
+        time === "24h" ? "vol_24h_native" : time === "7d" ? "vol_7d_native" : "vol_30d_native";
+
+      // 1) top collections by selected window
+      const { data: mv, error } = await supabase
+        .from("mv_trending_collections")
+        .select("*")
+        .order(volCol as any, { ascending: false, nullsFirst: false })
+        .limit(8);
+
+      if (error) {
+        console.error(error.message);
+        if (!cancelled) {
+          setData([]);
+          setLoading(false);
+        }
+        return;
+      }
+
+      const base = (mv ?? []) as MVTrendingRow[];
+      const ids = base.map((r) => r.collection_id);
+
+      // 2) optional enrichment from `collections`
+      let metas: Record<string, CollectionMeta> = {};
+      if (ids.length) {
+        const { data: cMeta } = await supabase
+          .from("collections")
+          .select("id,name,title,logo_url,banner_url")
+          .in("id", ids as any);
+        (cMeta ?? []).forEach((c) => (metas[c.id] = c));
+      }
+
+      // 3) compute a rough delta
+      const normalized = base.map((r) => {
+        const vol =
+          time === "24h"
+            ? r.vol_24h_native ?? 0
+            : time === "7d"
+            ? r.vol_7d_native ?? 0
+            : r.vol_30d_native ?? 0;
+
+        const ref =
+          time === "24h"
+            ? (r.vol_7d_native ?? 0) / 7
+            : time === "7d"
+            ? (r.vol_30d_native ?? 0) / 4
+            : r.vol_30d_native ?? 0;
+
+        const delta = percentDelta(vol, ref || 0);
+        const m = metas[r.collection_id];
+
         return {
-          id: `col_${time}_${c}_${i}`,
-          name: `${c.toUpperCase()} Collection #${i + 1}`,
-          logo: `https://picsum.photos/seed/logo${i}${time}/96/96`,
-          banner: `https://picsum.photos/seed/banner${i}${time}/800/300`,
-          floor: Number(rand(0.01, 5).toFixed(2)),
-          volume: Number(rand(8, 420).toFixed(2)),
-          volumeChangePct: Number(rand(-35, 120).toFixed(1)),
-          items: Math.floor(rand(300, 10000)),
-          owners: Math.floor(rand(120, 6500)),
+          id: r.collection_id,
+          name: m?.name ?? m?.title ?? `Collection ${r.collection_id.slice(0, 6)}`,
+          logo: m?.logo_url ?? null,
+          banner: m?.banner_url ?? null,
+          floor: Number(r.floor_native ?? 0),
+          volume: Number(vol ?? 0),
+          volumeChangePct: delta,
+          items: Number(r.items ?? 0),
+          owners: Number(r.owners ?? 0),
           sparkline: makeSparkline(),
-        } as CollectionCard;
+        };
       });
-      setData(rows);
-      setLoading(false);
-    }, 450);
-    return () => clearTimeout(id);
-  }, [time, chain]);
+
+      if (!cancelled) {
+        setData(normalized);
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [time]);
+
   return { data, loading };
 }
 
-function useLiveActivity(chain: Chain | "all") {
-  const [rows, setRows] = useState<ActivityRow[]>([]);
+function useLiveActivity() {
+  const [rows, setRows] = useState<LiveActivityRow[]>([]);
+
   useEffect(() => {
-    // seed
-    const seed: ActivityRow[] = Array.from({ length: 12 }).map((_, i) => {
-      const c = chain === "all" ? pick(CHAINS) : chain;
-      const kind = pick<ActivityRow["kind"]>(["sale", "mint", "list"]);
-      return {
-        id: `act_${i}`,
-        kind,
-        artId: `a_${i}`,
-        artTitle: `Piece #${Math.floor(rand(100, 9999))}`,
-        img: `https://picsum.photos/seed/act${i}/200/200`,
-        price: Number(rand(0.01, 3).toFixed(3)),
-        currency: pick(["ETH", "SOL", "MATIC", "USD"]),
-        ts: Date.now() - Math.floor(rand(5 * 60 * 1000, 60 * 60 * 1000)),
-        from: kind !== "mint" ? fakeAddress() : undefined,
-        to: kind !== "list" ? fakeAddress() : undefined,
-        chain: c,
-      };
-    });
-    setRows(seed);
-    // pseudo-stream: append an item every few seconds
-    const t = setInterval(() => {
-      setRows((r) => {
-        const c = chain === "all" ? pick(CHAINS) : chain;
-        const kind = pick<ActivityRow["kind"]>(["sale", "mint", "list"]);
-        const next: ActivityRow = {
-          id: `act_${Date.now()}`,
-          kind,
-          artId: `a_${Math.floor(rand(1, 999999))}`,
-          artTitle: `Piece #${Math.floor(rand(100, 9999))}`,
-          img: `https://picsum.photos/seed/act${Math.floor(Math.random() * 999999)}/200/200`,
-          price: Number(rand(0.01, 8).toFixed(3)),
-          currency: pick(["ETH", "SOL", "MATIC", "USD"]),
-          ts: Date.now(),
-          from: kind !== "mint" ? fakeAddress() : undefined,
-          to: kind !== "list" ? fakeAddress() : undefined,
-          chain: c,
-        };
-        return [next, ...r].slice(0, 30);
-      });
-    }, 4000);
-    return () => clearInterval(t);
-  }, [chain]);
+    let cancelled = false;
+
+    (async () => {
+      const { data, error } = await supabase
+        .from("v_live_activity_recent")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .limit(50);
+
+      if (error) {
+        console.error(error.message);
+        return;
+      }
+      if (!cancelled) setRows((data ?? []) as LiveActivityRow[]);
+    })();
+
+    // optional realtime stream
+    const ch = supabase
+      .channel("activity-stream")
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "orders" },
+        () => {
+          supabase
+            .from("v_live_activity_recent")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .then(({ data }) => {
+              if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
+            });
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "listings" },
+        () => {
+          supabase
+            .from("v_live_activity_recent")
+            .select("*")
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .then(({ data }) => {
+              if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
+            });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(ch);
+      cancelled = true;
+    };
+  }, []);
+
   return rows;
 }
 
-function useInfiniteGrid(params: {
-  chain: Chain | "all";
-  status: Status;
-  sort: Sort;
-}) {
-  const { chain, status, sort } = params;
+function useInfiniteGrid(params: { status: Status; sort: Sort; q: string; chain?: Chain | "all" }) {
+  const { status, sort, q, chain = "all" } = params;
   const [page, setPage] = useState(0);
-  const [items, setItems] = useState<GridItem[]>([]);
+  const [items, setItems] = useState<DiscoverItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
+  const pageSize = 24;
 
   useEffect(() => {
-    // reset when filters change
     setItems([]);
     setPage(0);
     setHasMore(true);
-  }, [chain, status, sort]);
+  }, [status, sort, q, chain]);
 
   useEffect(() => {
+    let cancelled = false;
     if (!hasMore || loading) return;
-    setLoading(true);
-    const id = setTimeout(() => {
-      // produce 24 items per page
-      const batch: GridItem[] = Array.from({ length: 24 }).map((_, i) => {
-        const c = chain === "all" ? pick(CHAINS) : chain;
-        const st: Status =
-          status === "all" ? pick(["buy-now", "on-auction", "new", "has-offers"]) : status;
-        return {
-          id: `it_${c}_${sort}_${page}_${i}`,
-          title: `#${page * 24 + i + 1}`,
-          img: `https://picsum.photos/seed/grid_${c}_${sort}_${page}_${i}/600/600`,
-          price: st !== "new" ? Number(rand(0.01, 8).toFixed(3)) : null,
-          currency: st !== "new" ? pick(["ETH", "SOL", "MATIC"]) : null,
-          listed: st !== "new",
-          chain: c,
-          status: st,
-        };
-      });
-      setItems((cur) => [...cur, ...batch]);
-      setHasMore(page < 12); // ~13 pages
-      setLoading(false);
-    }, 500);
-    return () => clearTimeout(id);
-  }, [page, chain, status, sort, hasMore, loading]);
+
+    (async () => {
+      setLoading(true);
+      let qb = supabase.from("v_discover_items").select("*");
+
+      // STATUS filters
+      if (status === "buy-now") {
+        qb = qb.not("listing_id", "is", null).not("price_native", "is", null);
+      } else if (status === "on-auction") {
+        qb = qb.eq("listing_status", "active").eq("is_auction", true);
+      } else if (status === "new") {
+        const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+        qb = qb.gte("listed_at", sevenDaysAgo);
+      } else if (status === "has-offers") {
+        qb = qb.eq("has_offers", true as any);
+      }
+
+      // CHAIN filter (optional; view exposes 'chain')
+      if (chain !== "all") {
+        qb = qb.eq("chain", chain);
+      }
+
+      // SERVER-SIDE SEARCH using tsvector
+      const qstr = q.trim();
+      if (qstr.length >= 2) {
+        qb = qb.textSearch("search_tsv", qstr, { type: "websearch", config: "simple" });
+      }
+
+      // SORT
+      if (sort === "price-asc") qb = qb.order("price_native", { ascending: true, nullsFirst: false });
+      else if (sort === "price-desc") qb = qb.order("price_native", { ascending: false, nullsFirst: true });
+      else if (sort === "recent") qb = qb.order("listed_at", { ascending: false, nullsFirst: false });
+      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false });
+
+      // paginate
+      const from = page * pageSize;
+      const to = from + pageSize - 1;
+      const { data, error } = await qb.range(from, to);
+
+      if (error) {
+        console.error(error.message);
+        if (!cancelled) {
+          setLoading(false);
+          setHasMore(false);
+        }
+        return;
+      }
+
+      const batch = (data ?? []) as DiscoverItem[];
+      if (!cancelled) {
+        setItems((cur) => [...cur, ...batch]);
+        setHasMore(batch.length === pageSize);
+        setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [page, status, sort, q, chain, hasMore, loading]);
 
   return { items, loading, hasMore, loadMore: () => setPage((p) => p + 1) };
 }
@@ -223,9 +364,7 @@ function Sparkline({ points }: { points: number[] }) {
 }
 
 function StatPill({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="px-1.5 py-0.5 rounded-md bg-white/10 text-[11px]">{children}</span>
-  );
+  return <span className="px-1.5 py-0.5 rounded-md bg-white/10 text-[11px]">{children}</span>;
 }
 
 /** ----------------------------------------------------------------
@@ -239,18 +378,18 @@ export default function Discover() {
   const [time, setTime] = useState<TimeRange>("24h");
   const [sort, setSort] = useState<Sort>("trending");
 
-  const { data: trending, loading: loadingTrending } = useTrendingCollections(time, chain);
-  const activity = useLiveActivity(chain);
-  const { items, loading, hasMore, loadMore } = useInfiniteGrid({ chain, status, sort });
+  const { data: trending, loading: loadingTrending } = useTrendingCollections(time);
+  const activity = useLiveActivity();
+  const { items, loading, hasMore, loadMore } = useInfiniteGrid({ status, sort, q, chain });
 
-  // simple client-side search filter for the grid (mock only)
+  // client-side narrowing (cheap/cosmetic)
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return items;
-    return items.filter((it) => it.title.toLowerCase().includes(s));
+    return items.filter((it) => (it.title ?? "").toLowerCase().includes(s));
   }, [items, q]);
 
-  // infinite scroll sentinel
+  // infinite sentinel
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = sentinelRef.current;
@@ -336,15 +475,24 @@ export default function Discover() {
               {trending.map((c) => (
                 <Link
                   key={c.id}
-                  to={`/collection/${encodeURIComponent(c.name)}`}
+                  to={`/collection/${encodeURIComponent(c.id)}`}
                   className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/20"
                 >
                   <div className="relative h-28 bg-neutral-900 overflow-hidden">
-                    <img src={c.banner} className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition" />
-                    <img
-                      src={c.logo}
-                      className="absolute -bottom-6 left-3 h-14 w-14 rounded-xl border-2 border-black object-cover shadow"
-                    />
+                    {c.banner ? (
+                      <img
+                        src={c.banner}
+                        className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 bg-white/5" />
+                    )}
+                    {c.logo ? (
+                      <img
+                        src={c.logo}
+                        className="absolute -bottom-6 left-3 h-14 w-14 rounded-xl border-2 border-black object-cover shadow"
+                      />
+                    ) : null}
                   </div>
                   <div className="p-3 pt-7">
                     <div className="flex items-center justify-between">
@@ -355,8 +503,8 @@ export default function Discover() {
                     </div>
                     <div className="mt-1 flex items-center justify-between text-sm">
                       <div className="flex items-center gap-2">
-                        <StatPill>Floor {c.floor} ETH</StatPill>
-                        <StatPill>Vol {c.volume} {chain === "solana" ? "SOL" : "ETH"}</StatPill>
+                        <StatPill>Floor {c.floor}</StatPill>
+                        <StatPill>Vol {c.volume}</StatPill>
                       </div>
                       <div className="text-white/60">
                         <Sparkline points={c.sparkline} />
@@ -387,29 +535,30 @@ export default function Discover() {
                 {activity.map((a) => (
                   <li key={a.id} className="p-3 flex items-center gap-3 hover:bg-white/[0.03]">
                     <div className="h-12 w-12 rounded-lg overflow-hidden bg-neutral-900 border border-white/10">
-                      <img src={a.img} className="w-full h-full object-cover" />
+                      {a.image_url ? (
+                        <img src={a.image_url} className="w-full h-full object-cover" />
+                      ) : (
+                        <div className="w-full h-full" />
+                      )}
                     </div>
                     <div className="min-w-0">
                       <div className="text-sm truncate">
                         {a.kind === "sale" ? "Sale" : a.kind === "mint" ? "Mint" : "Listing"} •{" "}
-                        <span className="font-medium">{a.artTitle}</span>
+                        <span className="font-medium">{a.title ?? "Untitled"}</span>
                       </div>
                       <div className="text-xs text-white/60">
-                        {new Date(a.ts).toLocaleTimeString()} • {a.chain.toUpperCase()}{" "}
-                        {a.from ? <>• From <code>{a.from}</code></> : null}{" "}
-                        {a.to ? <>• To <code>{a.to}</code></> : null}
+                        {new Date(a.created_at).toLocaleTimeString()} •
+                        {a.actor ? <> Actor <code>{a.actor_name ?? a.actor}</code></> : null}
                       </div>
                     </div>
-                    <div className="ml-auto text-sm">
-                      {a.price} {a.currency}
-                    </div>
+                    <div className="ml-auto text-sm">{a.price_eth ? `${a.price_eth} ETH` : ""}</div>
                   </li>
                 ))}
               </ul>
             </div>
           </div>
 
-          {/* Promo / tips / categories rail (static for now) */}
+          {/* Promo / tips / categories rail */}
           <div className="lg:col-span-4 space-y-3">
             <h2 className="text-xl font-semibold">Browse by category</h2>
             <div className="grid grid-cols-2 gap-3">
@@ -422,7 +571,7 @@ export default function Discover() {
             </div>
             <div className="rounded-xl border border-white/10 bg-gradient-to-br from-white/[0.06] to-white/[0.02] p-4">
               <div className="text-sm text-white/80">
-                Tip: Use the sticky bar to filter by chain, status, and sort order. The grid will lazy-load as you scroll.
+                Tip: Use the sticky bar to search, filter status, and change sort. The grid lazy-loads as you scroll.
               </div>
             </div>
           </div>
@@ -446,46 +595,47 @@ export default function Discover() {
               <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
                 {filtered.map((it) => (
                   <Link
-                    key={it.id}
-                    to={`/art/${encodeURIComponent(it.id)}`}
+                    key={it.artwork_id}
+                    to={`/art/${encodeURIComponent(it.artwork_id)}`}
                     className="group rounded-xl overflow-hidden border border-white/10 bg-white/[0.04] hover:border-white/20 transition"
                   >
                     <div className="relative aspect-square bg-neutral-900">
-                      <img src={it.img} alt={it.title} className="absolute inset-0 w-full h-full object-cover" />
+                      {it.image_url ? (
+                        <img src={it.image_url} alt={it.title ?? ""} className="absolute inset-0 w-full h-full object-cover" />
+                      ) : (
+                        <div className="absolute inset-0" />
+                      )}
                       <div className="absolute left-2 top-2 flex gap-1">
-                        <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">
-                          {it.chain.toUpperCase()}
-                        </span>
-                        {it.status !== "all" && (
-                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">
-                            {it.status.replace("-", " ")}
-                          </span>
-                        )}
+                        <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">ETH</span>
+                        {it.is_phygital ? (
+                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">phygital</span>
+                        ) : null}
+                        {it.is_licensable ? (
+                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">licensable</span>
+                        ) : null}
                       </div>
                       <button
                         className="absolute right-2 top-2 h-8 w-8 rounded-md bg-black/50 backdrop-blur grid place-items-center opacity-0 group-hover:opacity-100 transition"
                         title="Favorite"
-                        onClick={(e) => {
-                          e.preventDefault();
-                        }}
+                        onClick={(e) => e.preventDefault()}
                       >
                         ♥
                       </button>
                     </div>
                     <div className="p-3">
-                      <div className="font-medium truncate">#{it.title}</div>
+                      <div className="font-medium truncate">#{it.title ?? "Untitled"}</div>
                       <div className="mt-1 flex items-center justify-between text-sm">
                         <div className="text-white/70">
-                          {it.listed ? (
+                          {it.listing_id && it.price_native != null ? (
                             <>
-                              {it.price} {it.currency}
+                              {it.price_native} {it.currency ?? "ETH"}
                             </>
                           ) : (
                             <span className="text-white/40">Not listed</span>
                           )}
                         </div>
                         <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
-                          {it.status === "on-auction" ? "Bid" : it.listed ? "Buy" : "View"}
+                          {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
                         </button>
                       </div>
                     </div>
@@ -495,7 +645,9 @@ export default function Discover() {
 
               {/* sentinel for infinite scroll */}
               <div ref={sentinelRef} className="h-12 grid place-items-center">
-                {loading ? <span className="text-xs text-white/60">Loading more…</span> : hasMore ? null : (
+                {loading ? (
+                  <span className="text-xs text-white/60">Loading more…</span>
+                ) : hasMore ? null : (
                   <span className="text-xs text-white/40">You reached the end.</span>
                 )}
               </div>
