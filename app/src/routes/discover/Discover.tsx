@@ -28,7 +28,7 @@ type MVTrendingRow = {
 
 type CollectionMeta = {
   id: string;
-  name?: string | null;     // optional, not always present
+  name?: string | null;
   title?: string | null;
   logo_url?: string | null;
   banner_url?: string | null;
@@ -59,17 +59,13 @@ type DiscoverItem = {
   price_native: number | null;
   listed_at: string | null;
   updated_at: string | null;
-  // from view:
-  chain?: string | null;
-  is_auction?: boolean | null;
-
-  // placeholders you had (fine to keep):
-  ships_worldwide?: boolean | null;
-  ships_from_country?: string | null;
-  is_licensable?: boolean | null;
-  contract_address?: string | null;
-  collection_id?: string | null;
-  is_phygital?: boolean | null;
+  ships_worldwide: boolean | null;
+  ships_from_country: string | null;
+  is_licensable: boolean | null;
+  contract_address: string | null;
+  collection_id: string | null;
+  is_phygital: boolean | null;
+  is_auction?: boolean | null; // from view
 };
 
 /** ----------------------------------------------------------------
@@ -172,7 +168,7 @@ function useTrendingCollections(time: TimeRange) {
 
         return {
           id: r.collection_id,
-          name: m?.name ?? m?.title ?? `Collection ${r.collection_id.slice(0, 6)}`,
+          name: (m?.name ?? m?.title ?? `Collection ${r.collection_id.slice(0, 6)}`).trim(),
           logo: m?.logo_url ?? null,
           banner: m?.banner_url ?? null,
           floor: Number(r.floor_native ?? 0),
@@ -195,7 +191,7 @@ function useTrendingCollections(time: TimeRange) {
     };
   }, [time]);
 
-  return { data, loading };
+  return { data, loading: loading };
 }
 
 function useLiveActivity() {
@@ -221,34 +217,26 @@ function useLiveActivity() {
     // optional realtime stream
     const ch = supabase
       .channel("activity-stream")
-      .on(
-        "postgres_changes",
-        { event: "INSERT", schema: "public", table: "orders" },
-        () => {
-          supabase
-            .from("v_live_activity_recent")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .then(({ data }) => {
-              if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
-            });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "UPDATE", schema: "public", table: "listings" },
-        () => {
-          supabase
-            .from("v_live_activity_recent")
-            .select("*")
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .then(({ data }) => {
-              if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
-            });
-        }
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "orders" }, () => {
+        supabase
+          .from("v_live_activity_recent")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .then(({ data }) => {
+            if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
+          });
+      })
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "listings" }, () => {
+        supabase
+          .from("v_live_activity_recent")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .then(({ data }) => {
+            if (data?.length) setRows((cur) => [data[0] as LiveActivityRow, ...cur].slice(0, 80));
+          });
+      })
       .subscribe();
 
     return () => {
@@ -260,8 +248,8 @@ function useLiveActivity() {
   return rows;
 }
 
-function useInfiniteGrid(params: { status: Status; sort: Sort; q: string; chain?: Chain | "all" }) {
-  const { status, sort, q, chain = "all" } = params;
+function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
+  const { status, sort, q } = params;
   const [page, setPage] = useState(0);
   const [items, setItems] = useState<DiscoverItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -272,7 +260,7 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string; chain?
     setItems([]);
     setPage(0);
     setHasMore(true);
-  }, [status, sort, q, chain]);
+  }, [status, sort, q]);
 
   useEffect(() => {
     let cancelled = false;
@@ -291,12 +279,7 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string; chain?
         const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
         qb = qb.gte("listed_at", sevenDaysAgo);
       } else if (status === "has-offers") {
-        qb = qb.eq("has_offers", true as any);
-      }
-
-      // CHAIN filter (optional; view exposes 'chain')
-      if (chain !== "all") {
-        qb = qb.eq("chain", chain);
+        qb = qb.eq("has_offers", true);
       }
 
       // SERVER-SIDE SEARCH using tsvector
@@ -336,7 +319,7 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string; chain?
     return () => {
       cancelled = true;
     };
-  }, [page, status, sort, q, chain, hasMore, loading]);
+  }, [page, status, sort, q, hasMore, loading]);
 
   return { items, loading, hasMore, loadMore: () => setPage((p) => p + 1) };
 }
@@ -373,16 +356,16 @@ function StatPill({ children }: { children: React.ReactNode }) {
 export default function Discover() {
   // filters
   const [q, setQ] = useState("");
-  const [chain, setChain] = useState<Chain | "all">("all");
+  const [chain, setChain] = useState<Chain | "all">("all"); // reserved for future
   const [status, setStatus] = useState<Status>("all");
   const [time, setTime] = useState<TimeRange>("24h");
   const [sort, setSort] = useState<Sort>("trending");
 
   const { data: trending, loading: loadingTrending } = useTrendingCollections(time);
   const activity = useLiveActivity();
-  const { items, loading, hasMore, loadMore } = useInfiniteGrid({ status, sort, q, chain });
+  const { items, loading, hasMore, loadMore } = useInfiniteGrid({ status, sort, q });
 
-  // client-side narrowing (cheap/cosmetic)
+  // client-side filter narrows already-fetched rows
   const filtered = useMemo(() => {
     const s = q.trim().toLowerCase();
     if (!s) return items;
@@ -475,7 +458,7 @@ export default function Discover() {
               {trending.map((c) => (
                 <Link
                   key={c.id}
-                  to={`/collection/${encodeURIComponent(c.id)}`}
+                  to={`/collection/${encodeURIComponent(c.name)}`}
                   className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/20"
                 >
                   <div className="relative h-28 bg-neutral-900 overflow-hidden">
@@ -634,6 +617,7 @@ export default function Discover() {
                             <span className="text-white/40">Not listed</span>
                           )}
                         </div>
+                        {/* FIX: use is_auction boolean to show 'Bid' */}
                         <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
                           {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
                         </button>
