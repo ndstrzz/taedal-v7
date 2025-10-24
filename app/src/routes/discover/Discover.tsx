@@ -1,3 +1,4 @@
+// app/src/routes/discover/Discover.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -124,15 +125,8 @@ function useTrendingCollections(time: TimeRange) {
         .order(volCol as any, { ascending: false, nullsFirst: false })
         .limit(8);
 
-      console.log("[discover] trending query", {
-        volCol,
-        error,
-        rows: mv?.length,
-        sample: mv?.[0],
-      });
-
       if (error) {
-        console.error("[discover] trending error:", error.message);
+        console.error(error.message);
         if (!cancelled) {
           setData([]);
           setLoading(false);
@@ -146,12 +140,10 @@ function useTrendingCollections(time: TimeRange) {
       // 2) optional enrichment from `collections`
       let metas: Record<string, CollectionMeta> = {};
       if (ids.length) {
-        const { data: cMeta, error: metaErr } = await supabase
+        const { data: cMeta } = await supabase
           .from("collections")
           .select("id,name,title,logo_url,banner_url")
           .in("id", ids as any);
-
-        if (metaErr) console.warn("[discover] collections meta error:", metaErr.message);
         (cMeta ?? []).forEach((c) => (metas[c.id] = c));
       }
 
@@ -215,10 +207,8 @@ function useLiveActivity() {
         .order("created_at", { ascending: false })
         .limit(50);
 
-      console.log("[discover] activity query", { error, rows: data?.length, sample: data?.[0] });
-
       if (error) {
-        console.error("[discover] activity error:", error.message);
+        console.error(error.message);
         return;
       }
       if (!cancelled) setRows((data ?? []) as LiveActivityRow[]);
@@ -266,18 +256,20 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
   const [hasMore, setHasMore] = useState(true);
   const pageSize = 24;
 
+  // reset when filters change
   useEffect(() => {
     setItems([]);
     setPage(0);
     setHasMore(true);
   }, [status, sort, q]);
 
+  // FETCH — depend only on page + filters (NOT on loading/hasMore)
   useEffect(() => {
     let cancelled = false;
-    if (!hasMore || loading) return;
-
     (async () => {
+      if (!hasMore) return; // ok to read the current value
       setLoading(true);
+
       let qb = supabase.from("v_discover_items").select("*");
 
       // STATUS filters
@@ -292,7 +284,7 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
         qb = qb.eq("has_offers", true);
       }
 
-      // SERVER-SIDE SEARCH using tsvector
+      // SERVER-SIDE SEARCH
       const qstr = q.trim();
       if (qstr.length >= 2) {
         qb = qb.textSearch("search_tsv", qstr, { type: "websearch", config: "simple" });
@@ -302,27 +294,15 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
       if (sort === "price-asc") qb = qb.order("price_native", { ascending: true, nullsFirst: false });
       else if (sort === "price-desc") qb = qb.order("price_native", { ascending: false, nullsFirst: true });
       else if (sort === "recent") qb = qb.order("listed_at", { ascending: false, nullsFirst: false });
-      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false }); // trending fallback
+      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false });
 
       // paginate
       const from = page * pageSize;
       const to = from + pageSize - 1;
       const { data, error } = await qb.range(from, to);
 
-      console.log("[discover] grid query", {
-        status,
-        sort,
-        q: q.trim(),
-        page,
-        from,
-        to,
-        error,
-        rows: data?.length,
-        sample: data?.[0],
-      });
-
       if (error) {
-        console.error("[discover] grid error:", error.message);
+        console.error(error.message);
         if (!cancelled) {
           setLoading(false);
           setHasMore(false);
@@ -341,7 +321,8 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
     return () => {
       cancelled = true;
     };
-  }, [page, status, sort, q, hasMore, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, status, sort, q]); // <-- removed loading/hasMore from deps
 
   return { items, loading, hasMore, loadMore: () => setPage((p) => p + 1) };
 }
@@ -381,7 +362,7 @@ export default function Discover() {
   const [chain, setChain] = useState<Chain | "all">("all"); // reserved for future
   const [status, setStatus] = useState<Status>("all");
   const [time, setTime] = useState<TimeRange>("24h");
-  const [sort, setSort] = useState<Sort>("trending");
+  const [sort, setSort] = useState<Sort>("trending"); // you can switch default to "recent"
 
   const { data: trending, loading: loadingTrending } = useTrendingCollections(time);
   const activity = useLiveActivity();
@@ -410,8 +391,6 @@ export default function Discover() {
     io.observe(el);
     return () => io.disconnect();
   }, [sentinelRef.current, hasMore, loading, loadMore]);
-
-  const dbg = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
 
   return (
     <div className="min-h-[100dvh]">
@@ -451,23 +430,6 @@ export default function Discover() {
               <option value="price-asc">Price ↑</option>
               <option value="price-desc">Price ↓</option>
             </select>
-
-            {/* tiny debug ping only when ?dbg=1 */}
-            {dbg && (
-              <button
-                className="text-xs px-2 py-1 rounded-md bg-white/10 border border-white/10"
-                onClick={async () => {
-                  const { data, error } = await supabase
-                    .from("v_discover_items")
-                    .select("*")
-                    .order("updated_at", { ascending: false })
-                    .limit(1);
-                  alert(error ? `ERR: ${error.message}` : `OK: ${data?.length} row(s)`);
-                }}
-              >
-                ping supabase
-              </button>
-            )}
           </div>
         </div>
       </div>
@@ -658,7 +620,6 @@ export default function Discover() {
                             <span className="text-white/40">Not listed</span>
                           )}
                         </div>
-                        {/* Uses is_auction boolean from the view */}
                         <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
                           {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
                         </button>
