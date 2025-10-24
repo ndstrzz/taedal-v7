@@ -1,17 +1,27 @@
 import { createClient } from "@supabase/supabase-js";
 
-export const supabase = createClient(
-  import.meta.env.VITE_SUPABASE_URL!,
-  import.meta.env.VITE_SUPABASE_ANON_KEY!,
-  {
-    auth: {
-      // we handle the URL on /auth/callback ourselves
-      detectSessionInUrl: false,
-      persistSession: true,
-      autoRefreshToken: true,
-    },
-  }
-);
+/** --------------------------------------------------------------
+ * Read env (Vite requires VITE_* names). Fail loudly in console.
+ * -------------------------------------------------------------- */
+const url = import.meta.env.VITE_SUPABASE_URL;
+const anon = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+if (!url || !anon) {
+  // This is the #1 reason for "no data" + no network calls in prod.
+  console.warn(
+    "[supabase] Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY. " +
+      "Set them in your Vercel env and .env.local. Without them, no REST calls will be made."
+  );
+}
+
+export const supabase = createClient(url ?? "", anon ?? "", {
+  auth: {
+    // we handle the URL on /auth/callback ourselves
+    detectSessionInUrl: false,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+});
 
 /**
  * Expose the client to window for debugging:
@@ -27,6 +37,7 @@ const shouldExpose =
 
 if (shouldExpose && typeof window !== "undefined") {
   (window as any).supabase = supabase;
+  console.info("[supabase] client exposed on window.supabase");
 }
 
 /** Optional helper you can import where needed */

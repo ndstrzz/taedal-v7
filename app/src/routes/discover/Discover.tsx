@@ -1,4 +1,3 @@
-// app/src/routes/discover/Discover.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -125,8 +124,15 @@ function useTrendingCollections(time: TimeRange) {
         .order(volCol as any, { ascending: false, nullsFirst: false })
         .limit(8);
 
+      console.log("[discover] trending query", {
+        volCol,
+        error,
+        rows: mv?.length,
+        sample: mv?.[0],
+      });
+
       if (error) {
-        console.error(error.message);
+        console.error("[discover] trending error:", error.message);
         if (!cancelled) {
           setData([]);
           setLoading(false);
@@ -140,10 +146,12 @@ function useTrendingCollections(time: TimeRange) {
       // 2) optional enrichment from `collections`
       let metas: Record<string, CollectionMeta> = {};
       if (ids.length) {
-        const { data: cMeta } = await supabase
+        const { data: cMeta, error: metaErr } = await supabase
           .from("collections")
           .select("id,name,title,logo_url,banner_url")
           .in("id", ids as any);
+
+        if (metaErr) console.warn("[discover] collections meta error:", metaErr.message);
         (cMeta ?? []).forEach((c) => (metas[c.id] = c));
       }
 
@@ -191,7 +199,7 @@ function useTrendingCollections(time: TimeRange) {
     };
   }, [time]);
 
-  return { data, loading: loading };
+  return { data, loading };
 }
 
 function useLiveActivity() {
@@ -207,8 +215,10 @@ function useLiveActivity() {
         .order("created_at", { ascending: false })
         .limit(50);
 
+      console.log("[discover] activity query", { error, rows: data?.length, sample: data?.[0] });
+
       if (error) {
-        console.error(error.message);
+        console.error("[discover] activity error:", error.message);
         return;
       }
       if (!cancelled) setRows((data ?? []) as LiveActivityRow[]);
@@ -292,15 +302,27 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
       if (sort === "price-asc") qb = qb.order("price_native", { ascending: true, nullsFirst: false });
       else if (sort === "price-desc") qb = qb.order("price_native", { ascending: false, nullsFirst: true });
       else if (sort === "recent") qb = qb.order("listed_at", { ascending: false, nullsFirst: false });
-      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false });
+      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false }); // trending fallback
 
       // paginate
       const from = page * pageSize;
       const to = from + pageSize - 1;
       const { data, error } = await qb.range(from, to);
 
+      console.log("[discover] grid query", {
+        status,
+        sort,
+        q: q.trim(),
+        page,
+        from,
+        to,
+        error,
+        rows: data?.length,
+        sample: data?.[0],
+      });
+
       if (error) {
-        console.error(error.message);
+        console.error("[discover] grid error:", error.message);
         if (!cancelled) {
           setLoading(false);
           setHasMore(false);
@@ -389,6 +411,8 @@ export default function Discover() {
     return () => io.disconnect();
   }, [sentinelRef.current, hasMore, loading, loadMore]);
 
+  const dbg = typeof window !== "undefined" && new URLSearchParams(window.location.search).has("dbg");
+
   return (
     <div className="min-h-[100dvh]">
       {/* Sticky filter/search bar */}
@@ -427,6 +451,23 @@ export default function Discover() {
               <option value="price-asc">Price ↑</option>
               <option value="price-desc">Price ↓</option>
             </select>
+
+            {/* tiny debug ping only when ?dbg=1 */}
+            {dbg && (
+              <button
+                className="text-xs px-2 py-1 rounded-md bg-white/10 border border-white/10"
+                onClick={async () => {
+                  const { data, error } = await supabase
+                    .from("v_discover_items")
+                    .select("*")
+                    .order("updated_at", { ascending: false })
+                    .limit(1);
+                  alert(error ? `ERR: ${error.message}` : `OK: ${data?.length} row(s)`);
+                }}
+              >
+                ping supabase
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -617,7 +658,7 @@ export default function Discover() {
                             <span className="text-white/40">Not listed</span>
                           )}
                         </div>
-                        {/* FIX: use is_auction boolean to show 'Bid' */}
+                        {/* Uses is_auction boolean from the view */}
                         <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
                           {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
                         </button>
