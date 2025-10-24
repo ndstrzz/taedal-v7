@@ -44,10 +44,15 @@ function WalletModal({
           </button>
         </div>
         <div className="space-y-3">
-          <button className="btn w-full flex items-center justify-center gap-2" onClick={onMetaMask}>
+          <button
+            className="btn w-full flex items-center justify-center gap-2"
+            onClick={onMetaMask}
+          >
             <span>MetaMask</span>
           </button>
-          {disabledText && <p className="text-xs text-white/60 text-center">{disabledText}</p>}
+          {disabledText && (
+            <p className="text-xs text-white/60 text-center">{disabledText}</p>
+          )}
         </div>
       </div>
     </div>
@@ -92,7 +97,6 @@ type Artwork = {
   ipfs_image_cid?: string | null;
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
-  // optional physical metadata
   type?: "digital" | "physical" | null;
   physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
 };
@@ -372,7 +376,6 @@ export default function ArtworkDetail() {
           if (alive) setTopBid(tb);
         }
 
-        // fetch ownership visibility for current viewer (if they own it)
         if (viewerId) {
           const { data: own } = await supabase
             .from("ownerships")
@@ -684,6 +687,15 @@ export default function ArtworkDetail() {
     return Math.max(reserve, base || reserve || 0);
   }, [topBid, activeListing, isAuction]);
 
+  // ✅ This hook must be above any early returns to keep hook order stable
+  const galleryThumbs = useMemo(
+    () =>
+      ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
+        .filter((f) => !!f?.url)
+        .slice(0, 10),
+    [art?.image_url, files]
+  );
+
   /* ------------------------------ render ------------------------------ */
 
   if (loading) {
@@ -723,14 +735,6 @@ export default function ArtworkDetail() {
       : "";
 
   const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
-
-  const galleryThumbs = useMemo(
-    () =>
-      ([{ url: art.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
-        .filter((f) => !!f?.url)
-        .slice(0, 10),
-    [art.image_url, files]
-  );
 
   return (
     <>
