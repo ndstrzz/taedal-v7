@@ -1,5 +1,4 @@
-// src/App.tsx
-import { Suspense, lazy, useEffect, useState } from "react";
+import { Suspense, lazy, useEffect } from "react";
 import {
   BrowserRouter,
   Routes,
@@ -14,6 +13,7 @@ import {
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
+import CollectionPage from "./routes/collection/CollectionPage"; // NEW
 
 /* styles */
 import "./App.css";
@@ -21,19 +21,6 @@ import "./App.css";
 /* assistant + theme */
 import AssistantDock from "./assistant/AssistantDock";
 import ThemeProvider from "./providers/ThemeProvider";
-
-/* data */
-import { fetchActiveListings, type JoinedListing } from "./lib/listings";
-
-/* ----------------------------------------- */
-/* Debug (for non-visual logs)               */
-/* ----------------------------------------- */
-function DebugMount({ msg }: { msg: string }) {
-  useEffect(() => {
-    console.log(msg);
-  }, [msg]);
-  return null;
-}
 
 /* ----------------------------------------- */
 /* Utilities                                 */
@@ -99,8 +86,12 @@ function TopNav() {
 }
 
 /* ----------------------------------------- */
-/* Explore (Home)                            */
+/* Explore (Home) - simple card grid         */
 /* ----------------------------------------- */
+import { fetchActiveListings, type JoinedListing } from "./lib/listings";
+import { useState } from "react";
+import { Link as RouterLink } from "react-router-dom";
+
 function Explore() {
   const [items, setItems] = useState<JoinedListing[] | null>(null);
   const [loading, setLoading] = useState(true);
@@ -156,15 +147,15 @@ function Explore() {
       {!items || items.length === 0 ? (
         <div className="text-white/70">
           No active listings yet. Be the first to{" "}
-          <Link className="underline" to="/create">
+          <RouterLink className="underline" to="/create">
             create
-          </Link>{" "}
+          </RouterLink>{" "}
           one.
         </div>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {items.map((l) => (
-            <Link
+            <RouterLink
               key={l.id}
               to={`/art/${l.artwork_id}`}
               className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/30 transition"
@@ -194,7 +185,7 @@ function Explore() {
                     : "—"}
                 </div>
               </div>
-            </Link>
+            </RouterLink>
           ))}
         </div>
       )}
@@ -251,6 +242,9 @@ function App() {
               <Route path="/art/:id" element={<ArtworkDetail />} />
               <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
+              {/* NEW: collection route by slug (or UUID) */}
+              <Route path="/collection/:slug" element={<CollectionPage />} />
+
               {/* Public profile routes */}
               <Route path="/u/:handle" element={<PublicProfile />} />
               <Route path="/profiles/:handle" element={<PublicProfile />} />
@@ -266,8 +260,6 @@ function App() {
             </Routes>
           </Suspense>
 
-          {/* Floating assistant lives above everything */}
-          <DebugMount msg="[assistant] <AssistantDock /> rendered in App" />
           <AssistantDock />
         </div>
       </ThemeProvider>

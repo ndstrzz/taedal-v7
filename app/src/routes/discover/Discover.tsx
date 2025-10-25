@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import { fetchTopBid } from "../../lib/bids";
 
 /** ----------------------------------------------------------------
  * Types
@@ -10,6 +11,7 @@ type Chain = "ethereum" | "polygon" | "solana";
 type Status = "buy-now" | "on-auction" | "new" | "has-offers" | "all";
 type TimeRange = "24h" | "7d" | "30d";
 type Sort = "trending" | "recent" | "price-asc" | "price-desc";
+type TrendingTab = "collections" | "items";
 
 /** Supabase view shapes */
 type MVTrendingRow = {
@@ -32,6 +34,29 @@ type CollectionMeta = {
   title?: string | null;
   logo_url?: string | null;
   banner_url?: string | null;
+};
+
+type TrendingItemRow = {
+  artwork_id: string;
+  title: string | null;
+  image_url: string | null;
+  creator_id: string | null;
+
+  listing_id: string | null;
+  listing_type: "fixed_price" | "auction" | "coming_soon" | null;
+  listing_status: "draft" | "active" | "paused" | "ended" | "canceled" | null;
+  currency: string | null;         // e.g. ETH
+  price_native: number | null;     // fixed price (ETH)
+  start_at: string | null;
+  end_at: string | null;
+
+  sales_24h_native: number | null;
+  sales_7d_native: number | null;
+  tx_24h: number | null;
+  tx_7d: number | null;
+  score: number | null;
+
+  is_auction: boolean | null;
 };
 
 type LiveActivityRow = {
@@ -65,7 +90,10 @@ type DiscoverItem = {
   contract_address: string | null;
   collection_id: string | null;
   is_phygital: boolean | null;
-  is_auction?: boolean | null; // from view
+  is_auction?: boolean | null;
+
+  end_at?: string | null;
+  reserve_price?: number | null;
 };
 
 /** ----------------------------------------------------------------
@@ -87,6 +115,52 @@ function percentDelta(cur: number | null | undefined, ref: number | null | undef
   const b = Number(ref ?? 0);
   if (!isFinite(a) || !isFinite(b) || b === 0) return 0;
   return Number((((a - b) / b) * 100).toFixed(1));
+}
+
+function inNextHours(iso: string | null | undefined, hours: number) {
+  if (!iso) return false;
+  const t = new Date(iso).getTime();
+  if (!isFinite(t)) return false;
+  return t - Date.now() <= hours * 3600 * 1000 && t > Date.now();
+}
+
+/** ----------------------------------------------------------------
+ * Top-bid cache (front-end only, batched)
+ * ---------------------------------------------------------------- */
+function useTopBids(listingIds: (string | null)[]) {
+  const [map, setMap] = useState<Record<string, number>>({});
+  useEffect(() => {
+    const ids = Array.from(new Set(listingIds.filter(Boolean) as string[])).filter(
+      (id) => !(id in map)
+    );
+    if (ids.length === 0) return;
+
+    let cancelled = false;
+    (async () => {
+      const entries = await Promise.all(
+        ids.map(async (id) => {
+          try {
+            const b = await fetchTopBid(id);
+            return [id, b?.amount ?? 0] as const;
+          } catch {
+            return [id, 0] as const;
+          }
+        })
+      );
+      if (!cancelled && entries.length) {
+        setMap((cur) => {
+          const next = { ...cur };
+          for (const [id, amt] of entries) next[id] = amt;
+          return next;
+        });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(Array.from(new Set(listingIds.filter(Boolean) as string[])))]);
+  return map;
 }
 
 /** ----------------------------------------------------------------
@@ -111,14 +185,11 @@ function useTrendingCollections(time: TimeRange) {
 
   useEffect(() => {
     let cancelled = false;
-
     (async () => {
       setLoading(true);
-
       const volCol =
         time === "24h" ? "vol_24h_native" : time === "7d" ? "vol_7d_native" : "vol_30d_native";
 
-      // 1) top collections by selected window
       const { data: mv, error } = await supabase
         .from("mv_trending_collections")
         .select("*")
@@ -137,7 +208,6 @@ function useTrendingCollections(time: TimeRange) {
       const base = (mv ?? []) as MVTrendingRow[];
       const ids = base.map((r) => r.collection_id);
 
-      // 2) optional enrichment from `collections`
       let metas: Record<string, CollectionMeta> = {};
       if (ids.length) {
         const { data: cMeta } = await supabase
@@ -147,7 +217,6 @@ function useTrendingCollections(time: TimeRange) {
         (cMeta ?? []).forEach((c) => (metas[c.id] = c));
       }
 
-      // 3) compute a rough delta
       const normalized = base.map((r) => {
         const vol =
           time === "24h"
@@ -185,7 +254,6 @@ function useTrendingCollections(time: TimeRange) {
         setLoading(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
@@ -194,19 +262,49 @@ function useTrendingCollections(time: TimeRange) {
   return { data, loading };
 }
 
-function useLiveActivity() {
-  const [rows, setRows] = useState<LiveActivityRow[]>([]);
-
+function useTrendingItems(limit = 12) {
+  const [rows, setRows] = useState<TrendingItemRow[]>([]);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
+    (async () => {
+      setLoading(true);
+      const { data, error } = await supabase
+        .from("mv_trending_items")
+        .select("*")
+        .order("score", { ascending: false, nullsFirst: false })
+        .limit(limit);
 
+      if (error) {
+        console.error(error.message);
+        if (!cancelled) {
+          setRows([]);
+          setLoading(false);
+        }
+        return;
+      }
+      if (!cancelled) {
+        setRows((data ?? []) as TrendingItemRow[]);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [limit]);
+  return { rows, loading };
+}
+
+function useLiveActivity() {
+  const [rows, setRows] = useState<LiveActivityRow[]>([]);
+  useEffect(() => {
+    let cancelled = false;
     (async () => {
       const { data, error } = await supabase
         .from("v_live_activity_recent")
         .select("*")
         .order("created_at", { ascending: false })
         .limit(50);
-
       if (error) {
         console.error(error.message);
         return;
@@ -214,7 +312,6 @@ function useLiveActivity() {
       if (!cancelled) setRows((data ?? []) as LiveActivityRow[]);
     })();
 
-    // optional realtime stream
     const ch = supabase
       .channel("activity-stream")
       .on("postgres_changes", { event: "INSERT", schema: "public", table: "orders" }, () => {
@@ -244,35 +341,38 @@ function useLiveActivity() {
       cancelled = true;
     };
   }, []);
-
   return rows;
 }
 
-function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
-  const { status, sort, q } = params;
+function useInfiniteGrid(params: {
+  status: Status;
+  sort: Sort;
+  q: string;
+  maxPrice?: number | null;
+  endingSoon?: boolean;
+  newToday?: boolean;
+}) {
+  const { status, sort, q, maxPrice, endingSoon, newToday } = params;
   const [page, setPage] = useState(0);
   const [items, setItems] = useState<DiscoverItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [hasMore, setHasMore] = useState(true);
   const pageSize = 24;
 
-  // reset when filters change
   useEffect(() => {
     setItems([]);
     setPage(0);
     setHasMore(true);
-  }, [status, sort, q]);
+  }, [status, sort, q, maxPrice, endingSoon, newToday]);
 
-  // FETCH — depend only on page + filters (NOT on loading/hasMore)
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (!hasMore) return; // ok to read the current value
+      if (!hasMore) return;
       setLoading(true);
 
       let qb = supabase.from("v_discover_items").select("*");
 
-      // STATUS filters
       if (status === "buy-now") {
         qb = qb.not("listing_id", "is", null).not("price_native", "is", null);
       } else if (status === "on-auction") {
@@ -284,19 +384,20 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
         qb = qb.eq("has_offers", true);
       }
 
-      // SERVER-SIDE SEARCH
       const qstr = q.trim();
       if (qstr.length >= 2) {
         qb = qb.textSearch("search_tsv", qstr, { type: "websearch", config: "simple" });
       }
 
-      // SORT
-      if (sort === "price-asc") qb = qb.order("price_native", { ascending: true, nullsFirst: false });
-      else if (sort === "price-desc") qb = qb.order("price_native", { ascending: false, nullsFirst: true });
-      else if (sort === "recent") qb = qb.order("listed_at", { ascending: false, nullsFirst: false });
-      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false });
+      if (typeof maxPrice === "number" && isFinite(maxPrice) && maxPrice > 0) {
+        qb = qb.lte("price_native", maxPrice);
+      }
 
-      // paginate
+      if (sort === "price-asc") qb = qb.order("price_native", { ascending: true, nullsFirst: false }).order("artwork_id", { ascending: true });
+      else if (sort === "price-desc") qb = qb.order("price_native", { ascending: false, nullsFirst: true }).order("artwork_id", { ascending: true });
+      else if (sort === "recent") qb = qb.order("listed_at", { ascending: false, nullsFirst: false }).order("artwork_id", { ascending: true });
+      else qb = qb.order("updated_at", { ascending: false, nullsFirst: false }).order("artwork_id", { ascending: true });
+
       const from = page * pageSize;
       const to = from + pageSize - 1;
       const { data, error } = await qb.range(from, to);
@@ -310,19 +411,26 @@ function useInfiniteGrid(params: { status: Status; sort: Sort; q: string }) {
         return;
       }
 
-      const batch = (data ?? []) as DiscoverItem[];
+      let batch = (data ?? []) as DiscoverItem[];
+      if (endingSoon) {
+        batch = batch.filter((it) => !!it.is_auction && inNextHours(it.end_at ?? null, 24));
+      }
+      if (newToday) {
+        const since = Date.now() - 24 * 3600 * 1000;
+        batch = batch.filter((it) => (it.listed_at ? new Date(it.listed_at).getTime() >= since : false));
+      }
+
       if (!cancelled) {
         setItems((cur) => [...cur, ...batch]);
         setHasMore(batch.length === pageSize);
         setLoading(false);
       }
     })();
-
     return () => {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page, status, sort, q]); // <-- removed loading/hasMore from deps
+  }, [page, status, sort, q, maxPrice, endingSoon, newToday]);
 
   return { items, loading, hasMore, loadMore: () => setPage((p) => p + 1) };
 }
@@ -353,29 +461,81 @@ function StatPill({ children }: { children: React.ReactNode }) {
   return <span className="px-1.5 py-0.5 rounded-md bg-white/10 text-[11px]">{children}</span>;
 }
 
+function Pill({ children, tone = "neutral" as "neutral" | "success" | "warn" }) {
+  const base =
+    tone === "success"
+      ? "bg-emerald-400 text-black"
+      : tone === "warn"
+      ? "bg-amber-300 text-black"
+      : "bg-black/60 text-white";
+  return <span className={`px-1.5 py-0.5 rounded text-[10px] ${base}`}>{children}</span>;
+}
+
+function Countdown({ endAt }: { endAt?: string | null }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!endAt) return;
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [endAt]);
+  if (!endAt) return null;
+  const end = new Date(endAt).getTime();
+  const ms = Math.max(0, end - now);
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  return (
+    <span className="tabular-nums text-[10px]">
+      {d > 0 ? `${d}d ` : ""}
+      {h.toString().padStart(2, "0")}:{m.toString().padStart(2, "0")}:{sec.toString().padStart(2, "0")}
+    </span>
+  );
+}
+
 /** ----------------------------------------------------------------
  * Page
  * ---------------------------------------------------------------- */
 export default function Discover() {
   // filters
   const [q, setQ] = useState("");
-  const [chain, setChain] = useState<Chain | "all">("all"); // reserved for future
+  const [chain, setChain] = useState<Chain | "all">("all");
   const [status, setStatus] = useState<Status>("all");
   const [time, setTime] = useState<TimeRange>("24h");
-  const [sort, setSort] = useState<Sort>("trending"); // you can switch default to "recent"
+  const [sort, setSort] = useState<Sort>("recent");
+
+  // trending tab
+  const [tTab, setTTab] = useState<TrendingTab>("collections");
+
+  // quick filters
+  const [endingSoon, setEndingSoon] = useState(false);
+  const [newToday, setNewToday] = useState(false);
+  const [maxPrice, setMaxPrice] = useState<string>("");
+
+  const maxPriceNum = useMemo(() => {
+    const n = Number(maxPrice);
+    return isFinite(n) && n > 0 ? n : null;
+  }, [maxPrice]);
 
   const { data: trending, loading: loadingTrending } = useTrendingCollections(time);
+  const { rows: trendingItems, loading: loadingTrendingItems } = useTrendingItems(12);
+
   const activity = useLiveActivity();
-  const { items, loading, hasMore, loadMore } = useInfiniteGrid({ status, sort, q });
+  const { items, loading, hasMore, loadMore } = useInfiniteGrid({
+    status,
+    sort,
+    q,
+    maxPrice: maxPriceNum ?? undefined,
+    endingSoon,
+    newToday,
+  });
 
-  // client-side filter narrows already-fetched rows
-  const filtered = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if (!s) return items;
-    return items.filter((it) => (it.title ?? "").toLowerCase().includes(s));
-  }, [items, q]);
+  // top bids maps (for grids that show auctions)
+  const topBidAllItems = useTopBids(items.map((i) => i.listing_id));
+  const topBidTrendingItems = useTopBids(trendingItems.map((i) => i.listing_id));
 
-  // infinite sentinel
+  // sentinel for infinite scroll
   const sentinelRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const el = sentinelRef.current;
@@ -432,79 +592,215 @@ export default function Discover() {
             </select>
           </div>
         </div>
+
+        {/* quick filters row */}
+        <div className="max-w-7xl mx-auto px-4 pb-3 flex flex-wrap gap-2 items-center">
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="accent-white"
+              checked={endingSoon}
+              onChange={(e) => setEndingSoon(e.target.checked)}
+            />
+            Ending in 24h
+          </label>
+          <label className="flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              className="accent-white"
+              checked={newToday}
+              onChange={(e) => setNewToday(e.target.checked)}
+            />
+            New today
+          </label>
+          <div className="flex items-center gap-2 text-xs">
+            <span>Max price</span>
+            <input
+              className="input h-7 w-28"
+              placeholder="e.g. 0.25"
+              value={maxPrice}
+              onChange={(e) => setMaxPrice(e.target.value)}
+              inputMode="decimal"
+            />
+            <span className="text-white/60">ETH</span>
+          </div>
+          <div className="ml-auto text-[11px] text-white/50">
+            Tip: toggle “On auction” + “Ending in 24h” to see time-sensitive items.
+          </div>
+        </div>
       </div>
 
       {/* Content */}
       <div className="max-w-7xl mx-auto px-4 py-6 space-y-8">
-        {/* Trending Collections */}
+        {/* Trending header with tabs */}
         <section className="space-y-3">
           <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Trending collections</h2>
-            <div className="text-xs text-white/60">Time: {time}</div>
+            <h2 className="text-xl font-semibold">Trending</h2>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setTTab("collections")}
+                className={`px-2 py-1 rounded-md text-xs ${
+                  tTab === "collections" ? "bg-white text-black" : "bg-white/0 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                Collections
+              </button>
+              <button
+                onClick={() => setTTab("items")}
+                className={`px-2 py-1 rounded-md text-xs ${
+                  tTab === "items" ? "bg-white text-black" : "bg-white/0 text-white/70 hover:bg-white/10"
+                }`}
+              >
+                Items
+              </button>
+            </div>
           </div>
 
-          {loadingTrending ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-pulse">
-              {Array.from({ length: 8 }).map((_, i) => (
-                <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden">
-                  <div className="h-28 bg-white/10" />
-                  <div className="p-3 space-y-2">
-                    <div className="h-4 w-32 bg-white/10 rounded" />
-                    <div className="h-4 w-24 bg-white/10 rounded" />
-                    <div className="h-4 w-40 bg-white/10 rounded" />
-                  </div>
+          {/* Collections tab */}
+          {tTab === "collections" && (
+            <>
+              <div className="text-xs text-white/60">Time: {time}</div>
+              {loadingTrending ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-pulse">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden">
+                      <div className="h-28 bg-white/10" />
+                      <div className="p-3 space-y-2">
+                        <div className="h-4 w-32 bg-white/10 rounded" />
+                        <div className="h-4 w-24 bg-white/10 rounded" />
+                        <div className="h-4 w-40 bg-white/10 rounded" />
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : trending && trending.length ? (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-              {trending.map((c) => (
-                <Link
-                  key={c.id}
-                  to={`/collection/${encodeURIComponent(c.name)}`}
-                  className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/20"
-                >
-                  <div className="relative h-28 bg-neutral-900 overflow-hidden">
-                    {c.banner ? (
-                      <img
-                        src={c.banner}
-                        className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition"
-                      />
-                    ) : (
-                      <div className="absolute inset-0 bg-white/5" />
-                    )}
-                    {c.logo ? (
-                      <img
-                        src={c.logo}
-                        className="absolute -bottom-6 left-3 h-14 w-14 rounded-xl border-2 border-black object-cover shadow"
-                      />
-                    ) : null}
-                  </div>
-                  <div className="p-3 pt-7">
-                    <div className="flex items-center justify-between">
-                      <div className="font-semibold truncate">{c.name}</div>
-                      <div className={`text-xs ${c.volumeChangePct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
-                        {c.volumeChangePct >= 0 ? "▲" : "▼"} {Math.abs(c.volumeChangePct)}%
+              ) : trending && trending.length ? (
+                <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {trending.map((c) => (
+                    <Link
+                      key={c.id}
+                      to={`/collection/${encodeURIComponent(c.name)}`}
+                      className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/20"
+                    >
+                      <div className="relative h-28 bg-neutral-900 overflow-hidden">
+                        {c.banner ? (
+                          <img
+                            src={c.banner}
+                            className="absolute inset-0 w-full h-full object-cover opacity-80 group-hover:opacity-100 transition"
+                          />
+                        ) : (
+                          <div className="absolute inset-0 bg-white/5" />
+                        )}
+                        {c.logo ? (
+                          <img
+                            src={c.logo}
+                            className="absolute -bottom-6 left-3 h-14 w-14 rounded-xl border-2 border-black object-cover shadow"
+                          />
+                        ) : null}
+                      </div>
+                      <div className="p-3 pt-7">
+                        <div className="flex items-center justify-between">
+                          <div className="font-semibold truncate">{c.name}</div>
+                          <div className={`text-xs ${c.volumeChangePct >= 0 ? "text-emerald-400" : "text-rose-400"}`}>
+                            {c.volumeChangePct >= 0 ? "▲" : "▼"} {Math.abs(c.volumeChangePct)}%
+                          </div>
+                        </div>
+                        <div className="mt-1 flex items-center justify-between text-sm">
+                          <div className="flex items-center gap-2">
+                            <StatPill>Floor {c.floor}</StatPill>
+                            <StatPill>Vol {c.volume}</StatPill>
+                          </div>
+                          <div className="text-white/60">
+                            <Sparkline points={c.sparkline} />
+                          </div>
+                        </div>
+                        <div className="mt-2 text-xs text-white/60">
+                          {c.items.toLocaleString()} items • {c.owners.toLocaleString()} owners
+                        </div>
+                      </div>
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <div className="card">No trending data.</div>
+              )}
+            </>
+          )}
+
+          {/* Items tab */}
+          {tTab === "items" && (
+            <>
+              {loadingTrendingItems ? (
+                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 animate-pulse">
+                  {Array.from({ length: 8 }).map((_, i) => (
+                    <div key={i} className="rounded-xl overflow-hidden border border-white/10 bg-white/[0.04]">
+                      <div className="aspect-square bg-white/10" />
+                      <div className="p-3 space-y-2">
+                        <div className="h-4 w-24 bg-white/10 rounded" />
+                        <div className="h-4 w-32 bg-white/10 rounded" />
                       </div>
                     </div>
-                    <div className="mt-1 flex items-center justify-between text-sm">
-                      <div className="flex items-center gap-2">
-                        <StatPill>Floor {c.floor}</StatPill>
-                        <StatPill>Vol {c.volume}</StatPill>
-                      </div>
-                      <div className="text-white/60">
-                        <Sparkline points={c.sparkline} />
-                      </div>
-                    </div>
-                    <div className="mt-2 text-xs text-white/60">
-                      {c.items.toLocaleString()} items • {c.owners.toLocaleString()} owners
-                    </div>
-                  </div>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <div className="card">No trending data.</div>
+                  ))}
+                </div>
+              ) : trendingItems.length ? (
+                <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
+                  {trendingItems.map((it) => {
+                    const topBid = it.listing_id ? topBidTrendingItems[it.listing_id] ?? 0 : 0;
+                    const showCountdown = !!it.is_auction && !!it.end_at;
+                    return (
+                      <Link
+                        key={it.artwork_id}
+                        to={`/art/${encodeURIComponent(it.artwork_id)}`}
+                        className="group rounded-xl overflow-hidden border border-white/10 bg-white/[0.04] hover:border-white/20 transition"
+                      >
+                        <div className="relative aspect-square bg-neutral-900">
+                          {it.image_url ? (
+                            <img src={it.image_url} alt={it.title ?? ""} className="absolute inset-0 w-full h-full object-cover" />
+                          ) : (
+                            <div className="absolute inset-0" />
+                          )}
+                          <div className="absolute left-2 top-2 flex gap-1 items-center">
+                            <Pill>ETH</Pill>
+                            {it.is_auction ? <Pill tone="warn">on auction</Pill> : null}
+                          </div>
+                          {showCountdown ? (
+                            <div className="absolute right-2 bottom-2 px-1.5 py-0.5 rounded bg-black/60">
+                              <Countdown endAt={it.end_at!} />
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="p-3">
+                          <div className="font-medium truncate">#{it.title ?? "Untitled"}</div>
+                          <div className="mt-1 flex items-center justify-between text-sm">
+                            <div className="text-white/70">
+                              {it.is_auction ? (
+                                topBid > 0 ? (
+                                  <>Top bid {topBid} {it.currency ?? "ETH"}</>
+                                ) : (
+                                  <span className="text-white/40">No bids yet</span>
+                                )
+                              ) : it.listing_id && it.price_native != null ? (
+                                <>
+                                  {it.price_native} {it.currency ?? "ETH"}
+                                </>
+                              ) : (
+                                <span className="text-white/40">Not listed</span>
+                              )}
+                            </div>
+                            <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
+                              {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
+                            </button>
+                          </div>
+                        </div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="card">
+                  No trending items yet. Try listing something or complete a sale — items with fresh activity appear here.
+                </div>
+              )}
+            </>
           )}
         </section>
 
@@ -568,65 +864,84 @@ export default function Discover() {
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">All items</h2>
             <div className="text-xs text-white/60">
-              {filtered.length.toLocaleString()} results {q ? `(filtered)` : ""}
+              {items.length.toLocaleString()} results {q ? `(filtered)` : ""}
             </div>
           </div>
 
-          {filtered.length === 0 && loading ? (
+          {items.length === 0 && loading ? (
             <GridSkeleton />
-          ) : filtered.length === 0 ? (
-            <div className="card">No items match your filters.</div>
+          ) : items.length === 0 ? (
+            <div className="card">
+              No items match your filters. Try clearing “Ending in 24h” or raising “Max price”.
+            </div>
           ) : (
             <>
               <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-                {filtered.map((it) => (
-                  <Link
-                    key={it.artwork_id}
-                    to={`/art/${encodeURIComponent(it.artwork_id)}`}
-                    className="group rounded-xl overflow-hidden border border-white/10 bg-white/[0.04] hover:border-white/20 transition"
-                  >
-                    <div className="relative aspect-square bg-neutral-900">
-                      {it.image_url ? (
-                        <img src={it.image_url} alt={it.title ?? ""} className="absolute inset-0 w-full h-full object-cover" />
-                      ) : (
-                        <div className="absolute inset-0" />
-                      )}
-                      <div className="absolute left-2 top-2 flex gap-1">
-                        <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">ETH</span>
-                        {it.is_phygital ? (
-                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">phygital</span>
-                        ) : null}
-                        {it.is_licensable ? (
-                          <span className="px-1.5 py-0.5 rounded bg-black/60 text-[10px]">licensable</span>
-                        ) : null}
-                      </div>
-                      <button
-                        className="absolute right-2 top-2 h-8 w-8 rounded-md bg-black/50 backdrop-blur grid place-items-center opacity-0 group-hover:opacity-100 transition"
-                        title="Favorite"
-                        onClick={(e) => e.preventDefault()}
-                      >
-                        ♥
-                      </button>
-                    </div>
-                    <div className="p-3">
-                      <div className="font-medium truncate">#{it.title ?? "Untitled"}</div>
-                      <div className="mt-1 flex items-center justify-between text-sm">
-                        <div className="text-white/70">
-                          {it.listing_id && it.price_native != null ? (
-                            <>
-                              {it.price_native} {it.currency ?? "ETH"}
-                            </>
-                          ) : (
-                            <span className="text-white/40">Not listed</span>
-                          )}
+                {items.map((it) => {
+                  const topBid = it.listing_id ? topBidAllItems[it.listing_id] ?? 0 : 0;
+                  const reserve = it.reserve_price ?? null;
+                  const reserveMet = reserve != null && topBid >= reserve && topBid > 0;
+                  const showCountdown = !!it.is_auction && !!it.end_at;
+
+                  return (
+                    <Link
+                      key={it.artwork_id}
+                      to={`/art/${encodeURIComponent(it.artwork_id)}`}
+                      className="group rounded-xl overflow-hidden border border-white/10 bg-white/[0.04] hover:border-white/20 transition"
+                    >
+                      <div className="relative aspect-square bg-neutral-900">
+                        {it.image_url ? (
+                          <img src={it.image_url} alt={it.title ?? ""} className="absolute inset-0 w-full h-full object-cover" />
+                        ) : (
+                          <div className="absolute inset-0" />
+                        )}
+                        <div className="absolute left-2 top-2 flex gap-1 items-center">
+                          <Pill>ETH</Pill>
+                          {it.is_phygital ? <Pill>phygital</Pill> : null}
+                          {it.is_licensable ? <Pill>licensable</Pill> : null}
+                          {it.is_auction ? (
+                            reserveMet ? <Pill tone="success">reserve met</Pill> : <Pill tone="warn">on auction</Pill>
+                          ) : null}
                         </div>
-                        <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
-                          {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
+                        <button
+                          className="absolute right-2 top-2 h-8 w-8 rounded-md bg-black/50 backdrop-blur grid place-items-center opacity-0 group-hover:opacity-100 transition"
+                          title="Favorite"
+                          onClick={(e) => e.preventDefault()}
+                        >
+                          ♥
                         </button>
+                        {showCountdown ? (
+                          <div className="absolute right-2 bottom-2 px-1.5 py-0.5 rounded bg-black/60">
+                            <Countdown endAt={it.end_at!} />
+                          </div>
+                        ) : null}
                       </div>
-                    </div>
-                  </Link>
-                ))}
+                      <div className="p-3">
+                        <div className="font-medium truncate">#{it.title ?? "Untitled"}</div>
+                        <div className="mt-1 flex items-center justify-between text-sm">
+                          <div className="text-white/70">
+                            {it.is_auction ? (
+                              topBid > 0 ? (
+                                <>Top bid {topBid} {it.currency ?? "ETH"}</>
+                              ) : (
+                                <span className="text-white/40">No bids yet</span>
+                              )
+                            ) : it.listing_id && it.price_native != null ? (
+                              <>
+                                {it.price_native} {it.currency ?? "ETH"}
+                              </>
+                            ) : (
+                              <span className="text-white/40">Not listed</span>
+                            )}
+                          </div>
+                          <button className="text-xs px-2 py-1 rounded-md bg-white text-black hover:bg-white/90">
+                            {it.is_auction ? "Bid" : it.listing_id ? "Buy" : "View"}
+                          </button>
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
               </div>
 
               {/* sentinel for infinite scroll */}

@@ -11,6 +11,7 @@ import { sha256File } from "../../lib/hashFile";
 import MintModal from "../../components/MintModal";
 import useMinBusy from "../../hooks/useMinBusy";
 import CropModal from "../../components/CropModal";
+import { createCollection, fetchMyCollections, slugify, type Collection } from "../../lib/collections";
 
 /* ------------------------------------------------------------------------------------ */
 
@@ -30,7 +31,6 @@ type LocalImage = {
   original: File;
   current: File;
   previewUrl: string;
-  // similarity metadata
   checking?: boolean;
   hash?: string | null;
   dupes?: DuplicateHit[] | null;
@@ -101,7 +101,7 @@ function InfoBar({ tone = "default", children }: { tone?: "default" | "warning" 
   return <div className={`text-xs rounded-lg px-3 py-2 border ${tones[tone]}`}>{children}</div>;
 }
 
-/* -------- Video Overlay (uses your loading mp4 + THICCCBOI font) -------- */
+/* -------- Video Overlay -------- */
 
 function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin" }) {
   if (!open) return null;
@@ -114,13 +114,7 @@ function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin
   return (
     <>
       <style>{`
-        @font-face {
-          font-family: 'THICCCBOI-BOLD';
-          src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype');
-          font-weight: bold;
-          font-style: normal;
-          font-display: swap;
-        }
+        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
         .thicccboi { font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: 0.2px; }
       `}</style>
       <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
@@ -137,17 +131,88 @@ function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin
   );
 }
 
+/* ------------------------------ New Collection Modal ------------------------------ */
+
+function NewCollectionModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: (c: Collection) => void;
+}) {
+  const [name, setName] = useState("");
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-50">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl border border-white/10 bg-neutral-950 p-5">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-lg font-semibold">New collection</div>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="block text-sm mb-1">Name *</label>
+            <input className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
+            <div className="text-[11px] text-white/50 mt-1">Slug: <code>{slugify(name) || "—"}</code></div>
+          </div>
+          <div>
+            <label className="block text-sm mb-1">Description (optional)</label>
+            <textarea className="input w-full min-h-[80px]" value={desc} onChange={(e) => setDesc(e.target.value)} />
+          </div>
+          {err && <div className="text-xs text-rose-400">{err}</div>}
+          <div className="flex gap-2">
+            <button
+              className="btn"
+              disabled={!name.trim() || busy}
+              onClick={async () => {
+                setBusy(true);
+                setErr(null);
+                try {
+                  const c = await createCollection({ name: name.trim(), description: desc.trim() || undefined });
+                  onCreated(c);
+                  onClose();
+                } catch (e: any) {
+                  setErr(e?.message ?? "Failed to create collection");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Creating…" : "Create"}
+            </button>
+            <button className="btn" onClick={onClose}>Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------------------------------ */
 
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
 
-  // NEW: pre-step for selecting physical vs digital
+  // New: pre-step
   const [artType, setArtType] = useState<ArtworkType | null>(null);
-  const [step, setStep] = useState<Step>(0); // 0=new pre-step
+  const [step, setStep] = useState<Step>(0);
 
-  // Step 1 (upload/dupe)
+  // New: collections
+  const [collections, setCollections] = useState<Collection[]>([]);
+  const [collectionId, setCollectionId] = useState<string | "">(""); // '' = no collection
+  const [collModalOpen, setCollModalOpen] = useState(false);
+
+  // Step 1 media
   const [images, setImages] = useState<LocalImage[]>([]);
   const [ackOriginal, setAckOriginal] = useState(false);
   const [globalMsg, setGlobalMsg] = useState<string | null>(null);
@@ -155,7 +220,7 @@ export default function CreateArtworkWizard() {
   // Cropper
   const [cropTargetIdx, setCropTargetIdx] = useState<number | null>(null);
 
-  // Step 2 (details form)
+  // Step 2 form
   const {
     register,
     handleSubmit,
@@ -186,24 +251,22 @@ export default function CreateArtworkWizard() {
     },
   });
 
-  // Step 3 (pin & mint)
+  // Step 3 pin & mint
   const [pinning, setPinning] = useState(false);
   const [pinMsg, setPinMsg] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
   const [artworkId, setArtworkId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
 
-  // Derived: any image still being scanned? any dupes found?
   const anyChecking = images.some((im) => im.checking);
   const allDupes = images.flatMap((im) => im.dupes ?? []);
   const anyDupes = allDupes.length > 0;
 
-  // Overlays
   const showDupeOverlay = useMinBusy(anyChecking, 5000);
   const showPinOverlay = useMinBusy(pinning, 5000);
   const overlayOpen = showDupeOverlay || showPinOverlay;
 
-  // Require login
+  // auth
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -211,7 +274,20 @@ export default function CreateArtworkWizard() {
     })();
   }, []);
 
-  // Cleanup URLs on unmount/change
+  // load my collections when user is known
+  useEffect(() => {
+    if (!userId) return;
+    (async () => {
+      try {
+        const rows = await fetchMyCollections();
+        setCollections(rows);
+      } catch {
+        setCollections([]);
+      }
+    })();
+  }, [userId]);
+
+  // cleanup URLs
   useEffect(() => {
     return () => {
       images.forEach((im) => {
@@ -220,7 +296,6 @@ export default function CreateArtworkWizard() {
     };
   }, [images]);
 
-  // Helper: run similarity for a single image index (sequentially)
   async function checkImageDupes(idx: number, file: File) {
     setImages((arr) => {
       const next = [...arr];
@@ -236,7 +311,6 @@ export default function CreateArtworkWizard() {
         .select("id,title,image_url,creator_id")
         .eq("image_sha256", hash)
         .limit(5);
-
       if (error) throw error;
       const dupes = (data as DuplicateHit[]) ?? [];
 
@@ -257,7 +331,6 @@ export default function CreateArtworkWizard() {
     }
   }
 
-  // Add media
   async function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
@@ -289,7 +362,6 @@ export default function CreateArtworkWizard() {
     e.currentTarget.value = "";
   }
 
-  // Crop modal helpers
   const currentCropFile = useMemo(
     () => (cropTargetIdx == null ? null : images[cropTargetIdx]?.current) as File | null,
     [cropTargetIdx, images]
@@ -314,7 +386,7 @@ export default function CreateArtworkWizard() {
     });
   }
 
-  // STEP 2 → 3: create artwork, then pin
+  // STEP 2 → 3
   const onSubmitDetails = handleSubmit(async (values) => {
     if (!userId || images.length === 0) {
       setGlobalMsg("Please sign in and upload at least one image.");
@@ -335,10 +407,8 @@ export default function CreateArtworkWizard() {
     setGlobalMsg(null);
 
     try {
-      // 1) upload cover (images[0])
       const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
 
-      // 2) insert row (NOTE: includes type + physical_status)
       const payload: any = {
         creator_id: userId,
         owner_id: userId,
@@ -373,11 +443,13 @@ export default function CreateArtworkWizard() {
         tags: values.tags ?? [],
         is_nsfw: values.is_nsfw ?? false,
 
-        // NEW:
         type: artType,
         physical_status: artType === "physical" ? "with_creator" : null,
 
         pin_status: "pending",
+
+        // NEW: optional collection
+        collection_id: collectionId || null,
       };
 
       const { data: row, error } = await supabase.from("artworks").insert(payload).select("id").single();
@@ -386,7 +458,6 @@ export default function CreateArtworkWizard() {
       setArtworkId(row.id);
       setStep(3);
 
-      // 2b) upload additional images → artwork_files (best-effort)
       if (images.length > 1) {
         const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
         const records = uploads.map((up, i) => ({
@@ -397,12 +468,9 @@ export default function CreateArtworkWizard() {
         }));
         try {
           await supabase.from("artwork_files").insert(records);
-        } catch {
-          /* ignore */
-        }
+        } catch {}
       }
 
-      // 3) pin
       setPinning(true);
       setPinMsg("Pinning to IPFS…");
 
@@ -415,7 +483,6 @@ export default function CreateArtworkWizard() {
       setPinData(pin as PinResp);
       setPinMsg("Pinned ✔ — ready to mint");
 
-      // publish after successful pin (best-effort)
       try {
         await supabase.from("artworks").update({ status: "active" }).eq("id", row.id);
       } catch {}
@@ -437,80 +504,50 @@ export default function CreateArtworkWizard() {
     );
   }
 
-  // ── STEP 0: CHOOSE ARTWORK TYPE ──────────────────────────────────────────
-if (step === 0) {
-  return (
-    <div className="max-w-4xl mx-auto p-8">
-      <h1 className="text-3xl font-semibold">What are you creating?</h1>
-      <p className="text-white/70 mt-1">
-        Pick the format first — you can still add listing details later.
-      </p>
+  // STEP 0
+  if (step === 0) {
+    return (
+      <div className="max-w-4xl mx-auto p-8">
+        <h1 className="text-3xl font-semibold">What are you creating?</h1>
+        <p className="text-white/70 mt-1">Pick the format first — you can still add listing details later.</p>
 
-      <div className="mt-6 grid sm:grid-cols-2 gap-4">
-        {/* Digital card */}
-        <button
-          className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
-          onClick={() => {
-            setArtType("digital");
-            setStep(1);
-          }}
-          aria-label="Create digital artwork"
-        >
-          {/* Icon on top */}
-          <img
-            src="/images/digital-icon.svg"
-            alt=""
-            width={160}
-            height={160}
-            className="h-10 w-10 mb-3"
-            loading="eager"
-          />
-          <div className="text-lg font-semibold">Digital Artwork</div>
-          <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
-            <li>On-chain token only</li>
-            <li>Best for images, videos, or generative pieces</li>
-            <li>No shipping management</li>
-          </ul>
-        </button>
+        <div className="mt-6 grid sm:grid-cols-2 gap-4">
+          <button
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
+            onClick={() => { setArtType("digital"); setStep(1); }}
+            aria-label="Create digital artwork"
+          >
+            <img src="/images/digital-icon.svg" alt="" width={160} height={160} className="h-10 w-10 mb-3" loading="eager" />
+            <div className="text-lg font-semibold">Digital Artwork</div>
+            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+              <li>On-chain token only</li>
+              <li>Best for images, videos, or generative pieces</li>
+              <li>No shipping management</li>
+            </ul>
+          </button>
 
-        {/* Physical card */}
-        <button
-          className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
-          onClick={() => {
-            setArtType("physical");
-            setStep(1);
-          }}
-          aria-label="Create physical artwork"
-        >
-          {/* Icon on top */}
-          <img
-            src="/images/physical-icon.svg"
-            alt=""
-            width={160}
-            height={160}
-            className="h-10 w-10 mb-3"
-            loading="eager"
-          />
-          <div className="text-lg font-semibold">Physical Artwork</div>
-          <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
-            <li>Includes shipping &amp; scan events</li>
-            <li>Track status (with creator / in transit / with buyer)</li>
-            <li>Great for paintings, prints, sculptures</li>
-          </ul>
-        </button>
+          <button
+            className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
+            onClick={() => { setArtType("physical"); setStep(1); }}
+            aria-label="Create physical artwork"
+          >
+            <img src="/images/physical-icon.svg" alt="" width={160} height={160} className="h-10 w-10 mb-3" loading="eager" />
+            <div className="text-lg font-semibold">Physical Artwork</div>
+            <ul className="text-sm text-white/70 mt-2 list-disc pl-5 space-y-1">
+              <li>Includes shipping &amp; scan events</li>
+              <li>Track status (with creator / in transit / with buyer)</li>
+              <li>Great for paintings, prints, sculptures</li>
+            </ul>
+          </button>
+        </div>
+
+        <div className="mt-6">
+          <button className="btn" onClick={() => nav(-1 as any)}>Back</button>
+        </div>
       </div>
+    );
+  }
 
-      <div className="mt-6">
-        <button className="btn" onClick={() => nav(-1 as any)}>
-          Back
-        </button>
-      </div>
-    </div>
-  );
-}
-
-
-  // (Optional) tiny label showing the chosen type
   const TypeChip = () => (
     <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-white/10 border border-white/10">
       {artType === "physical" ? "PHYSICAL" : "DIGITAL"}
@@ -527,23 +564,18 @@ if (step === 0) {
             <TypeChip />
           </div>
           <h1 className="text-2xl font-semibold">Create artwork</h1>
-          <div className="text-sm text-white/60">
-            Publish immediately — items show right away. Great for evolving collections.
-          </div>
+          <div className="text-sm text-white/60">Publish immediately — items show right away. Great for evolving collections.</div>
         </div>
         <Stepper step={step as 1 | 2 | 3} />
       </div>
 
       {globalMsg && <InfoBar tone="warning">{globalMsg}</InfoBar>}
 
-      {/* ── STEP 1: MEDIA ───────────────────────────────────────────────────── */}
+      {/* STEP 1 */}
       {step === 1 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
-            <Section
-              title="Upload media"
-              desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5."
-            >
+            <Section title="Upload media" desc="Photos up to ~8 MB. JPG / PNG / WebP. Prefer square or 4:5.">
               <div className="flex flex-col items-center justify-center text-center gap-4 py-4">
                 <div className="h-12 w-12 rounded-full bg-white/8 grid place-items-center border border-white/10">
                   <span className="text-xl">⤴</span>
@@ -558,45 +590,23 @@ if (step === 0) {
             {/* Thumbs */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
               {images.map((im, i) => (
-                <div
-                  key={i}
-                  className={`relative rounded-xl overflow-hidden border ${
-                    i === 0 ? "border-white/30" : "border-white/10"
-                  } bg-neutral-900`}
-                >
+                <div key={i} className={`relative rounded-xl overflow-hidden border ${i === 0 ? "border-white/30" : "border-white/10"} bg-neutral-900`}>
                   <img src={im.previewUrl} className="h-40 w-full object-cover" />
                   {im.checking && (
-                    <div className="absolute left-2 top-2 text-[11px] px-1.5 py-0.5 rounded bg-white/10 border border-white/20">
-                      scanning…
-                    </div>
+                    <div className="absolute left-2 top-2 text-[11px] px-1.5 py-0.5 rounded bg-white/10 border border-white/20">scanning…</div>
                   )}
                   {im.dupes && im.dupes.length > 0 && !im.checking && (
-                    <div
-                      className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow"
-                      title="Possible duplicate"
-                    />
+                    <div className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow" title="Possible duplicate" />
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-2 flex gap-2 bg-black/40 backdrop-blur">
-                    <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(i)}>
-                      Crop
-                    </button>
-                    {i !== 0 && (
-                      <button className="btn px-2 py-1 text-xs" onClick={() => setAsCover(i)}>
-                        Set cover
-                      </button>
-                    )}
-                    <button className="btn px-2 py-1 text-xs" onClick={() => removeImage(i)}>
-                      Remove
-                    </button>
+                    <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(i)}>Crop</button>
+                    {i !== 0 && <button className="btn px-2 py-1 text-xs" onClick={() => setAsCover(i)}>Set cover</button>}
+                    <button className="btn px-2 py-1 text-xs" onClick={() => removeImage(i)}>Remove</button>
                   </div>
                 </div>
               ))}
               {Array.from({ length: Math.max(0, MAX_IMAGES - images.length) }).map((_, idx) => (
-                <label
-                  key={`ph-${idx}`}
-                  className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] grid place-items-center h-40 cursor-pointer hover:border-white/20"
-                  title="Add images"
-                >
+                <label key={`ph-${idx}`} className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] grid place-items-center h-40 cursor-pointer hover:border-white/20" title="Add images">
                   <input type="file" accept="image/*" multiple hidden onChange={onPick} />
                   <div className="text-xs text-white/60">Upload</div>
                 </label>
@@ -605,15 +615,10 @@ if (step === 0) {
 
             {anyDupes && (
               <Section title="Potential duplicates">
-                <div className="text-sm mb-2">
-                  We found artworks with the same file. Please confirm you are the original creator to continue:
-                </div>
+                <div className="text-sm mb-2">We found artworks with the same file. Please confirm you are the original creator to continue:</div>
                 <div className="grid gap-2">
                   {allDupes.map((d, idx) => (
-                    <div
-                      key={`${d.id}-${idx}`}
-                      className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]"
-                    >
+                    <div key={`${d.id}-${idx}`} className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]">
                       {d.image_url && <img src={d.image_url} className="h-14 w-14 object-cover rounded" />}
                       <div className="text-sm">
                         <div className="font-medium">{d.title ?? "Untitled"}</div>
@@ -623,24 +628,14 @@ if (step === 0) {
                   ))}
                 </div>
                 <label className="inline-flex items-center gap-2 mt-3">
-                  <input
-                    type="checkbox"
-                    checked={ackOriginal}
-                    onChange={(e) => setAckOriginal(e.target.checked)}
-                  />
-                  <span className="text-sm">
-                    I am the original creator and have the rights to mint this artwork.
-                  </span>
+                  <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
+                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
                 </label>
               </Section>
             )}
 
             <div className="flex gap-3">
-              <button
-                className="btn"
-                disabled={images.length === 0 || anyChecking || (anyDupes && !ackOriginal)}
-                onClick={() => setStep(2)}
-              >
+              <button className="btn" disabled={images.length === 0 || anyChecking || (anyDupes && !ackOriginal)} onClick={() => setStep(2)}>
                 Continue
               </button>
               <button className="btn" onClick={() => setStep(0)}>Change type</button>
@@ -652,11 +647,7 @@ if (step === 0) {
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
                 <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
-                  {images[0] ? (
-                    <img src={images[0].previewUrl} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
-                  )}
+                  {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>}
                 </div>
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
@@ -668,7 +659,7 @@ if (step === 0) {
         </div>
       )}
 
-      {/* ── STEP 2: DETAILS ─────────────────────────────────────────────────── */}
+      {/* STEP 2 */}
       {step === 2 && (
         <form onSubmit={onSubmitDetails} className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-6">
@@ -690,50 +681,54 @@ if (step === 0) {
               </div>
             </Section>
 
-            {/* For physical items, the Dimensions section is especially useful */}
+            {/* NEW: Collection picker */}
+            <Section title="Collection" desc="Optional — group this item under a collection you own.">
+              <div className="flex items-center gap-2">
+                <select
+                  className="input flex-1"
+                  value={collectionId}
+                  onChange={(e) => setCollectionId(e.target.value as any)}
+                >
+                  <option value="">— No collection —</option>
+                  {collections.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <button type="button" className="btn" onClick={() => setCollModalOpen(true)}>
+                  + New
+                </button>
+              </div>
+              <div className="text-xs text-white/60 mt-1">
+                You can change this later from the artwork page.
+              </div>
+            </Section>
+
+            {/* Dimensions / etc. (unchanged) */}
             <Section title="Dimensions (optional)">
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm">Width</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("width", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                  <input className="input" type="number" step="0.01"
+                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Height</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("height", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                  <input className="input" type="number" step="0.01"
+                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Depth</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("depth", {
-                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                    })}
+                  <input className="input" type="number" step="0.01"
+                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
-                  <select
-                    className="input"
-                    {...register("dim_unit", {
-                      setValueAs: (v) => (v === "" ? undefined : v),
-                    })}
-                  >
+                  <select className="input" {...register("dim_unit", { setValueAs: (v) => (v === "" ? undefined : v) })}>
                     <option value=""></option>
                     <option value="cm">cm</option>
                     <option value="in">in</option>
@@ -741,7 +736,6 @@ if (step === 0) {
                   </select>
                 </div>
               </div>
-              {/* Optional physical hint */}
               {artType === "physical" && (
                 <p className="text-xs text-white/60 mt-2">
                   This item will start with status <code>with_creator</code>. You can update shipping later.
@@ -765,37 +759,23 @@ if (step === 0) {
             <Section title="Royalties (optional)">
               <div>
                 <label className="block text-sm">Royalty (bps)</label>
-                <input
-                  className="input"
-                  type="number"
-                  {...register("royalty_bps", {
-                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
-                  })}
+                <input className="input" type="number"
+                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
                 />
                 <p className="text-xs text-white/60 mt-1">500 bps = 5%.</p>
               </div>
             </Section>
 
             <div className="flex items-center gap-3">
-              <button className="btn" type="submit">
-                Continue
-              </button>
-              <button type="button" className="btn" onClick={() => setStep(1)}>
-                Back
-              </button>
-              <button type="button" className="btn" onClick={() => setStep(0)}>
-                Change type
-              </button>
+              <button className="btn" type="submit">Continue</button>
+              <button type="button" className="btn" onClick={() => setStep(1)}>Back</button>
+              <button type="button" className="btn" onClick={() => setStep(0)}>Change type</button>
             </div>
 
             {anyDupes && (
               <InfoBar tone="warning">
                 <label className="inline-flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={ackOriginal}
-                    onChange={(e) => setAckOriginal(e.target.checked)}
-                  />
+                  <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
                   <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
                 </label>
               </InfoBar>
@@ -807,15 +787,13 @@ if (step === 0) {
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
                 <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
-                  {images[0] ? (
-                    <img src={images[0].previewUrl} className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
-                  )}
+                  {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>}
                 </div>
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
-                  <div className="text-xs text-white/60">By you • Not listed</div>
+                  <div className="text-xs text-white/60">
+                    By you • {collectionId ? `In ${collections.find(c => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
+                  </div>
                 </div>
                 {images.length > 1 && (
                   <div className="grid grid-cols-5 gap-2 mt-2">
@@ -830,7 +808,7 @@ if (step === 0) {
         </form>
       )}
 
-      {/* ── STEP 3: PREVIEW & MINT ──────────────────────────────────────────── */}
+      {/* STEP 3 */}
       {step === 3 && (
         <div className="grid gap-6 lg:grid-cols-12">
           <div className="lg:col-span-7 space-y-4">
@@ -863,7 +841,16 @@ if (step === 0) {
         </div>
       )}
 
-      {/* Mint modal */}
+      {/* Modals / overlays */}
+      <NewCollectionModal
+        open={collModalOpen}
+        onClose={() => setCollModalOpen(false)}
+        onCreated={(c) => {
+          setCollections((cur) => [c, ...cur]);
+          setCollectionId(c.id);
+        }}
+      />
+
       {showMint && artworkId && pinData?.tokenURI && (
         <MintModal
           artworkId={artworkId}
@@ -875,10 +862,8 @@ if (step === 0) {
         />
       )}
 
-      {/* Overlays */}
       <VideoOverlay open={overlayOpen} message={showPinOverlay ? "pin" : "scan"} />
 
-      {/* Crop modal */}
       {cropTargetIdx != null && currentCropFile && (
         <CropModal
           file={currentCropFile}
@@ -890,9 +875,7 @@ if (step === 0) {
             const existing = images[idx];
             if (!existing) return setCropTargetIdx(null);
 
-            const nextFile = new File([blob], existing.original.name.replace(/\.\w+$/, "") + ".jpg", {
-              type: "image/jpeg",
-            });
+            const nextFile = new File([blob], existing.original.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
             const nextPreview = URL.createObjectURL(nextFile);
 
             setImages((arr) => {

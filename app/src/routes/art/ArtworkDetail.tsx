@@ -1,4 +1,3 @@
-// app/src/routes/art/ArtworkDetail.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -17,6 +16,7 @@ import {
 import RequestLicenseModal from "../../components/RequestLicenseModal";
 import PhysicalBadge from "../../components/art/PhysicalBadge";
 import ShipmentsPanel from "../../components/shipping/ShipmentsPanel";
+import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
 
 /* ------------------------------ WalletModal ------------------------------ */
 
@@ -99,6 +99,7 @@ type Artwork = {
   token_uri?: string | null;
   type?: "digital" | "physical" | null;
   physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
+  collection_id?: string | null; // <— ensure this exists in your table
 };
 
 type ArtworkFile = {
@@ -115,6 +116,14 @@ type Profile = {
   avatar_url: string | null;
 };
 
+type CollectionMeta = {
+  id: string;
+  slug: string | null;
+  name: string | null;
+  logo_url: string | null;
+  banner_url: string | null;
+};
+
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
 
 type SaleRow = {
@@ -125,6 +134,14 @@ type SaleRow = {
   currency: string;
   sold_at: string;
   tx_hash: string | null;
+};
+
+// Optional offers table (safe if the table doesn't exist)
+type OfferRow = {
+  amount?: number | null;
+  price?: number | null; // tolerate either column name
+  currency?: string | null;
+  status?: string | null;
 };
 
 /* ------------------------------ small UI helpers ------------------------------ */
@@ -242,6 +259,19 @@ function HeartIcon(props: any) {
   );
 }
 
+/* ------------------------------ helpers ------------------------------ */
+
+function fmtCurrency(n: number | null | undefined, code?: string | null) {
+  if (n == null || !isFinite(Number(n))) return "—";
+  const c = (code ?? "USD").toUpperCase();
+  if (c === "ETH") return `${Number(n).toString()} ETH`;
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency: c }).format(Number(n));
+  } catch {
+    return `${Number(n)} ${c}`;
+  }
+}
+
 /* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -251,6 +281,7 @@ export default function ArtworkDetail() {
   const [art, setArt] = useState<Artwork | null>(null);
   const [creator, setCreator] = useState<Profile | null>(null);
   const [owner, setOwner] = useState<Profile | null>(null);
+  const [collection, setCollection] = useState<CollectionMeta | null>(null);
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -271,6 +302,9 @@ export default function ArtworkDetail() {
   const MIN_INC_BPS = 500;
   const [topBid, setTopBid] = useState<Bid | null>(null);
 
+  // offers (fixed-price) – optional table; safe to fail
+  const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(null);
+
   // bid UI
   const [bidInput, setBidInput] = useState<string>("");
   const [bidMsg, setBidMsg] = useState<string | null>(null);
@@ -280,7 +314,7 @@ export default function ArtworkDetail() {
   const [files, setFiles] = useState<ArtworkFile[]>([]);
   const [mainUrl, setMainUrl] = useState<string | null>(null);
 
-  // tabs (OpenSea-like)
+  // tabs
   const [tab, setTab] = useState<"details" | "orders" | "activity">("details");
 
   // owners & history
@@ -317,7 +351,7 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // load artwork + creator/owner + listing + extra files
+  // load artwork + creator/owner + listing + extra files (+ collection)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -328,7 +362,7 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
+            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
           )
           .eq("id", id)
           .maybeSingle();
@@ -354,7 +388,7 @@ export default function ArtworkDetail() {
                 .select("id,username,display_name,avatar_url")
                 .eq("id", (data as Artwork).owner_id as string)
                 .maybeSingle()
-            : Promise.resolve({ data: null, error: null }),
+            : Promise.resolve({ data: null, error: null } as any),
           fetchActiveListingForArtwork((data as Artwork).id),
           supabase
             .from("artwork_files")
@@ -369,7 +403,21 @@ export default function ArtworkDetail() {
         setActiveListing(l as any);
         setFiles(((af.data as any[]) ?? []).filter((f) => !!f?.url));
 
+        // COLLECTION look-up (no 'title' field!)
+        const collId = (data as Artwork).collection_id || null;
+        if (collId) {
+          const { data: coll } = await supabase
+            .from("collections")
+            .select("id,slug,name,logo_url,banner_url")
+            .eq("id", collId)
+            .maybeSingle();
+          setCollection((coll as CollectionMeta) || null);
+        } else {
+          setCollection(null);
+        }
+
         await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
+        await loadTopOfferSafe((data as Artwork).id);
 
         if (l && (l as any).type === "auction") {
           const tb = await fetchTopBid((l as any).id);
@@ -464,6 +512,33 @@ export default function ArtworkDetail() {
     );
   }
 
+  // Try to fetch highest open offer; safe if table doesn't exist
+  async function loadTopOfferSafe(artworkId: string) {
+    try {
+      const { data, error } = await supabase
+        .from("offers")
+        .select("*")
+        .eq("artwork_id", artworkId)
+        .eq("status", "open")
+        .order("amount", { ascending: false, nullsFirst: false })
+        .limit(1);
+
+      if (error) throw error;
+      const row = (data?.[0] || null) as OfferRow | null;
+      if (row) {
+        const amount = (row.amount ?? row.price ?? null) as number | null;
+        const currency = (row.currency ?? "USD") as string;
+        if (amount != null) setTopOffer({ amount, currency });
+        else setTopOffer(null);
+      } else {
+        setTopOffer(null);
+      }
+    } catch {
+      // Table may not exist – just ignore
+      setTopOffer(null);
+    }
+  }
+
   async function handlePin() {
     if (!art?.id) return;
     setPinLoading(true);
@@ -479,7 +554,7 @@ export default function ArtworkDetail() {
       const fresh = await supabase
         .from("artworks")
         .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status"
+          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
         )
         .eq("id", art.id)
         .maybeSingle();
@@ -687,7 +762,6 @@ export default function ArtworkDetail() {
     return Math.max(reserve, base || reserve || 0);
   }, [topBid, activeListing, isAuction]);
 
-  // ✅ This hook must be above any early returns to keep hook order stable
   const galleryThumbs = useMemo(
     () =>
       ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
@@ -695,6 +769,19 @@ export default function ArtworkDetail() {
         .slice(0, 10),
     [art?.image_url, files]
   );
+
+  // The value to show in "Top offer"
+  const displayedTopOffer = useMemo(() => {
+    // 1) active auction top bid
+    if (isAuction && topBid) {
+      return { amount: topBid.amount, currency: activeListing?.sale_currency ?? "ETH" };
+    }
+    // 2) highest open offer (if offers table exists)
+    if (topOffer) return topOffer;
+    // 3) fallback to last/most recent sale
+    if (sales?.[0]) return { amount: sales[0].price, currency: sales[0].currency };
+    return null;
+  }, [isAuction, topBid, activeListing?.sale_currency, topOffer, sales]);
 
   /* ------------------------------ render ------------------------------ */
 
@@ -726,13 +813,6 @@ export default function ArtworkDetail() {
       </div>
     );
   }
-
-  const usdApprox =
-    activeListing &&
-    activeListing.sale_currency?.toUpperCase() === "ETH" &&
-    activeListing.fixed_price
-      ? ""
-      : "";
 
   const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
 
@@ -845,7 +925,15 @@ export default function ArtworkDetail() {
                   </button>
                 </>
               )}
-              <button className="rounded-lg p-2 hover:bg-white/10" title="Copy link">⧉</button>
+              <button
+                className="rounded-lg p-2 hover:bg-white/10"
+                title="Copy link"
+                onClick={() => {
+                  navigator.clipboard?.writeText(window.location.href);
+                }}
+              >
+                ⧉
+              </button>
               <button className="rounded-lg p-2 hover:bg-white/10" title="Favorite">
                 <HeartIcon />
               </button>
@@ -858,20 +946,24 @@ export default function ArtworkDetail() {
             <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
               <StatBox
                 label="Top offer"
-                value={topBid ? `${topBid.amount} ${activeListing?.sale_currency || "ETH"}` : "—"}
+                value={
+                  displayedTopOffer
+                    ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency)
+                    : "—"
+                }
               />
               <StatBox
-                label="Collection floor"
+                label="Original price"
                 value={
-                  activeListing
-                    ? `${activeListing.fixed_price ?? "—"} ${activeListing.sale_currency ?? ""}`
+                  sales.length
+                    ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency)
                     : "—"
                 }
               />
               <StatBox label="Rarity" value={"—"} />
               <StatBox
                 label="Last sale"
-                value={sales[0] ? `${sales[0].price} ${sales[0].currency}` : "—"}
+                value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"}
               />
             </div>
           </Card>
@@ -885,11 +977,11 @@ export default function ArtworkDetail() {
                     <div className="text-sm">
                       <div className="text-white/60">Highest bid</div>
                       <div className="text-2xl font-semibold mt-0.5">
-                        {topBid ? `${topBid.amount} ${activeListing.sale_currency}` : "—"}
+                        {topBid ? fmtCurrency(topBid.amount, activeListing.sale_currency) : "—"}
                       </div>
                       {(activeListing as any).reserve_price && (
                         <div className="text-[11px] text-white/60 mt-1">
-                          Reserve: {(activeListing as any).reserve_price} {activeListing.sale_currency}
+                          Reserve: {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)}
                           {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
                         </div>
                       )}
@@ -897,9 +989,8 @@ export default function ArtworkDetail() {
                   ) : (
                     <div className="space-y-1">
                       <div className="text-3xl font-semibold">
-                        {activeListing.fixed_price} {activeListing.sale_currency}
+                        {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
                       </div>
-                      {usdApprox && <div className="text-xs text-white/60">{usdApprox}</div>}
                     </div>
                   )}
 
@@ -970,7 +1061,7 @@ export default function ArtworkDetail() {
                 )}
 
                 {isAuction && (
-                  <div className="text-[12px] text-white/60 mt-2">
+                  <div className="text[12px] text-white/60 mt-2">
                     Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
                     {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
                   </div>
@@ -1113,6 +1204,8 @@ export default function ArtworkDetail() {
                         {art.description || "No description provided."}
                       </div>
                     </div>
+
+                    {/* Creator */}
                     {creator && (
                       <>
                         <div className="h-px bg-white/10" />
@@ -1134,6 +1227,28 @@ export default function ArtworkDetail() {
                         </div>
                       </>
                     )}
+
+                    {/* Collection */}
+                    <div className="h-px bg-white/10" />
+                    <div>
+                      <div className="font-medium">
+                        More from this collection
+                      </div>
+                      {collection ? (
+                        <div className="mt-1 text-sm text-white/80">
+                          <Link
+                            to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`}
+                            className="underline"
+                          >
+                            {collection.name || "Untitled collection"}
+                          </Link>
+                        </div>
+                      ) : (
+                        <div className="mt-1 text-sm text-white/60">
+                          This artwork is not part of a collection.
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </Card>
 
@@ -1159,10 +1274,6 @@ export default function ArtworkDetail() {
                     <div>Ethereum (Sepolia)</div>
                   </div>
                 </Card>
-
-                <Card title={<span className="text-base font-semibold">More from this collection</span>}>
-                  <div className="text-sm text-white/70">Collection grid coming soon.</div>
-                </Card>
               </div>
             )}
 
@@ -1183,7 +1294,7 @@ export default function ArtworkDetail() {
                     {sales.map((s) => (
                       <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
                         <div className="text-sm">
-                          Sale • <b>{s.price} {s.currency}</b> on {new Date(s.sold_at).toLocaleString()}
+                          Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on {new Date(s.sold_at).toLocaleString()}
                         </div>
                         <div className="text-xs text-white/70">
                           From{" "}
@@ -1319,7 +1430,7 @@ function OwnerListPanel({
   );
 }
 
-/* ------------------------------ Seller Console (UI only) ------------------------------ */
+/* ------------------------------ Seller Console ------------------------------ */
 
 function SellerConsole({
   open,
@@ -1373,31 +1484,9 @@ function SellerConsole({
         )}
 
         {tab === "auction" && (
-          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3 opacity-60 pointer-events-none select-none">
-            <div className="text-sm text-white/70">Configure an auction (UI only for now).</div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm">Reserve price</label>
-                <input className="input" placeholder="e.g. 0.2" />
-              </div>
-              <div>
-                <label className="block text-sm">Currency</label>
-                <select className="input">
-                  <option>ETH</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm">Start time</label>
-                <input className="input" type="datetime-local" />
-              </div>
-              <div>
-                <label className="block text-sm">End time</label>
-                <input className="input" type="datetime-local" />
-              </div>
-            </div>
-            <div className="text-xs text-white/60">
-              (Disabled to keep backend unchanged. When you’re ready, wire this to auction endpoints.)
-            </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
+            <div className="text-sm text-white/70">Start an auction.</div>
+            <OwnerAuctionPanel artworkId={artworkId} onCreated={onListingUpdated} />
           </div>
         )}
 

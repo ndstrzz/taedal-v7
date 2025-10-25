@@ -1,4 +1,3 @@
-// app/src/lib/listings.ts
 import { supabase } from "./supabase";
 
 export type Listing = {
@@ -15,6 +14,8 @@ export type Listing = {
   end_at?: string | null;
   created_at: string;
   updated_at: string;
+  /** Optional per-seller wallet column (if present in your DB). */
+  seller_wallet?: string | null;
 };
 
 export type JoinedListing = Listing & {
@@ -48,19 +49,23 @@ export async function createOrUpdateFixedPriceListing(
   return data!;
 }
 
-/** Create a new auction listing (ends any existing active listing for the artwork). */
+/**
+ * Create a new auction listing (ends any existing active listing for the artwork).
+ * Requires SQL function:
+ *   create_auction_listing(p_artwork_id uuid, p_currency text, p_reserve_price numeric, p_duration_minutes integer)
+ */
 export async function createAuctionListing(
   artworkId: string,
-  reserve: number,
+  reservePrice: number | null,
   durationMinutes: number,
   currency = "ETH"
 ): Promise<Listing> {
   const { data, error } = await supabase
     .rpc("create_auction_listing", {
       p_artwork_id: artworkId,
-      p_reserve: reserve,
       p_currency: currency,
-      p_minutes: durationMinutes,
+      p_reserve_price: reservePrice,
+      p_duration_minutes: durationMinutes,
     })
     .single<Listing>();
 
@@ -74,7 +79,7 @@ export async function fetchActiveListings(limit = 24): Promise<JoinedListing[]> 
     .from("listings")
     .select(
       `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at,
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at, seller_wallet,
       artworks!inner (
         id, title, image_url, creator_id, status
       )
@@ -95,7 +100,9 @@ export async function fetchActiveListingForArtwork(
   const { data, error } = await supabase
     .from("listings")
     .select(
-      "id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at"
+      `
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
+    `
     )
     .eq("artwork_id", artworkId)
     .eq("status", "active")
