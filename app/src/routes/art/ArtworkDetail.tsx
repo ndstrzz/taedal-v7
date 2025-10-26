@@ -17,6 +17,7 @@ import RequestLicenseModal from "../../components/RequestLicenseModal";
 import PhysicalBadge from "../../components/art/PhysicalBadge";
 import ShipmentsPanel from "../../components/shipping/ShipmentsPanel";
 import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
+import QRCode from "qrcode";
 
 /* ------------------------------ WalletModal ------------------------------ */
 
@@ -260,6 +261,93 @@ function fmtCurrency(n: number | null | undefined, code?: string | null) {
   }
 }
 
+/* ------------------------------ Dev QR helpers ------------------------------ */
+
+async function hmacSha256Hex(secret: string, message: string) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+function DevQRModal({
+  open,
+  onClose,
+  baseUrl,
+}: {
+  open: boolean;
+  onClose: () => void;
+  baseUrl: string;
+}) {
+  const [tagId, setTagId] = useState("TAG123");
+  const [ctr, setCtr] = useState("1");
+  const [secret, setSecret] = useState("my_dev_secret");
+  const [link, setLink] = useState<string>("");
+  const [qrDataUrl, setQrDataUrl] = useState<string>("");
+
+  async function build() {
+    try {
+      const c = await hmacSha256Hex(secret, `${tagId}|${ctr}`);
+      const u = `${baseUrl}?a=${encodeURIComponent(tagId)}&c=${encodeURIComponent(c)}&ctr=${encodeURIComponent(ctr)}`;
+      setLink(u);
+      const dataUrl = await QRCode.toDataURL(u, { errorCorrectionLevel: "M", scale: 6 });
+      setQrDataUrl(dataUrl);
+    } catch (e) {
+      console.error(e);
+      setLink("Failed to build QR link");
+      setQrDataUrl("");
+    }
+  }
+
+  useEffect(() => {
+    if (open) build();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-4 w-full max-w-lg">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold">Dev: Generate QR</h3>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="grid gap-2">
+          <label className="text-xs text-white/60">Tag ID (a)</label>
+          <input className="input" value={tagId} onChange={e => setTagId(e.target.value)} />
+
+          <label className="text-xs text-white/60 mt-2">Counter (ctr)</label>
+          <input className="input" value={ctr} onChange={e => setCtr(e.target.value)} />
+
+          <label className="text-xs text-white/60 mt-2">Dev Secret (HMAC, testing only)</label>
+          <input className="input" value={secret} onChange={e => setSecret(e.target.value)} />
+
+          <button className="btn mt-3" onClick={build}>Build QR</button>
+
+          {qrDataUrl ? (
+            <div className="mt-3 flex flex-col items-center gap-2">
+              <img src={qrDataUrl} alt="QR" className="bg-white p-2 rounded-md" />
+              <a className="underline text-sm" href={qrDataUrl} download="verify-qr.png">Download PNG</a>
+              <div className="text-xs break-all text-white/70">{link}</div>
+            </div>
+          ) : (
+            <div className="text-sm text-amber-300 mt-2">{link}</div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -328,6 +416,9 @@ export default function ArtworkDetail() {
   const [verifyBusy, setVerifyBusy] = useState(false);
   const [nfcBusy, setNfcBusy] = useState(false);
   const [nfcSupported, setNfcSupported] = useState(false);
+
+  /* Dev: QR modal */
+  const [showDevQR, setShowDevQR] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -793,18 +884,19 @@ export default function ArtworkDetail() {
     try {
       const sp = new URLSearchParams(window.location.search);
       const a = sp.get("a");
+      const t = sp.get("t"); // optional for now
       const c = sp.get("c");
       const ctr = sp.get("ctr");
 
       if (!a || !c || !ctr) {
         setMsg(
-          "No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=N to the URL or scan a tag."
+          "No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=1 to the URL or scan a tag."
         );
         return;
       }
 
       const { data, error } = await supabase.functions.invoke("verify-chip", {
-        body: { a, c, ctr, page_artwork_id: art.id },
+        body: { a, t, c, ctr, page_artwork_id: art.id },
       });
       if (error) throw error;
 
@@ -872,6 +964,7 @@ export default function ArtworkDetail() {
           }
           const u = new URL(url);
           const a = u.searchParams.get("a");
+          const t = u.searchParams.get("t");
           const c = u.searchParams.get("c");
           const ctr = u.searchParams.get("ctr");
 
@@ -881,7 +974,7 @@ export default function ArtworkDetail() {
           }
 
           const { data, error } = await supabase.functions.invoke("verify-chip", {
-            body: { a, c, ctr, page_artwork_id: art.id },
+            body: { a, t, c, ctr, page_artwork_id: art.id },
           });
           if (error) throw error;
 
@@ -1325,6 +1418,14 @@ export default function ArtworkDetail() {
                         <button className="btn" onClick={verifyFromQR} disabled={verifyBusy}>
                           {verifyBusy ? "Verifying…" : "Verify from QR/Link"}
                         </button>
+                        {/* Dev QR helper */}
+                        <button
+                          className="btn bg-white/0 border border-white/20 hover:bg-white/10"
+                          onClick={() => setShowDevQR(true)}
+                          title="Developer helper: build a QR code that encodes the page link with a/c/ctr"
+                        >
+                          Dev: Generate QR
+                        </button>
                       </div>
                       {!nfcSupported && (
                         <div className="mt-2 text-xs text-white/60">
@@ -1567,6 +1668,13 @@ export default function ArtworkDetail() {
           }
         />
       )}
+
+      {/* Dev QR modal */}
+      <DevQRModal
+        open={showDevQR}
+        onClose={() => setShowDevQR(false)}
+        baseUrl={`${location.origin}/art/${art.id}`}
+      />
     </>
   );
 }
@@ -1659,7 +1767,7 @@ function SellerConsole({
   return (
     <div className="fixed inset-0 z-[60]">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-full sm:w={[520]}px bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
+      <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Seller tools</h3>
           <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
