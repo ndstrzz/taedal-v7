@@ -13,7 +13,7 @@ import {
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
-import CollectionPage from "./routes/collection/CollectionPage"; // NEW
+import CollectionPage from "./routes/collection/CollectionPage";
 
 /* styles */
 import "./App.css";
@@ -243,7 +243,8 @@ function App() {
               <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
               {/* NEW: collection route by slug (or UUID) */}
-              <Route path="/collection/:slug" element={<CollectionPage />} />
+              <Route path="/collection/:slug" element={<div style={{padding:20}}>✅ collection route matched</div>} />
+
 
               {/* Public profile routes */}
               <Route path="/u/:handle" element={<PublicProfile />} />

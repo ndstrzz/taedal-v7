@@ -1,15 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+// app/src/routes/collection/CollectionPage.tsx
+import { useEffect, useState } from "react";
+import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 
 type Collection = {
   id: string;
-  owner_id: string;
-  name: string;
-  slug: string;
+  name: string | null;
+  slug: string | null;
   description: string | null;
-  logo_url: string | null;
-  banner_url: string | null;
+  owner_id: string | null;
 };
 
 type Profile = {
@@ -19,113 +18,114 @@ type Profile = {
   avatar_url: string | null;
 };
 
-type Artwork = {
+type ArtworkCard = {
   id: string;
   title: string | null;
   image_url: string | null;
-  status: string | null;
 };
 
-const isUUID = (v: string) =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-    v
+const isUuid = (v: string) =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
+
+function Pill({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-white/10 border border-white/10">
+      {children}
+    </span>
   );
+}
 
 export default function CollectionPage() {
-  const { slug = "" } = useParams();
-  const nav = useNavigate();
-
+  const { slug: slugOrId } = useParams<{ slug: string }>();
   const [loading, setLoading] = useState(true);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [collection, setCollection] = useState<Collection | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const [col, setCol] = useState<Collection | null>(null);
   const [owner, setOwner] = useState<Profile | null>(null);
-  const [artworks, setArtworks] = useState<Artwork[]>([]);
+  const [arts, setArts] = useState<ArtworkCard[]>([]);
 
   useEffect(() => {
     let alive = true;
-    (async () => {
+
+    async function load() {
       setLoading(true);
-      setMsg(null);
+      setErr(null);
       try {
-        // 1) Load collection by slug OR id
-        let coll: Collection | null = null;
+        if (!slugOrId) throw new Error("Missing slug");
 
-        if (isUUID(slug)) {
+        // 1) Try by slug
+        let c: Collection | null = null;
+        {
           const { data, error } = await supabase
             .from("collections")
-            .select("id,owner_id,name,slug,description,logo_url,banner_url")
-            .eq("id", slug)
+            .select("id,name,slug,description,owner_id")
+            .eq("slug", slugOrId)
             .maybeSingle();
           if (error) throw error;
-          coll = (data as any) ?? null;
+          c = (data as Collection) ?? null;
+        }
 
-          // Normalize URL to slug if we have it
-          if (coll?.slug && coll.slug !== slug) {
-            nav(`/collection/${coll.slug}`, { replace: true });
-            // do not return early; we can still render after redirect
-          }
-        } else {
+        // 2) Fallback: if it *looks* like a UUID and slug lookup failed, try by id
+        if (!c && isUuid(slugOrId)) {
           const { data, error } = await supabase
             .from("collections")
-            .select("id,owner_id,name,slug,description,logo_url,banner_url")
-            .eq("slug", slug)
+            .select("id,name,slug,description,owner_id")
+            .eq("id", slugOrId)
             .maybeSingle();
           if (error) throw error;
-          coll = (data as any) ?? null;
+          c = (data as Collection) ?? null;
         }
 
+        if (!c) throw new Error("Collection not found");
         if (!alive) return;
-        if (!coll) {
-          setCollection(null);
-          setMsg("Collection not found.");
-          return;
+        setCol(c);
+
+        // 3) Load owner profile (optional)
+        if (c.owner_id) {
+          const { data: p } = await supabase
+            .from("profiles")
+            .select("id,username,display_name,avatar_url")
+            .eq("id", c.owner_id)
+            .maybeSingle();
+          if (alive) setOwner((p as Profile) ?? null);
         }
-        setCollection(coll);
 
-        // 2) Load owner profile
-        const { data: prof } = await supabase
-          .from("profiles")
-          .select("id,username,display_name,avatar_url")
-          .eq("id", coll.owner_id)
-          .maybeSingle();
-        if (!alive) return;
-        setOwner((prof as any) ?? null);
-
-        // 3) Load artworks in this collection
-        const { data: arts } = await supabase
+        // 4) Artworks in this collection
+        const { data: a, error: ae } = await supabase
           .from("artworks")
-          .select("id,title,image_url,status")
-          .eq("collection_id", coll.id)
-          .eq("status", "active")
-          .order("created_at", { ascending: false });
+          .select("id,title,image_url")
+          .eq("collection_id", c.id)
+          .order("created_at", { ascending: false })
+          .limit(60);
+        if (ae) throw ae;
+
         if (!alive) return;
-        setArtworks(((arts as any[]) ?? []).filter(Boolean));
+        setArts(((a ?? []) as any[]).map((r) => ({
+          id: r.id,
+          title: r.title ?? null,
+          image_url: r.image_url ?? null,
+        })));
       } catch (e: any) {
-        if (!alive) return;
-        setMsg(e?.message ?? "Failed to load collection.");
+        setErr(e?.message ?? "Failed to load collection.");
+        setCol(null);
+        setArts([]);
       } finally {
         if (alive) setLoading(false);
       }
-    })();
+    }
 
-    return () => {
-      alive = false;
-    };
-  }, [slug, nav]);
-
-  const ownerHandle = useMemo(() => {
-    if (!owner) return null;
-    return owner.username ? `/u/${owner.username}` : `/u/${owner.id}`;
-  }, [owner]);
+    load();
+    return () => { alive = false; };
+  }, [slugOrId]);
 
   if (loading) {
     return (
       <div className="max-w-7xl mx-auto p-6">
-        <div className="h-8 w-64 bg-white/10 rounded animate-pulse mb-3" />
-        <div className="h-4 w-80 bg-white/10 rounded animate-pulse mb-6" />
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+        <div className="h-7 w-64 bg-white/10 rounded animate-pulse mb-3" />
+        <div className="h-4 w-80 bg-white/10 rounded animate-pulse" />
+        <div className="mt-6 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {Array.from({ length: 8 }).map((_, i) => (
-            <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.04]">
+            <div key={i} className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden">
               <div className="aspect-square bg-white/10 animate-pulse" />
             </div>
           ))}
@@ -134,106 +134,71 @@ export default function CollectionPage() {
     );
   }
 
-  if (!collection) {
+  if (err || !col) {
     return (
-      <div className="max-w-6xl mx-auto p-8">
+      <div className="max-w-5xl mx-auto p-6">
         <h1 className="text-2xl font-semibold mb-2">Collection</h1>
-        <p className="text-amber-300">{msg || "Not found."}</p>
-        <div className="mt-4">
-          <Link to="/" className="btn">
-            Back home
-          </Link>
-        </div>
+        {err && <p className="text-amber-300">{err}</p>}
+        <Link to="/" className="btn mt-4 inline-block">Back home</Link>
       </div>
     );
   }
 
+  const ownerHandle = owner
+    ? owner.username ? `/u/${owner.username}` : `/u/${owner.id}`
+    : null;
+
   return (
-    <div className="max-w-7xl mx-auto p-6 space-y-4">
-      {/* Header */}
-      <div className="rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden">
-        {collection.banner_url ? (
-          <div className="h-40 sm:h-56 w-full overflow-hidden">
-            <img
-              src={collection.banner_url}
-              alt=""
-              className="w-full h-full object-cover"
-            />
-          </div>
-        ) : (
-          <div className="h-24 w-full bg-white/[0.03]" />
-        )}
-
-        <div className="p-4 flex items-start gap-3">
-          {collection.logo_url ? (
-            <img
-              src={collection.logo_url}
-              className="h-14 w-14 rounded-xl object-cover border border-white/10"
-            />
-          ) : (
-            <div className="h-14 w-14 rounded-xl bg-white/10 border border-white/10" />
-          )}
-          <div className="min-w-0">
-            <h1 className="text-2xl font-semibold">{collection.name}</h1>
-            <div className="text-sm text-white/70">
-              by{" "}
-              {owner ? (
-                <Link to={ownerHandle ?? "#"} className="underline">
-                  {owner.display_name || owner.username || "creator"}
-                </Link>
-              ) : (
-                "—"
-              )}
-              {" · "}
-              <span className="text-white/60">/{collection.slug}</span>
-            </div>
-            {collection.description ? (
-              <p className="text-sm text-white/80 mt-2 whitespace-pre-wrap">
-                {collection.description}
-              </p>
-            ) : null}
-          </div>
+    <div className="max-w-7xl mx-auto p-6 space-y-6">
+      <header className="space-y-2">
+        <div className="flex items-center gap-2">
+          <h1 className="text-3xl font-semibold truncate">{col.name || col.slug || "Collection"}</h1>
+          <Pill>Collection</Pill>
         </div>
-      </div>
-
-      {/* Grid */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {artworks.length === 0 ? (
-          <div className="col-span-full text-white/70">
-            No active items in this collection yet.
-          </div>
-        ) : (
-          artworks.map((a) => (
-            <Link
-              key={a.id}
-              to={`/art/${a.id}`}
-              className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/30 transition"
-            >
-              <div className="aspect-square bg-neutral-950">
-                {a.image_url ? (
-                  <img
-                    src={a.image_url}
-                    alt={a.title ?? "Artwork"}
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  <div className="w-full h-full grid place-items-center text-white/40">
-                    No image
-                  </div>
-                )}
-              </div>
-              <div className="p-3">
-                <div className="truncate font-medium">{a.title || "Untitled"}</div>
-              </div>
+        <div className="text-sm text-white/80">
+          by{" "}
+          {owner ? (
+            <Link to={ownerHandle!} className="underline">
+              {owner.display_name || owner.username || "creator"}
             </Link>
-          ))
+          ) : (
+            "—"
+          )}
+        </div>
+        {col.description && (
+          <p className="text-sm text-white/70 whitespace-pre-wrap">{col.description}</p>
         )}
-      </div>
+      </header>
 
-      <div className="pt-2">
-        <Link to="/" className="btn">
-          Back
-        </Link>
+      <section>
+        {arts.length === 0 ? (
+          <div className="text-white/70">No artworks in this collection yet.</div>
+        ) : (
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            {arts.map((a) => (
+              <Link
+                key={a.id}
+                to={`/art/${a.id}`}
+                className="group rounded-2xl border border-white/10 bg-white/[0.04] overflow-hidden hover:border-white/30 transition"
+              >
+                <div className="aspect-square bg-neutral-950">
+                  {a.image_url ? (
+                    <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" />
+                  ) : (
+                    <div className="w-full h-full grid place-items-center text-white/40">No image</div>
+                  )}
+                </div>
+                <div className="p-3">
+                  <div className="truncate font-medium">{a.title || "Untitled"}</div>
+                </div>
+              </Link>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <div>
+        <Link to="/" className="btn">Back home</Link>
       </div>
     </div>
   );

@@ -61,10 +61,8 @@ function WalletModal({
 
 /* ------------------------------ config ------------------------------ */
 
-// Wallet to receive ETH on Sepolia during testing
 const FALLBACK_PAYTO = (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
 
-// Sepolia chain params (MetaMask)
 const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
 const SEPOLIA_PARAMS = {
   chainId: SEPOLIA_CHAIN_ID_HEX,
@@ -74,7 +72,6 @@ const SEPOLIA_PARAMS = {
   blockExplorerUrls: ["https://sepolia.etherscan.io"],
 };
 
-// simple parseEther without ethers.js
 function parseEther(amount: string | number): bigint {
   const s = String(amount);
   if (!/^\d+(\.\d+)?$/.test(s)) throw new Error("Invalid ETH amount");
@@ -99,15 +96,10 @@ type Artwork = {
   token_uri?: string | null;
   type?: "digital" | "physical" | null;
   physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
-  collection_id?: string | null; // <— ensure this exists in your table
+  collection_id?: string | null;
 };
 
-type ArtworkFile = {
-  id: string;
-  url: string;
-  kind: string | null;
-  position: number | null;
-};
+type ArtworkFile = { id: string; url: string; kind: string | null; position: number | null };
 
 type Profile = {
   id: string;
@@ -136,13 +128,15 @@ type SaleRow = {
   tx_hash: string | null;
 };
 
-// Optional offers table (safe if the table doesn't exist)
 type OfferRow = {
   amount?: number | null;
-  price?: number | null; // tolerate either column name
+  price?: number | null;
   currency?: string | null;
   status?: string | null;
 };
+
+/* New: minimal sibling artwork type for "More from this collection" */
+type SiblingArt = { id: string; title: string | null; image_url: string | null };
 
 /* ------------------------------ small UI helpers ------------------------------ */
 
@@ -203,13 +197,7 @@ function Card({
 
 /* ------------------------------ Countdown ------------------------------ */
 
-function Countdown({
-  endAt,
-  onElapsed,
-}: {
-  endAt: string;
-  onElapsed?: () => void;
-}) {
+function Countdown({ endAt, onElapsed }: { endAt: string; onElapsed?: () => void }) {
   const [now, setNow] = useState(() => Date.now());
   const end = useMemo(() => new Date(endAt).getTime(), [endAt]);
 
@@ -285,7 +273,6 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // listing
   const [activeListing, setActiveListing] = useState<
     | (Listing & {
         type?: string | null;
@@ -298,51 +285,49 @@ export default function ArtworkDetail() {
     | null
   >(null);
 
-  // bids (auction)
   const MIN_INC_BPS = 500;
   const [topBid, setTopBid] = useState<Bid | null>(null);
 
-  // offers (fixed-price) – optional table; safe to fail
   const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(null);
 
-  // bid UI
   const [bidInput, setBidInput] = useState<string>("");
   const [bidMsg, setBidMsg] = useState<string | null>(null);
   const [bidBusy, setBidBusy] = useState(false);
 
-  // gallery
   const [files, setFiles] = useState<ArtworkFile[]>([]);
   const [mainUrl, setMainUrl] = useState<string | null>(null);
 
-  // tabs
   const [tab, setTab] = useState<"details" | "orders" | "activity">("details");
 
-  // owners & history
-  const [owners, setOwners] = useState<
-    { profile: Profile; quantity: number; updated_at: string }[]
-  >([]);
-  const [sales, setSales] = useState<
-    (SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]
-  >([]);
+  const [owners, setOwners] = useState<{ profile: Profile; quantity: number; updated_at: string }[]>(
+    []
+  );
+  const [sales, setSales] = useState<(SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]>(
+    []
+  );
 
-  // pinning
   const [pinLoading, setPinLoading] = useState(false);
   const [pinErr, setPinErr] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
 
-  // wallet modal
   const [walletOpen, setWalletOpen] = useState(false);
   const [payBusy, setPayBusy] = useState(false);
 
-  // seller console (UI-only)
   const [sellerOpen, setSellerOpen] = useState(false);
 
-  // per-owner visibility
   const [myHidden, setMyHidden] = useState<boolean | null>(null);
   const [hideBusy, setHideBusy] = useState(false);
 
-  // license modal
   const [showLicense, setShowLicense] = useState(false);
+
+  /* New: "More from this collection" state */
+  const [moreFrom, setMoreFrom] = useState<SiblingArt[]>([]);
+  const [moreLoading, setMoreLoading] = useState<boolean>(false);
+
+  /* New: Verification state */
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [nfcBusy, setNfcBusy] = useState(false);
+  const [nfcSupported, setNfcSupported] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -351,7 +336,12 @@ export default function ArtworkDetail() {
     })();
   }, []);
 
-  // load artwork + creator/owner + listing + extra files (+ collection)
+  useEffect(() => {
+    // Feature detection for Web NFC (Chrome Android, secure context)
+    const ok = typeof (window as any).NDEFReader !== "undefined" && window.isSecureContext;
+    setNfcSupported(ok);
+  }, []);
+
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -359,6 +349,7 @@ export default function ArtworkDetail() {
       setMsg(null);
       try {
         if (!id) throw new Error("Missing artwork id");
+
         const { data, error } = await supabase
           .from("artworks")
           .select(
@@ -367,11 +358,13 @@ export default function ArtworkDetail() {
           .eq("id", id)
           .maybeSingle();
         if (error) throw error;
+
         if (!data) {
           setMsg("Artwork not found.");
           setArt(null);
           return;
         }
+
         if (!alive) return;
         setArt(data as Artwork);
         setMainUrl((data as Artwork).image_url || null);
@@ -403,18 +396,44 @@ export default function ArtworkDetail() {
         setActiveListing(l as any);
         setFiles(((af.data as any[]) ?? []).filter((f) => !!f?.url));
 
-        // COLLECTION look-up (no 'title' field!)
-        const collId = (data as Artwork).collection_id || null;
+        // ---- Collection lookup with safe fallback ----
+        const collId = (data as Artwork).collection_id ?? null;
         if (collId) {
-          const { data: coll } = await supabase
+          const { data: collWide, error: cwErr } = await supabase
             .from("collections")
             .select("id,slug,name,logo_url,banner_url")
             .eq("id", collId)
             .maybeSingle();
-          setCollection((coll as CollectionMeta) || null);
+
+          if (cwErr) {
+            const { data: collMin } = await supabase
+              .from("collections")
+              .select("id,slug,name")
+              .eq("id", collId)
+              .maybeSingle();
+            setCollection((collMin as any) || null);
+          } else {
+            setCollection((collWide as any) || null);
+          }
+
+          try {
+            setMoreLoading(true);
+            const { data: sibs } = await supabase
+              .from("artworks")
+              .select("id,title,image_url")
+              .eq("collection_id", collId)
+              .neq("id", (data as Artwork).id)
+              .order("created_at", { ascending: false })
+              .limit(12);
+            if (alive) setMoreFrom(((sibs as any[]) ?? []) as SiblingArt[]);
+          } finally {
+            if (alive) setMoreLoading(false);
+          }
         } else {
           setCollection(null);
+          setMoreFrom([]);
         }
+        // ---------------------------------------------
 
         await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
         await loadTopOfferSafe((data as Artwork).id);
@@ -512,7 +531,6 @@ export default function ArtworkDetail() {
     );
   }
 
-  // Try to fetch highest open offer; safe if table doesn't exist
   async function loadTopOfferSafe(artworkId: string) {
     try {
       const { data, error } = await supabase
@@ -534,7 +552,6 @@ export default function ArtworkDetail() {
         setTopOffer(null);
       }
     } catch {
-      // Table may not exist – just ignore
       setTopOffer(null);
     }
   }
@@ -572,15 +589,13 @@ export default function ArtworkDetail() {
   function asMsg(e: unknown) {
     if (!e) return "Unknown error";
     if (typeof e === "string") return e;
-    if (typeof (e as any)?.message === "string") return (e as any).message;
+    if ((e as any)?.message) return (e as any).message as string;
     try {
       return JSON.stringify(e);
     } catch {
       return String(e);
     }
   }
-
-  /* ------------------------------ visibility toggle ------------------------------ */
 
   async function ensureOwnershipRow() {
     if (!viewerId || !art?.id) return;
@@ -622,8 +637,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  /* ------------------------------ Buy handlers ------------------------------ */
-
   async function onBuy() {
     if (!activeListing || !art) return;
 
@@ -652,7 +665,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  // MetaMask flow (Sepolia)
   async function onBuyWithMetaMask() {
     if (!activeListing) return;
     setPayBusy(true);
@@ -719,7 +731,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  // ------------------------------ bids ------------------------------
   async function onPlaceBid() {
     if (!activeListing) return;
     setBidBusy(true);
@@ -739,16 +750,10 @@ export default function ArtworkDetail() {
     }
   }
 
-  /* ------------------------------ computed ------------------------------ */
-
   const isAuction =
     (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username
-    ? `/u/${creator.username}`
-    : creator
-    ? `/u/${creator.id}`
-    : "#";
+  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
   const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
@@ -770,18 +775,141 @@ export default function ArtworkDetail() {
     [art?.image_url, files]
   );
 
-  // The value to show in "Top offer"
   const displayedTopOffer = useMemo(() => {
-    // 1) active auction top bid
     if (isAuction && topBid) {
       return { amount: topBid.amount, currency: activeListing?.sale_currency ?? "ETH" };
     }
-    // 2) highest open offer (if offers table exists)
     if (topOffer) return topOffer;
-    // 3) fallback to last/most recent sale
     if (sales?.[0]) return { amount: sales[0].price, currency: sales[0].currency };
     return null;
   }, [isAuction, topBid, activeListing?.sale_currency, topOffer, sales]);
+
+  /* ------------------------------ Verification helpers ------------------------------ */
+
+  async function verifyFromQR() {
+    if (!art?.id) return;
+    setVerifyBusy(true);
+    setMsg(null);
+    try {
+      const sp = new URLSearchParams(window.location.search);
+      const a = sp.get("a");
+      const c = sp.get("c");
+      const ctr = sp.get("ctr");
+
+      if (!a || !c || !ctr) {
+        setMsg(
+          "No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=N to the URL or scan a tag."
+        );
+        return;
+      }
+
+      const { data, error } = await supabase.functions.invoke("verify-chip", {
+        body: { a, c, ctr, page_artwork_id: art.id },
+      });
+      if (error) throw error;
+
+      if (data?.ok) {
+        const state = data.state || "authentic";
+        const badge =
+          state === "authentic"
+            ? "Authentic ✅"
+            : state === "cloned"
+            ? "Possible clone ⚠️"
+            : state === "mismatch"
+            ? "Tag / artwork mismatch ❌"
+            : "Invalid ❌";
+        setMsg(`${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`);
+      } else {
+        setMsg("Verification failed ❌");
+      }
+    } catch (e: any) {
+      setMsg(e?.message || "Verification failed (is the verify-chip function deployed?)");
+    } finally {
+      setVerifyBusy(false);
+    }
+  }
+
+  function extractUrlFromNdef(ev: any): string | null {
+    try {
+      const recs: any[] = ev.message?.records || [];
+      const td = new TextDecoder();
+      for (const r of recs) {
+        if (r.recordType === "url" && r.data) {
+          return (r as any).data || null;
+        }
+        if (r.recordType === "text" && r.data) {
+          const s = td.decode(r.data);
+          if (/^https?:\/\//i.test(s)) return s;
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  async function tapToVerifyNFC() {
+    if (!art?.id) return;
+    if (!nfcSupported) {
+      setMsg("Web NFC not supported on this device/browser. Use the QR instead.");
+      return;
+    }
+    setNfcBusy(true);
+    setMsg(null);
+    try {
+      const NDEFReader: any = (window as any).NDEFReader;
+      const reader = new NDEFReader();
+      await reader.scan();
+
+      reader.onreadingerror = () => {
+        setMsg("NFC read error. Please try again.");
+      };
+
+      reader.onreading = async (ev: any) => {
+        try {
+          const url = extractUrlFromNdef(ev);
+          if (!url) {
+            setMsg("Tag read, but no link payload found.");
+            return;
+          }
+          const u = new URL(url);
+          const a = u.searchParams.get("a");
+          const c = u.searchParams.get("c");
+          const ctr = u.searchParams.get("ctr");
+
+          if (!a || !c || !ctr) {
+            setMsg("Tag link missing required parameters.");
+            return;
+          }
+
+          const { data, error } = await supabase.functions.invoke("verify-chip", {
+            body: { a, c, ctr, page_artwork_id: art.id },
+          });
+          if (error) throw error;
+
+          if (data?.ok) {
+            const state = data.state || "authentic";
+            const badge =
+              state === "authentic"
+                ? "Authentic ✅"
+                : state === "cloned"
+                ? "Possible clone ⚠️"
+                : state === "mismatch"
+                ? "Tag / artwork mismatch ❌"
+                : "Invalid ❌";
+            setMsg(`${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`);
+          } else {
+            setMsg("Verification failed ❌");
+          }
+        } catch (e: any) {
+          setMsg(e?.message || "Verification failed");
+        } finally {
+          setNfcBusy(false);
+        }
+      };
+    } catch (e: any) {
+      setMsg(e?.message || "NFC scan failed");
+      setNfcBusy(false);
+    }
+  }
 
   /* ------------------------------ render ------------------------------ */
 
@@ -1167,10 +1295,44 @@ export default function ArtworkDetail() {
             {tab === "details" && (
               <div className="p-4 space-y-4">
                 {art.type === "physical" && (
-                  <ShipmentsPanel
-                    artworkId={art.id}
-                    canEdit={!!viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)}
-                  />
+                  <>
+                    <ShipmentsPanel
+                      artworkId={art.id}
+                      canEdit={!!viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)}
+                    />
+
+                    {/* Physical verification card */}
+                    <Card
+                      title={
+                        <div className="flex items-center gap-2">
+                          <span className="text-base font-semibold">Physical verification</span>
+                          <Pill className="ml-1">Beta</Pill>
+                        </div>
+                      }
+                    >
+                      <div className="text-sm text-white/80">
+                        Tap the NFC tag (Chrome on Android) or scan the QR printed on the certificate/frame to verify authenticity and view provenance.
+                      </div>
+                      <div className="mt-3 flex gap-2 flex-wrap">
+                        <button
+                          className="btn"
+                          onClick={tapToVerifyNFC}
+                          disabled={!nfcSupported || nfcBusy}
+                          title={nfcSupported ? "" : "Web NFC not supported on this device"}
+                        >
+                          {nfcBusy ? "Listening…" : "Tap to verify (NFC)"}
+                        </button>
+                        <button className="btn" onClick={verifyFromQR} disabled={verifyBusy}>
+                          {verifyBusy ? "Verifying…" : "Verify from QR/Link"}
+                        </button>
+                      </div>
+                      {!nfcSupported && (
+                        <div className="mt-2 text-xs text-white/60">
+                          Web NFC not supported on this device. Scan the QR on the tag instead.
+                        </div>
+                      )}
+                    </Card>
+                  </>
                 )}
 
                 <Card
@@ -1205,7 +1367,6 @@ export default function ArtworkDetail() {
                       </div>
                     </div>
 
-                    {/* Creator */}
                     {creator && (
                       <>
                         <div className="h-px bg-white/10" />
@@ -1228,21 +1389,69 @@ export default function ArtworkDetail() {
                       </>
                     )}
 
-                    {/* Collection */}
+                    {/* Collection quick row */}
                     <div className="h-px bg-white/10" />
                     <div>
-                      <div className="font-medium">
-                        More from this collection
-                      </div>
-                      {collection ? (
-                        <div className="mt-1 text-sm text-white/80">
+                      <div className="font-medium">Collection</div>
+                      <div className="mt-1 text-sm text-white/80">
+                        {collection ? (
                           <Link
                             to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`}
                             className="underline"
                           >
-                            {collection.name || "Untitled collection"}
+                            {collection.name || collection.slug || "Untitled collection"}
                           </Link>
-                        </div>
+                        ) : (
+                          <span className="text-white/60">This artwork is not part of a collection.</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* More from this collection */}
+                    <div className="h-px bg-white/10" />
+                    <div>
+                      <div className="font-medium">More from this collection</div>
+                      {collection ? (
+                        <>
+                          {moreLoading ? (
+                            <div className="mt-2 text-sm text-white/60">Loading…</div>
+                          ) : moreFrom.length > 0 ? (
+                            <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                              {moreFrom.map((a) => (
+                                <Link key={a.id} to={`/art/${a.id}`} className="group block">
+                                  <div className="aspect-square rounded-xl overflow-hidden border border-white/10 bg-neutral-900">
+                                    {a.image_url ? (
+                                      <img
+                                        src={a.image_url}
+                                        alt={a.title ?? "Artwork"}
+                                        className="w-full h-full object-cover group-hover:opacity-90 transition"
+                                      />
+                                    ) : (
+                                      <div className="w-full h-full grid place-items-center text-xs text-white/50">
+                                        No image
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="mt-1 text-xs truncate text-white/80">
+                                    {a.title || "Untitled"}
+                                  </div>
+                                </Link>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="mt-1 text-sm text-white/60">
+                              No more artworks in this collection yet.
+                            </div>
+                          )}
+                          <div className="mt-3">
+                            <Link
+                              to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`}
+                              className="underline text-sm"
+                            >
+                              View full collection
+                            </Link>
+                          </div>
+                        </>
                       ) : (
                         <div className="mt-1 text-sm text-white/60">
                           This artwork is not part of a collection.
@@ -1450,7 +1659,7 @@ function SellerConsole({
   return (
     <div className="fixed inset-0 z-[60]">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
+      <div className="absolute right-0 top-0 h-full w-full sm:w={[520]}px bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Seller tools</h3>
           <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>

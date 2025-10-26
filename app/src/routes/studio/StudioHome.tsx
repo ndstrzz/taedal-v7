@@ -12,6 +12,7 @@ type Artwork = {
   status?: string | null;
   created_at?: string;
   updated_at?: string;
+  collection_id?: string | null;
 };
 type Listing = {
   id: string;
@@ -32,6 +33,15 @@ type Sale = {
   artwork_title?: string | null;
   artwork_image_url?: string | null;
 };
+type CollectionRow = {
+  id: string;
+  name: string | null;
+  slug: string | null;
+  logo_url?: string | null;   // optional in schema
+  banner_url?: string | null; // optional in schema
+};
+
+const PREVIEW_N = 5;
 
 export default function StudioHome() {
   const [uid, setUid] = useState<string | null>(null);
@@ -42,7 +52,15 @@ export default function StudioHome() {
   const [hidden, setHidden] = useState<Artwork[]>([]);
   const [listings, setListings] = useState<Listing[]>([]);
   const [sales, setSales] = useState<Sale[]>([]);
+  const [collections, setCollections] = useState<CollectionRow[]>([]);
   const [busy, setBusy] = useState(true);
+
+  // preview toggles
+  const [showAllArt, setShowAllArt] = useState(false);
+  const [showAllListings, setShowAllListings] = useState(false);
+  const [showAllHidden, setShowAllHidden] = useState(false);
+  const [showAllSales, setShowAllSales] = useState(false);
+  const [showAllCols, setShowAllCols] = useState(false);
 
   // artwork_id -> min active price
   const floors = useMemo(() => {
@@ -76,12 +94,13 @@ export default function StudioHome() {
         setUid(me);
         if (!me) return;
 
-        const [A, P, H, L, S] = await Promise.all([
+        const [A, P, H, L, S, C] = await Promise.all([
           loadMyArtworks(me),
           loadMyPurchased(me),
           loadMyHidden(me),
           loadMyActiveListings(me),
           loadMyRecentSales(me),
+          loadMyCollectionsSafe(me),
         ]);
         if (!alive) return;
         setArtworks(A);
@@ -89,6 +108,7 @@ export default function StudioHome() {
         setHidden(H);
         setListings(L);
         setSales(S);
+        setCollections(C);
       } catch (e: any) {
         setMsg(e?.message || "Failed to load Studio");
       } finally {
@@ -104,7 +124,7 @@ export default function StudioHome() {
   async function loadMyArtworks(userId: string): Promise<Artwork[]> {
     const { data, error } = await supabase
       .from("artworks")
-      .select("id,title,image_url,status,created_at,updated_at,deleted_at")
+      .select("id,title,image_url,status,created_at,updated_at,deleted_at,collection_id")
       .eq("creator_id", userId)
       .is("deleted_at", null)
       .order("updated_at", { ascending: false })
@@ -192,6 +212,40 @@ export default function StudioHome() {
     })) as Sale[];
   }
 
+  // Safely fetch "my collections":
+  // 1) Try filtering collections by owner_id (ideal).
+  // 2) If owner_id column doesn't exist, fallback to: collections that contain artworks created by me.
+  async function loadMyCollectionsSafe(userId: string): Promise<CollectionRow[]> {
+    try {
+      const { data, error } = await supabase
+        .from("collections")
+        .select("id,name,slug,logo_url,banner_url")
+        .eq("owner_id", userId)
+        .order("name", { ascending: true, nullsFirst: true })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as CollectionRow[];
+    } catch {
+      // Fallback path: derive collection ids from artworks I created
+      const { data: myArts } = await supabase
+        .from("artworks")
+        .select("collection_id")
+        .eq("creator_id", userId)
+        .not("collection_id", "is", null);
+      const colIds = Array.from(
+        new Set((myArts ?? []).map((a: any) => a.collection_id).filter(Boolean))
+      );
+      if (colIds.length === 0) return [];
+      // Minimal projection for maximum schema compatibility
+      const { data: cols } = await supabase
+        .from("collections")
+        .select("id,name,slug")
+        .in("id", colIds)
+        .order("name", { ascending: true, nullsFirst: true });
+      return (cols ?? []) as CollectionRow[];
+    }
+  }
+
   const anyLoading = busy;
 
   return (
@@ -240,6 +294,56 @@ export default function StudioHome() {
           </div>
         </div>
 
+        {/* --------- NEW: Your collections (manage series) --------- */}
+        <SectionCard
+          title="Your collections"
+          right={
+            <div className="flex gap-2">
+              <Link to="/collection/new" className="btn px-3 py-1.5 text-sm">New collection</Link>
+              <Link to="/explore?tab=collections" className="btn px-3 py-1.5 text-sm bg-white/0 border border-white/20 hover:bg-white/10">
+                Browse
+              </Link>
+            </div>
+          }
+          loading={anyLoading && collections.length === 0}
+          empty={!anyLoading && collections.length === 0}
+          emptyText={<div className="text-sm text-white/70">You have no collections yet.</div>}
+        >
+          <div className="grid gap-3">
+            {(showAllCols ? collections : collections.slice(0, PREVIEW_N)).map((c) => {
+              const to = `/collection/${encodeURIComponent(c.slug || c.id)}`;
+              return (
+                <div key={c.id} className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/[0.04]">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="h-10 w-10 rounded-lg bg-neutral-900 overflow-hidden border border-white/10">
+                      {c.logo_url ? <img src={c.logo_url} className="h-full w-full object-cover" /> : null}
+                    </div>
+                    <div className="truncate">
+                      <Link to={to} className="truncate underline">
+                        {c.name || c.slug || "Untitled collection"}
+                      </Link>
+                      <div className="text-xs text-white/50 truncate">{c.slug ? `/${c.slug}` : c.id}</div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Link to={to} className="btn px-2 py-1 text-xs">View</Link>
+                    <Link to={`${to}/edit`} className="btn px-2 py-1 text-xs bg-white/0 border border-white/20 hover:bg-white/10">
+                      Edit
+                    </Link>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {collections.length > PREVIEW_N && (
+            <div className="mt-3 text-center">
+              <button className="btn" onClick={() => setShowAllCols((v) => !v)}>
+                {showAllCols ? "View less" : "View more"}
+              </button>
+            </div>
+          )}
+        </SectionCard>
+
         {/* --------- TABLE: Your artworks --------- */}
         <SectionCard
           title="Your artworks"
@@ -255,7 +359,7 @@ export default function StudioHome() {
             <div className="col-span-2 text-right">LISTED</div>
           </div>
           <div className="divide-y divide-white/10">
-            {artworks.map((a) => {
+            {(showAllArt ? artworks : artworks.slice(0, PREVIEW_N)).map((a) => {
               const floor = floors.get(a.id);
               const listed = floor != null;
               return (
@@ -290,6 +394,13 @@ export default function StudioHome() {
               );
             })}
           </div>
+          {artworks.length > PREVIEW_N && (
+            <div className="mt-3 text-center">
+              <button className="btn" onClick={() => setShowAllArt((v) => !v)}>
+                {showAllArt ? "View less" : "View more"}
+              </button>
+            </div>
+          )}
         </SectionCard>
 
         {/* --------- TABLE: Active listings --------- */}
@@ -306,7 +417,7 @@ export default function StudioHome() {
             <div className="col-span-2">UPDATED</div>
           </div>
           <div className="divide-y divide-white/10">
-            {listings.map((l) => (
+            {(showAllListings ? listings : listings.slice(0, PREVIEW_N)).map((l) => (
               <Link
                 key={l.id}
                 to={`/art/${l.artwork_id}`}
@@ -337,6 +448,13 @@ export default function StudioHome() {
               </Link>
             ))}
           </div>
+          {listings.length > PREVIEW_N && (
+            <div className="mt-3 text-center">
+              <button className="btn" onClick={() => setShowAllListings((v) => !v)}>
+                {showAllListings ? "View less" : "View more"}
+              </button>
+            </div>
+          )}
         </SectionCard>
 
         {/* --------- TABLE: Hidden (only you) --------- */}
@@ -351,7 +469,7 @@ export default function StudioHome() {
             <div className="col-span-4 text-right">ACTIONS</div>
           </div>
           <div className="divide-y divide-white/10">
-            {hidden.map((a) => (
+            {(showAllHidden ? hidden : hidden.slice(0, PREVIEW_N)).map((a) => (
               <Link
                 key={a.id}
                 to={`/art/${a.id}`}
@@ -372,6 +490,13 @@ export default function StudioHome() {
               </Link>
             ))}
           </div>
+          {hidden.length > PREVIEW_N && (
+            <div className="mt-3 text-center">
+              <button className="btn" onClick={() => setShowAllHidden((v) => !v)}>
+                {showAllHidden ? "View less" : "View more"}
+              </button>
+            </div>
+          )}
         </SectionCard>
 
         {/* --------- TABLE: Recent sales --------- */}
@@ -388,7 +513,7 @@ export default function StudioHome() {
             <div className="col-span-2"></div>
           </div>
           <div className="divide-y divide-white/10">
-            {sales.map((s) => (
+            {(showAllSales ? sales : sales.slice(0, PREVIEW_N)).map((s) => (
               <Link
                 key={s.id}
                 to={`/art/${s.artwork_id}`}
@@ -411,6 +536,13 @@ export default function StudioHome() {
               </Link>
             ))}
           </div>
+          {sales.length > PREVIEW_N && (
+            <div className="mt-3 text-center">
+              <button className="btn" onClick={() => setShowAllSales((v) => !v)}>
+                {showAllSales ? "View less" : "View more"}
+              </button>
+            </div>
+          )}
         </SectionCard>
 
         {/* Footer */}

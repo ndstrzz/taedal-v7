@@ -36,6 +36,10 @@ import DeployCollection from "./routes/studio/DeployCollection";
 import Deploying from "./routes/studio/Deploying";
 import CheckoutSuccess from "./routes/checkout/Success";
 import Discover from "./routes/discover/Discover";
+import CollectionEdit from "./routes/collection/CollectionEdit";
+
+/* NEW: Collection page */
+import CollectionPage from "./routes/collection/CollectionPage";
 
 /* Assistant always-on */
 import "./assistant/standalone";
@@ -58,7 +62,6 @@ function Layout() {
 /** Route-level error UI (this is what React Router will render) */
 function RouteErrorPage() {
   const err = useRouteError();
-  // Keep a console for quick diagnosis in prod (maps with sourcemaps)
   // eslint-disable-next-line no-console
   console.error("[RouteError]", err);
 
@@ -85,7 +88,6 @@ function RouteErrorPage() {
 const router = createBrowserRouter([
   {
     element: <Layout />,
-    /** 👇 this catches render/loader/action errors in this branch */
     errorElement: <RouteErrorPage />,
     children: [
       { path: "/", element: <Home /> },
@@ -109,6 +111,14 @@ const router = createBrowserRouter([
       { path: "/orders/success", element: <CheckoutSuccess /> },
       { path: "/signin", element: <SignIn /> },
       { path: "/auth/callback", element: <Callback /> },
+
+      // NEW: Collection route (slug or UUID handled inside the page)
+      { path: "/collection/:slug", element: <CollectionPage /> },
+      { path: "/collection/:slug/edit", element: <CollectionEdit /> },
+
+
+      // Optional catch-all (keeps the error page consistent)
+      { path: "*", element: <RouteErrorPage /> },
     ],
   },
 ]);
