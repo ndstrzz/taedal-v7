@@ -60,6 +60,62 @@ function WalletModal({
   );
 }
 
+/* ------------------------------ Share QR (for all artworks) ------------------------------ */
+
+function ShareQRModal({
+  open,
+  onClose,
+  url,
+  title = "Share QR",
+}: {
+  open: boolean;
+  onClose: () => void;
+  url: string;
+  title?: string;
+}) {
+  const [img, setImg] = useState<string>("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!open) return;
+      const data = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", scale: 6 });
+      if (alive) setImg(data);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open, url]);
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[70] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-4 w-full max-w-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-semibold">{title}</h3>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        <div className="text-xs text-white/70 break-all mb-2">{url}</div>
+        {img ? (
+          <div className="flex flex-col items-center gap-2">
+            <img src={img} alt="Artwork QR" className="bg-white p-2 rounded-md" />
+            <a className="underline text-sm" href={img} download="artwork-qr.png">
+              Download PNG
+            </a>
+          </div>
+        ) : (
+          <div className="text-sm text-white/70">Generating…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ------------------------------ config ------------------------------ */
 
 const FALLBACK_PAYTO = (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
@@ -261,7 +317,7 @@ function fmtCurrency(n: number | null | undefined, code?: string | null) {
   }
 }
 
-/* ------------------------------ Dev QR helpers ------------------------------ */
+/* ------------------------------ Dev QR helpers (for testing NFC/verify) ------------------------------ */
 
 async function hmacSha256Hex(secret: string, message: string) {
   const enc = new TextEncoder();
@@ -307,7 +363,6 @@ function DevQRModal({
 
   useEffect(() => {
     if (open) build();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
@@ -419,6 +474,9 @@ export default function ArtworkDetail() {
 
   /* Dev: QR modal */
   const [showDevQR, setShowDevQR] = useState(false);
+
+  /* Share QR (for all artworks) */
+  const [showShareQR, setShowShareQR] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -552,7 +610,6 @@ export default function ArtworkDetail() {
     return () => {
       alive = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, viewerId]);
 
   useEffect(() => {
@@ -1146,6 +1203,25 @@ export default function ArtworkDetail() {
                   </button>
                 </>
               )}
+
+              {/* NEW: AR preview button (safe, additive) */}
+              <Link
+                to={`/art/${id}/ar`}
+                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                title="Preview on your wall (AR)"
+              >
+                🧱 AR Wall-Fit
+              </Link>
+
+              {/* NEW: universal Share QR button */}
+              <button
+                className="rounded-lg p-2 hover:bg-white/10"
+                title="Share QR"
+                onClick={() => setShowShareQR(true)}
+              >
+                ▣
+              </button>
+
               <button
                 className="rounded-lg p-2 hover:bg-white/10"
                 title="Copy link"
@@ -1649,6 +1725,13 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
+      {/* Share QR – available for ALL artworks */}
+      <ShareQRModal
+        open={showShareQR}
+        onClose={() => setShowShareQR(false)}
+        url={`${location.origin}/art/${id}`}
+      />
+
       {art && (
         <RequestLicenseModal
           open={showLicense}
@@ -1669,7 +1752,7 @@ export default function ArtworkDetail() {
         />
       )}
 
-      {/* Dev QR modal */}
+      {/* Dev QR modal (testing NFC/verify) */}
       <DevQRModal
         open={showDevQR}
         onClose={() => setShowDevQR(false)}

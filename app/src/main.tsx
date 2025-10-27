@@ -26,6 +26,7 @@ import Contracts from "./routes/contracts/Contracts";
 import RequestDetail from "./routes/contracts/RequestDetail";
 import PublicProfile from "./routes/profiles/PublicProfile";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
+import ARPreview from "./routes/art/ARPreview";
 import SignIn from "./routes/_auth/SignIn";
 import Callback from "./routes/_auth/Callback";
 import Account from "./routes/account/Account";
@@ -107,6 +108,7 @@ const router = createBrowserRouter([
       // Public
       { path: "/u/:handle", element: <PublicProfile /> },
       { path: "/art/:id", element: <ArtworkDetail /> },
+      { path: "/art/:id/ar", element: <ARPreview /> },
       { path: "/checkout/success", element: <CheckoutSuccess /> },
       { path: "/orders/success", element: <CheckoutSuccess /> },
       { path: "/signin", element: <SignIn /> },
@@ -115,7 +117,6 @@ const router = createBrowserRouter([
       // NEW: Collection route (slug or UUID handled inside the page)
       { path: "/collection/:slug", element: <CollectionPage /> },
       { path: "/collection/:slug/edit", element: <CollectionEdit /> },
-
 
       // Optional catch-all (keeps the error page consistent)
       { path: "*", element: <RouteErrorPage /> },

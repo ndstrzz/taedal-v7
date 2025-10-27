@@ -6,11 +6,23 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
     "jsx": "react-jsx",
-    "types": ["vite/client"]        // <-- add this
+    "strict": true,
+
+    /* Make typecheck not fail on unused-only issues */
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "noFallthroughCasesInSwitch": true,
+
+    "types": ["vite/client"]
   },
-  "include": ["src", "scripts"]
+  "include": [
+    "src",
+    "src/types/**/*.d.ts"
+  ],
+  "references": [{ "path": "./tsconfig.node.json" }]
 }

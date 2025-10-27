@@ -199,6 +199,11 @@ function Explore() {
 const PublicProfile = lazy(() => import("./routes/profiles/PublicProfile"));
 
 /* ----------------------------------------- */
+/* NEW: AR Preview route (lazy)              */
+/* ----------------------------------------- */
+const ARPreview = lazy(() => import("./routes/art/ARPreview"));
+
+/* ----------------------------------------- */
 /* 404                                       */
 /* ----------------------------------------- */
 function NotFound() {
@@ -240,11 +245,12 @@ function App() {
               <Route path="/" element={<Explore />} />
               <Route path="/create" element={<CreateArtwork />} />
               <Route path="/art/:id" element={<ArtworkDetail />} />
+              {/* NEW: AR preview route */}
+              <Route path="/art/:id/ar" element={<ARPreview />} />
               <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
               {/* NEW: collection route by slug (or UUID) */}
               <Route path="/collection/:slug" element={<div style={{padding:20}}>✅ collection route matched</div>} />
-
 
               {/* Public profile routes */}
               <Route path="/u/:handle" element={<PublicProfile />} />
