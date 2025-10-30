@@ -1,36 +1,39 @@
 // app/src/types/model-viewer.d.ts
+import React from "react";
 
-// Minimal runtime shape we use from model-viewer
-export interface ModelViewerElement extends HTMLElement {
-  /** Lit's updateComplete promise */
-  updateComplete?: Promise<unknown>;
-  /** glTF scene + materials (shape kept loose on purpose) */
-  model?: any;
-  /** create a texture from URL */
-  createTexture?: (url: string) => Promise<any>;
-}
-
-// Allow <model-viewer> in JSX
 declare global {
   namespace JSX {
     interface IntrinsicElements {
       "model-viewer": React.DetailedHTMLProps<
-        React.HTMLAttributes<ModelViewerElement>,
-        ModelViewerElement
+        React.HTMLAttributes<HTMLElement>,
+        HTMLElement
       > & {
         src?: string;
         ar?: boolean;
         "ar-modes"?: string;
         "camera-controls"?: boolean;
-        exposure?: string | number;
+        poster?: string;
         "environment-image"?: string;
-        // You can add more attributes as you need them
+        exposure?: number;
+        "field-of-view"?: string;
+        "camera-orbit"?: string;
+        "camera-target"?: string;
+        "min-camera-orbit"?: string;
+        "max-camera-orbit"?: string;
+        "tone-mapping"?: string;
+        reveal?: string;
+        "shadow-intensity"?: number;
+        "disable-zoom"?: boolean;
+        "touch-action"?: string;
+        autoplay?: boolean;
+        slot?: string;
+        "data-position"?: string;
+        "data-visibility-attribute"?: string;
+        style?: React.CSSProperties;
+        ref?: React.Ref<HTMLElement>;
       };
     }
   }
 }
 
-// If someone imports it (not required when using CDN), don’t error.
-declare module "@google/model-viewer" {
-  export {};
-}
+export {};

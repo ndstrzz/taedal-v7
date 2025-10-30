@@ -702,21 +702,24 @@ function EditTermsModal({
   const delivRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
-  const handleBulletEnter = (ref: React.RefObject<HTMLTextAreaElement>, key: "deliverables" | "usage_notes") => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || !ref.current) return;
-    const sel = ref.current.selectionStart;
-    const res = continueBullet(ref.current.value, sel);
-    if (res) {
-      e.preventDefault();
-      const next = res.text;
-      setForm((f) => ({ ...f, [key]: next } as any));
-      queueMicrotask(() => {
-        if (!ref.current) return;
-        const pos = sel + res.deltaCaret;
-        ref.current.selectionStart = ref.current.selectionEnd = pos;
-      });
-    }
-  };
+const handleBulletEnter = (
+  ref: React.RefObject<HTMLTextAreaElement | null>,
+  key: "deliverables" | "usage_notes"
+) => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  if (e.key !== "Enter" || !ref.current) return;
+  const sel = ref.current.selectionStart;
+  const res = continueBullet(ref.current.value, sel);
+  if (res) {
+    e.preventDefault();
+    const next = res.text;
+    setForm((f) => ({ ...f, [key]: next } as any));
+    queueMicrotask(() => {
+      if (!ref.current) return;
+      const pos = sel + res.deltaCaret;
+      ref.current.selectionStart = ref.current.selectionEnd = pos;
+    });
+  }
+};
 
   return (
     <div className="fixed inset-0 z-[70]">

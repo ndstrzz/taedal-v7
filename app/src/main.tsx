@@ -41,6 +41,8 @@ import CollectionEdit from "./routes/collection/CollectionEdit";
 
 /* NEW: Collection page */
 import CollectionPage from "./routes/collection/CollectionPage";
+import '@google/model-viewer';
+
 
 /* Assistant always-on */
 import "./assistant/standalone";

@@ -13,16 +13,17 @@
     "jsx": "react-jsx",
     "strict": true,
 
-    /* Make typecheck not fail on unused-only issues */
+    // soften noisy checks (so local typecheck passes)
     "noUnusedLocals": false,
     "noUnusedParameters": false,
-    "noFallthroughCasesInSwitch": true,
 
-    "types": ["vite/client"]
+    "noFallthroughCasesInSwitch": true,
+    "types": ["vite/client", "@googles/model-viewer"]
   },
   "include": [
-    "src",
-    "src/types/**/*.d.ts"
+    "app/src",
+    "app/src/types/**/*.d.ts",
+    "vite-env.d.ts"        // ⬅️ ensure ambient types are loaded
   ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

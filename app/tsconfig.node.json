@@ -1,20 +1,30 @@
 {
   "compilerOptions": {
-    "composite": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.node.tsbuildinfo",
-
     "target": "ES2023",
     "lib": ["ES2023"],
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowSyntheticDefaultImports": true,
     "types": ["node"],
-    "skipLibCheck": true
+    "skipLibCheck": true,
 
-    /* NOTE:
-       - Do NOT set "noEmit": true here.
-       - "composite": true is required because app/tsconfig.json references this file.
-    */
+    /* Project reference requirements */
+    "composite": true,                // ✅ required
+    "noEmit": false,                  // ✅ referenced projects cannot disable emit
+    "emitDeclarationOnly": false,
+
+    /* Bundler mode */
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+
+    /* Linting (keep as you like) */
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "erasableSyntaxOnly": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
   },
   "include": ["vite.config.ts"]
 }
