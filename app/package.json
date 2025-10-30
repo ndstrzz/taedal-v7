@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "make:panel": "node scripts/make-panel-glb.mjs 0.01",
-    "vercel-build": "git lfs pull || true && npm install --no-audit --progress=false && npm run build"
+    "vercel-build": "git lfs install && git -C .. lfs fetch --all origin && git -C .. lfs checkout --include='app/public/3d/*' && npm install --no-audit --progress=false && npm run build"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
