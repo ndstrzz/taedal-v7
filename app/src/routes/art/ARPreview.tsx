@@ -1,4 +1,4 @@
-// C:\Users\User\Downloads\taedal-v7\app\src\routes\art\ARPreview.tsx
+// app/src/routes/art/ARPreview.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -54,6 +54,61 @@ const HUMAN_NODE_NAMES = ["rp_posed_00178_29", "Person175"];
 const HUMAN_NAME_HINTS = ["rp_posed", "person", "human"];
 const HUMAN_MATERIAL_HINTS = ["rp_posed_00178_29_mat_", "rp_posed", "person"];
 
+/* ------------------------ Env + URL resolution helpers --------------------- */
+
+/** Safe env getter that won’t cause TS errors even if ImportMetaEnv isn’t typed. */
+function getEnv(key: string): string | undefined {
+  try {
+    // @ts-ignore - guard for Vite env
+    return (import.meta as any)?.env?.[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** HEAD check for existence */
+async function headOk(url: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Try to produce a usable GLB URL via multiple fallbacks. */
+async function resolveRoomUrl(): Promise<string | null> {
+  // 1) window.__CONFIG__.ROOM_URL
+  const winCfg = (globalThis as any)?.window?.__CONFIG__;
+  if (winCfg?.ROOM_URL && (await headOk(winCfg.ROOM_URL))) return winCfg.ROOM_URL as string;
+
+  // 2) Vite env
+  const envUrl = getEnv("VITE_ROOM_URL");
+  if (envUrl && (await headOk(envUrl))) return envUrl;
+
+  // 3) Local public asset (served by Vercel/Vite)
+  const local = "/3d/room_artquad_v3.glb";
+  if (await headOk(local)) return local;
+
+  // 4) Supabase public buckets (common names)
+  const candidates: Array<{ bucket: string; path: string }> = [
+    { bucket: "public", path: "3d/room_artquad_v3.glb" },
+    { bucket: "assets", path: "3d/room_artquad_v3.glb" },
+    { bucket: "rooms", path: "room_artquad_v3.glb" },
+  ];
+
+  for (const c of candidates) {
+    try {
+      const { data } = supabase.storage.from(c.bucket).getPublicUrl(c.path);
+      if (data?.publicUrl && (await headOk(data.publicUrl))) return data.publicUrl;
+    } catch {
+      /* ignore and continue */
+    }
+  }
+
+  return null;
+}
+
 /* ------------------------ Scene-graph helpers (safe) --------------------- */
 
 function getRoot(el: any): any {
@@ -68,25 +123,37 @@ function walk(root: any, cb: (n: any) => void) {
     const n = stack.pop();
     if (!n || seen.has(n)) continue;
     seen.add(n);
-    try { cb(n); } catch {}
+    try {
+      cb(n);
+    } catch {}
     const kids = Array.isArray(n?.children) ? n.children : [];
     for (let i = 0; i < kids.length; i++) stack.push(kids[i]);
   }
 }
 function listNames(root: any, limit = 64): string[] {
   const out: string[] = [];
-  walk(root, (n) => { if (n?.name) out.push(n.name); if (out.length >= limit) return; });
+  walk(root, (n) => {
+    if (n?.name) out.push(n.name);
+    if (out.length >= limit) return;
+  });
   return out;
 }
 function findByName(root: any, name: string): any {
   if (!root) return null;
-  const viaApi = typeof (root as any).getObjectByName === "function" ? (root as any).getObjectByName(name) : null;
+  const viaApi =
+    typeof (root as any).getObjectByName === "function"
+      ? (root as any).getObjectByName(name)
+      : null;
   if (viaApi) return viaApi;
   let found: any = null;
-  walk(root, (n) => { if (!found && n?.name === name) found = n; });
+  walk(root, (n) => {
+    if (!found && n?.name === name) found = n;
+  });
   if (found) return found;
   const tgt = name.toLowerCase();
-  walk(root, (n) => { if (!found && typeof n?.name === "string" && n.name.toLowerCase() === tgt) found = n; });
+  walk(root, (n) => {
+    if (!found && typeof n?.name === "string" && n.name.toLowerCase() === tgt) found = n;
+  });
   return found;
 }
 function findByPrefix(root: any, prefix: string): any {
@@ -101,27 +168,27 @@ function findByPrefix(root: any, prefix: string): any {
   return out;
 }
 
-/** NEW: collect all meshes whose name CONTAINS any hint */
+/** collect all meshes whose name CONTAINS any hint */
 function findAllByNameContains(root: any, hints: string[]): any[] {
   const res: any[] = [];
-  const lowerHints = hints.map(h => h.toLowerCase());
+  const lowerHints = hints.map((h) => h.toLowerCase());
   walk(root, (n) => {
     const nm = (n?.name || "").toString().toLowerCase();
     if (!nm) return;
-    if (lowerHints.some(h => nm.includes(h))) res.push(n);
+    if (lowerHints.some((h) => nm.includes(h))) res.push(n);
   });
   return res;
 }
 
-/** NEW: collect all meshes whose material name CONTAINS any hint */
+/** collect all meshes whose material name CONTAINS any hint */
 function findAllByMaterialIncludes(root: any, hints: string[]): any[] {
   const res: any[] = [];
-  const lowerHints = hints.map(h => h.toLowerCase());
+  const lowerHints = hints.map((h) => h.toLowerCase());
   walk(root, (n) => {
     try {
       const matName = (n?.material?.name || "").toString().toLowerCase();
       if (!matName) return;
-      if (lowerHints.some(h => matName.includes(h))) res.push(n);
+      if (lowerHints.some((h) => matName.includes(h))) res.push(n);
     } catch {}
   });
   return res;
@@ -182,7 +249,7 @@ async function composeArtworkOnLargeCanvas(
 
   return {
     dataUrl: canvas.toDataURL("image/png"),
-    artMeters: { w: artMeters.w, h: artMeters.h }
+    artMeters: { w: artMeters.w, h: artMeters.h },
   };
 }
 
@@ -192,6 +259,7 @@ export default function ARPreview() {
   const { id } = useParams();
   const [art, setArt] = useState<Artwork | null>(null);
 
+  const [roomSrc, setRoomSrc] = useState<string | null>(null);
   const [roomLoaded, setRoomLoaded] = useState(false);
   const [artworkApplied, setArtworkApplied] = useState(false);
 
@@ -220,6 +288,24 @@ export default function ARPreview() {
     timer: 0 as any,
   });
 
+  /* --------------------------- resolve room URL --------------------------- */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const url = await resolveRoomUrl();
+      if (!alive) return;
+      if (!url) {
+        setLastError(
+          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets (public/assets/rooms)."
+        );
+      }
+      setRoomSrc(url);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   /* ----------------------------- Load artwork ---------------------------- */
   useEffect(() => {
     let alive = true;
@@ -233,7 +319,9 @@ export default function ARPreview() {
       if (!alive) return;
       if (!error) setArt((data || null) as any);
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
   /* ---------------------- Convert DB dims to meters ---------------------- */
@@ -241,7 +329,8 @@ export default function ARPreview() {
     if (!art?.width || !art?.height || !art?.dim_unit) return null;
     if (art.dim_unit === "cm") return { w: cmToMeters(art.width), h: cmToMeters(art.height) };
     if (art.dim_unit === "in") return { w: inchToMeters(art.width), h: inchToMeters(art.height) };
-    if (art.dim_unit === "px") return { w: inchToMeters(art.width / 96), h: inchToMeters(art.height / 96) };
+    if (art.dim_unit === "px")
+      return { w: inchToMeters(art.width / 96), h: inchToMeters(art.height / 96) };
     return null;
   }, [art]);
 
@@ -250,7 +339,10 @@ export default function ARPreview() {
     const el: any = mvRef.current;
     if (!el) return;
 
-    const onLoad = () => { setRoomLoaded(true); setLastError(null); };
+    const onLoad = () => {
+      setRoomLoaded(true);
+      setLastError(null);
+    };
     const onError = (e: any) => {
       const msg = e?.detail?.message || e?.detail || "Unknown model-viewer error";
       setLastError(String(msg));
@@ -278,7 +370,11 @@ export default function ARPreview() {
     if (!root) return;
     try {
       const names = listNames(root, 64);
-      setDebugInfo(`Found ${names.length} nodes: ${names.slice(0, 10).join(", ")}${names.length > 10 ? "..." : ""}`);
+      setDebugInfo(
+        `Found ${names.length} nodes: ${names.slice(0, 10).join(", ")}${
+          names.length > 10 ? "..." : ""
+        }`
+      );
     } catch {}
   }, [roomLoaded]);
 
@@ -308,7 +404,9 @@ export default function ARPreview() {
       fb = findByName(root, "ArtFrameBox") || findByPrefix(root, "ArtFrameBox");
       if (fb?.scale) setFrameBox({ w: fb.scale.x, h: fb.scale.y });
       else setFrameBox(null);
-    } catch { setFrameBox(null); }
+    } catch {
+      setFrameBox(null);
+    }
   }, [roomLoaded]);
 
   /* --------------------- Toggle reference human visibility -------------------- */
@@ -319,22 +417,16 @@ export default function ARPreview() {
     const root = getRoot(el);
     if (!root) return;
 
-    // Collect candidates using several strategies
     const candidates = new Set<any>();
 
-    // 1) Exact names
-    HUMAN_NODE_NAMES.forEach(nm => {
+    HUMAN_NODE_NAMES.forEach((nm) => {
       const n = findByName(root, nm) || findByPrefix(root, nm);
       if (n) candidates.add(n);
     });
 
-    // 2) Name contains hints (e.g., "rp_posed_00178_29", "person")
     for (const n of findAllByNameContains(root, HUMAN_NAME_HINTS)) candidates.add(n);
-
-    // 3) Material name contains hints (e.g., "rp_posed_00178_29_mat_")
     for (const n of findAllByMaterialIncludes(root, HUMAN_MATERIAL_HINTS)) candidates.add(n);
 
-    // Apply visibility
     let toggled = 0;
     candidates.forEach((node) => {
       try {
@@ -351,8 +443,10 @@ export default function ARPreview() {
   }, [roomLoaded, showHuman]);
 
   function fmtMeters(m: number) {
-    return dimUnit === "cm" ? `${Math.round(metersToCm(m))} cm`
-      : dimUnit === "in" ? `${Math.round(metersToIn(m))} in`
+    return dimUnit === "cm"
+      ? `${Math.round(metersToCm(m))} cm`
+      : dimUnit === "in"
+      ? `${Math.round(metersToIn(m))} in`
       : `${m.toFixed(2)} m`;
   }
 
@@ -363,15 +457,29 @@ export default function ARPreview() {
 
     el.setAttribute("tabindex", "0");
 
-    const onEnter = () => { movementRef.current.active = true; };
-    const onLeave = () => { movementRef.current.active = false; movementRef.current.keys.clear(); };
-    const onFocus = () => { movementRef.current.active = true; };
-    const onBlur = () => { movementRef.current.active = false; movementRef.current.keys.clear(); };
+    const onEnter = () => {
+      movementRef.current.active = true;
+    };
+    const onLeave = () => {
+      movementRef.current.active = false;
+      movementRef.current.keys.clear();
+    };
+    const onFocus = () => {
+      movementRef.current.active = true;
+    };
+    const onBlur = () => {
+      movementRef.current.active = false;
+      movementRef.current.keys.clear();
+    };
 
     const onKeyDown = (ev: KeyboardEvent) => {
       if (!movementRef.current.active) return;
       const k = ev.key.toLowerCase();
-      if (["w","a","s","d","q","e","arrowup","arrowdown","arrowleft","arrowright"].includes(k)) {
+      if (
+        ["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(
+          k
+        )
+      ) {
         ev.preventDefault();
         movementRef.current.keys.add(k);
       }
@@ -391,7 +499,9 @@ export default function ARPreview() {
     const tick = () => {
       const mv = movementRef.current;
       if (mv.keys.size > 0 && mv.active) {
-        let dx = 0, dz = 0, dr = 0;
+        let dx = 0,
+          dz = 0,
+          dr = 0;
 
         // Swapped mapping
         if (mv.keys.has("w")) dz += MOVE_SPEED;
@@ -432,14 +542,17 @@ export default function ARPreview() {
   /* -------- Apply artwork: compose on large canvas, then texture -------- */
   useEffect(() => {
     (async () => {
-      if (!art?.image_url || !dims) return;
+      if (!art?.image_url || !dims || !roomLoaded) return;
       const el: any = mvRef.current;
       if (!el) return;
 
       try {
         if (!el.loaded) {
           await new Promise<void>((resolve) => {
-            const onLoad = () => { el.removeEventListener("load", onLoad); resolve(); };
+            const onLoad = () => {
+              el.removeEventListener("load", onLoad);
+              resolve();
+            };
             el.addEventListener("load", onLoad, { once: true });
           });
         }
@@ -466,7 +579,8 @@ export default function ARPreview() {
           mats.find((m: any) => (m?.name || "").toLowerCase() === "matartquad") ||
           mats.find((m: any) => (m?.name || "").toLowerCase() === "matfloor") ||
           mats.find((m: any) => (m?.name || "").toLowerCase() === "matwall") ||
-          mats[0] || null;
+          mats[0] ||
+          null;
         targetPbr = matObj?.pbrMetallicRoughness ?? null;
         if (matObj && !targetNode) {
           targetNode = findMeshByMaterialName(root, matObj.name || "");
@@ -501,11 +615,15 @@ export default function ARPreview() {
         } else if (targetPbr.baseColorTexture?.setTexture) {
           await targetPbr.baseColorTexture.setTexture(tex);
         }
-        try { targetPbr.setMetallicFactor?.(0); } catch {}
-        try { targetPbr.setRoughnessFactor?.(0.75); } catch {}
+        try {
+          targetPbr.setMetallicFactor?.(0);
+        } catch {}
+        try {
+          targetPbr.setRoughnessFactor?.(0.75);
+        } catch {}
         if (matObj) {
-          if ("alphaMode" in matObj) matObj.alphaMode = "BLEND";
-          if ("doubleSided" in matObj) matObj.doubleSided = true;
+          if ("alphaMode" in matObj) (matObj as any).alphaMode = "BLEND";
+          if ("doubleSided" in matObj) (matObj as any).doubleSided = true;
         }
 
         try {
@@ -513,15 +631,21 @@ export default function ARPreview() {
             setWallInfo({
               name: targetNode.name,
               w: targetNode.scale.x,
-              h: targetNode.scale.y
+              h: targetNode.scale.y,
             });
           }
-        } catch { setWallInfo(null); }
+        } catch {
+          setWallInfo(null);
+        }
 
         setRendered({ w: actualArtMeters.w, h: actualArtMeters.h });
         setArtworkApplied(true);
         setLastError(null);
-        setDebugInfo(`✓ Artwork ${actualArtMeters.w.toFixed(2)}m × ${actualArtMeters.h.toFixed(2)}m centered on ${ARTQUAD_CANVAS_W}m × ${ARTQUAD_CANVAS_H}m canvas`);
+        setDebugInfo(
+          `✓ Artwork ${actualArtMeters.w.toFixed(2)}m × ${actualArtMeters.h.toFixed(
+            2
+          )}m centered on ${ARTQUAD_CANVAS_W}m × ${ARTQUAD_CANVAS_H}m canvas`
+        );
       } catch (e: any) {
         setLastError(`Texture apply error: ${String(e?.message || e)}`);
       }
@@ -543,7 +667,9 @@ export default function ARPreview() {
   return (
     <div className="mx-auto max-w-[1400px] px-4 py-6 text-neutral-200">
       <div className="mb-4">
-        <Link to={`/art/${id}`} className="text-sm text-neutral-400 hover:text-white">← Back to artwork</Link>
+        <Link to={`/art/${id}`} className="text-sm text-neutral-400 hover:text-white">
+          ← Back to artwork
+        </Link>
       </div>
 
       <div className="grid grid-cols-12 gap-6">
@@ -551,7 +677,8 @@ export default function ARPreview() {
           <div className="relative">
             <ModelViewer
               ref={mvRef}
-              src="/3d/room_artquad_v3.glb"
+              // Safe room source (may be null while resolving)
+              src={roomSrc ?? ""}
               ar
               arModes="webxr scene-viewer quick-look"
               cameraControls
@@ -657,7 +784,12 @@ export default function ARPreview() {
 
             <div className="mb-2 text-xs text-neutral-400">
               Artwork: <span className="text-neutral-200">{originalDimsLabel}</span>
-              {dims && <> <span className="text-neutral-500"> ({metersDimsLabel})</span></>}
+              {dims && (
+                <>
+                  {" "}
+                  <span className="text-neutral-500"> ({metersDimsLabel})</span>
+                </>
+              )}
             </div>
 
             <div className="mb-2 text-xs text-neutral-400">
@@ -679,8 +811,12 @@ export default function ARPreview() {
               <div className="mb-4 rounded-lg border border-green-900/30 bg-green-900/10 p-3 text-xs">
                 <div className="text-green-400 font-semibold mb-2">✓ Rendered at True Size:</div>
                 <div className="grid grid-cols-2 gap-2 text-neutral-300">
-                  <div>Width: <span className="text-white font-medium">{fmtMeters(rendered.w)}</span></div>
-                  <div>Height: <span className="text-white font-medium">{fmtMeters(rendered.h)}</span></div>
+                  <div>
+                    Width: <span className="text-white font-medium">{fmtMeters(rendered.w)}</span>
+                  </div>
+                  <div>
+                    Height: <span className="text-white font-medium">{fmtMeters(rendered.h)}</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -689,7 +825,8 @@ export default function ARPreview() {
               <button
                 className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1 text-xs transition-colors"
                 onClick={() => {
-                  const el: any = mvRef.current; if (!el) return;
+                  const el: any = mvRef.current;
+                  if (!el) return;
                   el.setAttribute("camera-target", `0m ${EYE_LEVEL_M}m ${ART_ZOFF_M}m`);
                   el.setAttribute("camera-orbit", `${START_THETA}deg ${START_PHI}deg ${START_RADIUS}m`);
                   el.jumpCameraToGoal?.();
@@ -704,7 +841,8 @@ export default function ARPreview() {
               <button
                 className="rounded-lg bg-neutral-800 hover:bg-neutral-700 px-3 py-1 text-xs transition-colors"
                 onClick={() => {
-                  const el: any = mvRef.current; if (!el) return;
+                  const el: any = mvRef.current;
+                  if (!el) return;
                   const near = Math.max(1.0, MIN_RADIUS + 0.2);
                   el.setAttribute("camera-target", `0m ${EYE_LEVEL_M}m ${ART_ZOFF_M}m`);
                   el.setAttribute("camera-orbit", `${START_THETA}deg ${START_PHI}deg ${near}m`);
@@ -725,7 +863,9 @@ export default function ARPreview() {
                 src={art.image_url}
                 alt={art.title || "Artwork"}
                 className="w-full rounded border border-neutral-700"
-                onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+                onError={(e) => {
+                  (e.target as HTMLImageElement).style.display = "none";
+                }}
               />
             </div>
           )}
