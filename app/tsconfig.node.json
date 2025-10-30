@@ -7,18 +7,15 @@
     "types": ["node"],
     "skipLibCheck": true,
 
-    /* Project reference requirements */
-    "composite": true,                // ✅ required
-    "noEmit": false,                  // ✅ referenced projects cannot disable emit
+    "composite": false,
+    "noEmit": true,
     "emitDeclarationOnly": false,
 
-    /* Bundler mode */
-    "moduleResolution": "bundler",
+    "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,
     "moduleDetection": "force",
 
-    /* Linting (keep as you like) */
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
@@ -26,5 +23,5 @@
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true
   },
-  "include": ["vite.config.ts"]
+  "include": ["vite.config.ts", "vitest.config.ts", "scripts/**/*.ts"]
 }
