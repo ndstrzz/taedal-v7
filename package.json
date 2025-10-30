@@ -26,11 +26,15 @@
     "helmet": "^7.1.0",
     "ogl": "^1.0.11",
     "stripe": "^16.0.0",
-    "three": "^0.168.0",
+    "three": "^0.172.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@types/three": "^0.172.0",
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.6.3"
+  },
+  "overrides": {
+    "three": "^0.172.0"
   }
 }
