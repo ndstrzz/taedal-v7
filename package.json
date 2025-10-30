@@ -7,9 +7,14 @@
     "node": "20.x"
   },
   "scripts": {
+    "preinstall": "git lfs install || true",
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+
+    // --- CI/CD helpers for Option B (LFS) ---
+    "vercel-build": "git lfs pull || true && npm ci && npm run build",
+    "render-build": "git lfs pull || true && npm ci && npm run build"
   },
   "dependencies": {
     "@google/model-viewer": "^4.1.0",
