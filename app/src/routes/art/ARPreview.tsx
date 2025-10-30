@@ -66,6 +66,19 @@ function getEnv(key: string): string | undefined {
   }
 }
 
+// replace the old headOk() with this:
+async function urlExists(url: string): Promise<boolean> {
+  try {
+    // Try a zero-byte ranged GET to avoid downloading the whole GLB.
+    const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
+    // 200 or 206 (partial) are both fine here
+    return r.ok || r.status === 206;
+  } catch {
+    return false;
+  }
+}
+
+
 /** HEAD check for existence */
 async function headOk(url: string): Promise<boolean> {
   try {
@@ -80,34 +93,31 @@ async function headOk(url: string): Promise<boolean> {
 async function resolveRoomUrl(): Promise<string | null> {
   // 1) window.__CONFIG__.ROOM_URL
   const winCfg = (globalThis as any)?.window?.__CONFIG__;
-  if (winCfg?.ROOM_URL && (await headOk(winCfg.ROOM_URL))) return winCfg.ROOM_URL as string;
+  if (winCfg?.ROOM_URL && (await urlExists(winCfg.ROOM_URL))) return winCfg.ROOM_URL as string;
 
-  // 2) Vite env
+  // 2) VITE_ROOM_URL
   const envUrl = getEnv("VITE_ROOM_URL");
-  if (envUrl && (await headOk(envUrl))) return envUrl;
+  if (envUrl && (await urlExists(envUrl))) return envUrl;
 
-  // 3) Local public asset (served by Vercel/Vite)
+  // 3) Local public file (served by Vercel/Vite)
   const local = "/3d/room_artquad_v3.glb";
-  if (await headOk(local)) return local;
+  if (await urlExists(local)) return local;
 
-  // 4) Supabase public buckets (common names)
+  // 4) Supabase buckets (public/assets/rooms)
   const candidates: Array<{ bucket: string; path: string }> = [
     { bucket: "public", path: "3d/room_artquad_v3.glb" },
     { bucket: "assets", path: "3d/room_artquad_v3.glb" },
     { bucket: "rooms", path: "room_artquad_v3.glb" },
   ];
-
   for (const c of candidates) {
     try {
       const { data } = supabase.storage.from(c.bucket).getPublicUrl(c.path);
-      if (data?.publicUrl && (await headOk(data.publicUrl))) return data.publicUrl;
-    } catch {
-      /* ignore and continue */
-    }
+      if (data?.publicUrl && (await urlExists(data.publicUrl))) return data.publicUrl;
+    } catch {}
   }
-
   return null;
 }
+
 
 /* ------------------------ Scene-graph helpers (safe) --------------------- */
 
