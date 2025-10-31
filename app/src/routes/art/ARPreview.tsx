@@ -514,14 +514,14 @@ export default function ARPreview() {
           dr = 0;
 
         // Swapped mapping
-        if (mv.keys.has("w")) dz += MOVE_SPEED;
-        if (mv.keys.has("s")) dz -= MOVE_SPEED;
+        if (mv.keys.has("w")) dz -= MOVE_SPEED;
+        if (mv.keys.has("s")) dz += MOVE_SPEED;
 
-        if (mv.keys.has("arrowup")) dz -= MOVE_SPEED;
-        if (mv.keys.has("arrowdown")) dz += MOVE_SPEED;
+        if (mv.keys.has("arrowup")) dz += MOVE_SPEED;
+        if (mv.keys.has("arrowdown")) dz -= MOVE_SPEED;
 
-        if (mv.keys.has("a") || mv.keys.has("arrowleft")) dx -= MOVE_SPEED;
-        if (mv.keys.has("d") || mv.keys.has("arrowright")) dx += MOVE_SPEED;
+        if (mv.keys.has("a") || mv.keys.has("arrowleft")) dx += MOVE_SPEED;
+        if (mv.keys.has("d") || mv.keys.has("arrowright")) dx -= MOVE_SPEED;
 
         if (mv.keys.has("q")) dr -= ZOOM_SPEED;
         if (mv.keys.has("e")) dr += ZOOM_SPEED;
