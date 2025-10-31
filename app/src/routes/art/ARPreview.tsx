@@ -514,8 +514,8 @@ export default function ARPreview() {
           dr = 0;
 
         // Swapped mapping
-        if (mv.keys.has("w")) dz -= MOVE_SPEED;
-        if (mv.keys.has("s")) dz += MOVE_SPEED;
+        if (mv.keys.has("w")) dz += MOVE_SPEED;
+        if (mv.keys.has("s")) dz -= MOVE_SPEED;
 
         if (mv.keys.has("arrowup")) dz += MOVE_SPEED;
         if (mv.keys.has("arrowdown")) dz -= MOVE_SPEED;
