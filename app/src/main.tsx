@@ -1,5 +1,4 @@
-// app/src/main.tsx
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import {
   createBrowserRouter,
@@ -7,6 +6,9 @@ import {
   Outlet,
   useRouteError,
   isRouteErrorResponse,
+  Navigate,
+  useLocation,
+  useNavigate,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./index.css";
@@ -38,31 +40,19 @@ import Deploying from "./routes/studio/Deploying";
 import CheckoutSuccess from "./routes/checkout/Success";
 import Discover from "./routes/discover/Discover";
 import CollectionEdit from "./routes/collection/CollectionEdit";
-
-/* NEW: Collection page */
 import CollectionPage from "./routes/collection/CollectionPage";
-import '@google/model-viewer';
 
+import "@google/model-viewer";
 
-/* Assistant always-on */
+/* Assistant */
 import "./assistant/standalone";
 
-/* Optional global safety net (still useful for non-route errors) */
+/* Boot */
+import Boot from "./routes/boot/Boot";
+
 import ErrorBoundary from "./components/_debug/ErrorBoundary";
 
-function Layout() {
-  return (
-    <>
-      <Topbar />
-      <Sidebar />
-      <div className="pl-14">
-        <Outlet />
-      </div>
-    </>
-  );
-}
-
-/** Route-level error UI (this is what React Router will render) */
+/* ---------- Route-level error UI ---------- */
 function RouteErrorPage() {
   const err = useRouteError();
   // eslint-disable-next-line no-console
@@ -88,40 +78,74 @@ function RouteErrorPage() {
   );
 }
 
+/* ---------- Gate: require Boot once per tab ---------- */
+function RequireBootGate() {
+  const nav = useNavigate();
+  const loc = useLocation();
+  useEffect(() => {
+    const done = sessionStorage.getItem("taedal_boot_done") === "1";
+    const onBoot = loc.pathname === "/"; // Boot itself
+    if (!done && !onBoot) {
+      nav("/", { replace: true });
+    }
+  }, [loc.pathname, nav]);
+  return <Outlet />;
+}
+
+/* ---------- App layout (behind gate) ---------- */
+function AppLayout() {
+  return (
+    <>
+      <Topbar />
+      <Sidebar />
+      <div className="pl-14">
+        <Outlet />
+      </div>
+    </>
+  );
+}
+
+/* ---------- Router ---------- */
 const router = createBrowserRouter([
+  // Boot at root – always first
+  { path: "/", element: <Boot /> },
+
+  // Everything else is behind the boot gate
   {
-    element: <Layout />,
+    path: "/",
+    element: <RequireBootGate />,
     errorElement: <RouteErrorPage />,
     children: [
-      { path: "/", element: <Home /> },
-      { path: "/discover", element: <Discover /> },
-      { path: "/explore", element: <Explore /> },
+      { path: "/home", element: <AppLayout />, children: [{ index: true, element: <Home /> }] },
 
-      // 🔒 Auth-protected
-      { path: "/contracts", element: <RequireAuth><Contracts /></RequireAuth> },
-      { path: "/contracts/:id", element: <RequireAuth><RequestDetail /></RequireAuth> },
-      { path: "/account", element: <RequireAuth><Account /></RequireAuth> },
-      { path: "/create", element: <RequireAuth><CreateArtwork /></RequireAuth> },
-      { path: "/studio", element: <RequireAuth><StudioHome /></RequireAuth> },
-      { path: "/studio/create", element: <RequireAuth><CreateChooser /></RequireAuth> },
-      { path: "/studio/create/collection", element: <RequireAuth><DeployCollection /></RequireAuth> },
-      { path: "/studio/create/collection/deploying", element: <RequireAuth><Deploying /></RequireAuth> },
+      // If you still want /explore separate:
+      { path: "/explore", element: <AppLayout />, children: [{ index: true, element: <Explore /> }] },
+
+      // Auth-protected
+      { path: "/contracts", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Contracts /></RequireAuth> }] },
+      { path: "/contracts/:id", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><RequestDetail /></RequireAuth> }] },
+      { path: "/account", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Account /></RequireAuth> }] },
+      { path: "/create", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><CreateArtwork /></RequireAuth> }] },
+      { path: "/studio", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><StudioHome /></RequireAuth> }] },
+      { path: "/studio/create", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><CreateChooser /></RequireAuth> }] },
+      { path: "/studio/create/collection", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><DeployCollection /></RequireAuth> }] },
+      { path: "/studio/create/collection/deploying", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Deploying /></RequireAuth> }] },
 
       // Public
-      { path: "/u/:handle", element: <PublicProfile /> },
-      { path: "/art/:id", element: <ArtworkDetail /> },
-      { path: "/art/:id/ar", element: <ARPreview /> },
-      { path: "/checkout/success", element: <CheckoutSuccess /> },
-      { path: "/orders/success", element: <CheckoutSuccess /> },
-      { path: "/signin", element: <SignIn /> },
-      { path: "/auth/callback", element: <Callback /> },
+      { path: "/u/:handle", element: <AppLayout />, children: [{ index: true, element: <PublicProfile /> }] },
+      { path: "/art/:id", element: <AppLayout />, children: [{ index: true, element: <ArtworkDetail /> }] },
+      { path: "/art/:id/ar", element: <AppLayout />, children: [{ index: true, element: <ARPreview /> }] },
+      { path: "/checkout/success", element: <AppLayout />, children: [{ index: true, element: <CheckoutSuccess /> }] },
+      { path: "/orders/success", element: <AppLayout />, children: [{ index: true, element: <CheckoutSuccess /> }] },
+      { path: "/signin", element: <AppLayout />, children: [{ index: true, element: <SignIn /> }] },
+      { path: "/auth/callback", element: <AppLayout />, children: [{ index: true, element: <Callback /> }] },
 
-      // NEW: Collection route (slug or UUID handled inside the page)
-      { path: "/collection/:slug", element: <CollectionPage /> },
-      { path: "/collection/:slug/edit", element: <CollectionEdit /> },
+      // Collections
+      { path: "/collection/:slug", element: <AppLayout />, children: [{ index: true, element: <CollectionPage /> }] },
+      { path: "/collection/:slug/edit", element: <AppLayout />, children: [{ index: true, element: <CollectionEdit /> }] },
 
-      // Optional catch-all (keeps the error page consistent)
-      { path: "*", element: <RouteErrorPage /> },
+      // Catch-all → show error page (optional: redirect to /home if boot seen)
+      { path: "*", element: <Navigate to="/home" replace /> },
     ],
   },
 ]);
