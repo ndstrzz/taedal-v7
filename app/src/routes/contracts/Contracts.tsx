@@ -95,6 +95,21 @@ function RowCard({ r, me }: { r: Row; me: string }) {
   );
 }
 
+/* ------------------------ tiny autoplay helper (inline) ------------------- */
+async function tryPlayWithSound(el: HTMLVideoElement, volume = 0.85) {
+  if (!el) return;
+  try {
+    el.muted = false;
+    el.volume = volume;
+    await el.play();
+    return;
+  } catch {
+    el.muted = true;
+    el.volume = 0;
+    try { await el.play(); } catch {}
+  }
+}
+
 /* --------------------------------- page ---------------------------------- */
 const TABS = [
   { key: "all", label: "All Contracts" },
@@ -114,7 +129,7 @@ export default function Contracts() {
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<TabKey>("all");
 
-  // Intro overlay (always with music; no mute option)
+  // Intro overlay
   const [showIntro, setShowIntro] = useState(true);
   const [needsUserGesture, setNeedsUserGesture] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -123,36 +138,17 @@ export default function Contracts() {
     const v = videoRef.current;
     if (!v) return;
 
-    // Try autoplay WITH audio first.
-    v.muted = false;
-    v.volume = 0.8;
+    // start the video immediately; cover page so it is the first thing you see
+    tryPlayWithSound(v, 0.85).then(() => {
+      // if it ended up muted, show the button to enable audio on gesture
+      if (v.muted) setNeedsUserGesture(true);
+    });
 
-    const start = async () => {
-      try {
-        await v.play();
-        setNeedsUserGesture(false);
-      } catch {
-        // If blocked, fall back to muted play but ask for a tap to enable audio.
-        try {
-          v.muted = true;
-          v.volume = 0;
-          await v.play();
-        } catch {
-          // If even muted autoplay fails, show the button to start.
-          setNeedsUserGesture(true);
-        }
-      }
-    };
-
-    start();
-
+    const INTRO_MS = 9000; // auto-hide overlay after 9s
     const t = setTimeout(() => {
       setShowIntro(false);
-      try {
-        v.pause(); // stop music after the 9s intro
-      } catch {}
-    }, 9000);
-
+      try { v.pause(); } catch {}
+    }, INTRO_MS);
     return () => clearTimeout(t);
   }, []);
 
@@ -161,11 +157,10 @@ export default function Contracts() {
     if (!v) return;
     try {
       v.muted = false;
-      v.volume = 0.85;
+      v.volume = 0.9;
       await v.play();
       setNeedsUserGesture(false);
     } catch {
-      // If browser insists, show native controls as a last resort
       v.setAttribute("controls", "true");
     }
   };
@@ -206,9 +201,7 @@ export default function Contracts() {
     return () => {
       alive = false;
       if (videoRef.current) {
-        try {
-          videoRef.current.pause();
-        } catch {}
+        try { videoRef.current.pause(); } catch {}
       }
     };
   }, []);
@@ -248,18 +241,14 @@ export default function Contracts() {
     });
   }, [rows, tab, q]);
 
-  const shellClass = showIntro
-    ? "relative h-[100svh] overflow-hidden bg-black"
-    : "relative min-h-[100svh] bg-black";
+  /* When intro is visible, hide content to avoid flashing underneath */
+  const contentHidden = showIntro ? "opacity-0 pointer-events-none select-none" : "opacity-100";
 
   return (
-    <div className={shellClass}>
-      {/* Fixed overlay — matches Home sizing, leaves sidebar visible */}
+    <div className="relative min-h-[100svh] bg-black">
+      {/* FULL-SCREEN OVERLAY — always on top, covers everything immediately */}
       {showIntro && (
-        <div
-          className="fixed top-0 bottom-0 right-0 z-40 overflow-hidden"
-          style={{ left: `${SIDEBAR_W}px` }}
-        >
+        <div className="fixed inset-0 z-[100] bg-black">
           <video
             ref={videoRef}
             className="absolute inset-0 h-full w-full object-cover"
@@ -267,9 +256,10 @@ export default function Contracts() {
             autoPlay
             playsInline
             preload="auto"
+            // keep sidebar visible? If yes, uncomment the next line instead of full cover:
+            // style={{ left: `${SIDEBAR_W}px` }}
           />
           <div className="absolute inset-0 bg-black/20 pointer-events-none" />
-
           {needsUserGesture && (
             <div className="absolute inset-0 z-10 grid place-items-center">
               <button
@@ -284,8 +274,8 @@ export default function Contracts() {
         </div>
       )}
 
-      {/* Page content (independent sizing) */}
-      <div className="max-w-6xl mx-auto p-6">
+      {/* Page content */}
+      <div className={`max-w-6xl mx-auto p-6 transition-opacity duration-150 ${contentHidden}`} aria-hidden={showIntro}>
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>

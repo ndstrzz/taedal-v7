@@ -84,7 +84,7 @@ function RequireBootGate() {
   const loc = useLocation();
   useEffect(() => {
     const done = sessionStorage.getItem("taedal_boot_done") === "1";
-    const onBoot = loc.pathname === "/"; // Boot itself
+    const onBoot = loc.pathname === "/";
     if (!done && !onBoot) {
       nav("/", { replace: true });
     }
@@ -107,18 +107,13 @@ function AppLayout() {
 
 /* ---------- Router ---------- */
 const router = createBrowserRouter([
-  // Boot at root – always first
   { path: "/", element: <Boot /> },
-
-  // Everything else is behind the boot gate
   {
     path: "/",
     element: <RequireBootGate />,
     errorElement: <RouteErrorPage />,
     children: [
       { path: "/home", element: <AppLayout />, children: [{ index: true, element: <Home /> }] },
-
-      // If you still want /explore separate:
       { path: "/explore", element: <AppLayout />, children: [{ index: true, element: <Explore /> }] },
 
       // Auth-protected
@@ -144,7 +139,6 @@ const router = createBrowserRouter([
       { path: "/collection/:slug", element: <AppLayout />, children: [{ index: true, element: <CollectionPage /> }] },
       { path: "/collection/:slug/edit", element: <AppLayout />, children: [{ index: true, element: <CollectionEdit /> }] },
 
-      // Catch-all → show error page (optional: redirect to /home if boot seen)
       { path: "*", element: <Navigate to="/home" replace /> },
     ],
   },

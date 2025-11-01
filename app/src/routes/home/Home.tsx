@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ensureAutoplayWithSound } from "../../lib/mediaAutoplay";
 
 /* ---------------- env/url resolution ---------------- */
 function getEnv(key: string): string | undefined {
@@ -48,68 +49,40 @@ export default function Home() {
     return () => { alive = false; };
   }, []);
 
-  // Autoplay immediately (muted to satisfy policy), then unmute on first gesture
+  // Autoplay immediately, try with sound; if blocked, play muted and bind one-tap unmute
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
 
-    // Start muted to guarantee autoplay
-    v.muted = true;
     v.playsInline = true;
-    v.autoplay = true;
     v.preload = "auto";
     v.crossOrigin = "anonymous";
+    v.loop = true;
 
-    // Try to play immediately (muted)
-    v.play().catch(() => {});
+    ensureAutoplayWithSound(v, 0.9);
 
     const onLoadedMeta = () => {
-  try {
-    const anyV = v as any;
-    // consider multiple browser hints; none of these expressions are “nullish”
-    const has =
-      (typeof anyV.audioTracks?.length === "number" && anyV.audioTracks.length > 0) ||
-      !!anyV.mozHasAudio ||
-      (typeof anyV.webkitAudioDecodedByteCount === "number" && anyV.webkitAudioDecodedByteCount > 0);
-
-    setHasAudio(has);
-  } catch {
-    setHasAudio(null);
-  }
-};
-
-    v.addEventListener("loadedmetadata", onLoadedMeta);
-
+      try {
+        const anyV = v as any;
+        const detected =
+          (typeof anyV.audioTracks?.length === "number" && anyV.audioTracks.length > 0) ||
+          !!anyV.mozHasAudio ||
+          (typeof anyV.webkitAudioDecodedByteCount === "number" && anyV.webkitAudioDecodedByteCount > 0);
+        setHasAudio(!!detected);
+      } catch {
+        setHasAudio(null);
+      }
+    };
     const onCanPlay = () => {
       setReady(true);
       if (v.paused) v.play().catch(() => {});
     };
+
+    v.addEventListener("loadedmetadata", onLoadedMeta);
     v.addEventListener("canplay", onCanPlay);
-
-    // First interaction anywhere -> unmute + keep playing
-    const unmuteOnce = async () => {
-      try {
-        v.muted = false;
-        v.volume = 0.85;
-        await v.play();
-      } catch {}
-      window.removeEventListener("pointerdown", unmuteOnce);
-      window.removeEventListener("touchstart", unmuteOnce);
-      window.removeEventListener("click", unmuteOnce);
-      window.removeEventListener("keydown", unmuteOnce);
-    };
-    window.addEventListener("pointerdown", unmuteOnce, { once: true });
-    window.addEventListener("touchstart", unmuteOnce, { once: true, passive: true });
-    window.addEventListener("click", unmuteOnce, { once: true });
-    window.addEventListener("keydown", unmuteOnce, { once: true });
-
     return () => {
       v.removeEventListener("loadedmetadata", onLoadedMeta);
       v.removeEventListener("canplay", onCanPlay);
-      window.removeEventListener("pointerdown", unmuteOnce);
-      window.removeEventListener("touchstart", unmuteOnce);
-      window.removeEventListener("click", unmuteOnce);
-      window.removeEventListener("keydown", unmuteOnce);
     };
   }, [src]);
 
