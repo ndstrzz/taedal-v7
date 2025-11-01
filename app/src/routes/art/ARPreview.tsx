@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import ModelViewer, { type ModelViewerHandle } from "../../components/ModelViewer";
-import { ensureAutoplayWithSound } from "../../lib/mediaAutoplay";
 
 /* ---------------------------- Types & helpers ---------------------------- */
 
@@ -57,35 +56,54 @@ const HUMAN_MATERIAL_HINTS = ["rp_posed_00178_29_mat_", "rp_posed", "person"];
 
 /* ------------------------ Env + URL resolution helpers --------------------- */
 
+/** Safe env getter that won’t cause TS errors even if ImportMetaEnv isn’t typed. */
 function getEnv(key: string): string | undefined {
   try {
-    // @ts-ignore
+    // @ts-ignore - guard for Vite env
     return (import.meta as any)?.env?.[key];
   } catch {
     return undefined;
   }
 }
 
+// replace the old headOk() with this:
 async function urlExists(url: string): Promise<boolean> {
   try {
+    // Try a zero-byte ranged GET to avoid downloading the whole GLB.
     const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
+    // 200 or 206 (partial) are both fine here
     return r.ok || r.status === 206;
   } catch {
     return false;
   }
 }
 
-/** Resolve the GLB room URL through several fallbacks. */
+
+/** HEAD check for existence */
+async function headOk(url: string): Promise<boolean> {
+  try {
+    const r = await fetch(url, { method: "HEAD" });
+    return r.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** Try to produce a usable GLB URL via multiple fallbacks. */
 async function resolveRoomUrl(): Promise<string | null> {
+  // 1) window.__CONFIG__.ROOM_URL
   const winCfg = (globalThis as any)?.window?.__CONFIG__;
   if (winCfg?.ROOM_URL && (await urlExists(winCfg.ROOM_URL))) return winCfg.ROOM_URL as string;
 
+  // 2) VITE_ROOM_URL
   const envUrl = getEnv("VITE_ROOM_URL");
   if (envUrl && (await urlExists(envUrl))) return envUrl;
 
+  // 3) Local public file (served by Vercel/Vite)
   const local = "/3d/room_artquad_v3.glb";
   if (await urlExists(local)) return local;
 
+  // 4) Supabase buckets (public/assets/rooms)
   const candidates: Array<{ bucket: string; path: string }> = [
     { bucket: "public", path: "3d/room_artquad_v3.glb" },
     { bucket: "assets", path: "3d/room_artquad_v3.glb" },
@@ -100,19 +118,9 @@ async function resolveRoomUrl(): Promise<string | null> {
   return null;
 }
 
-/** Resolve intro video URL for the overlay. */
-async function resolveIntroUrl(): Promise<string | null> {
-  const winCfg = (globalThis as any)?.window?.__CONFIG__;
-  const env = getEnv("VITE_AR_INTRO_URL");
-  const local = "/media/ar-intro.mp4";
-
-  if (winCfg?.AR_INTRO_URL && (await urlExists(winCfg.AR_INTRO_URL))) return winCfg.AR_INTRO_URL as string;
-  if (env && (await urlExists(env))) return env;
-  if (await urlExists(local)) return local;
-  return null;
-}
 
 /* ------------------------ Scene-graph helpers (safe) --------------------- */
+
 function getRoot(el: any): any {
   if (!el) return null;
   return el.model?.scene ?? el.model ?? el.scene ?? null;
@@ -169,6 +177,8 @@ function findByPrefix(root: any, prefix: string): any {
   });
   return out;
 }
+
+/** collect all meshes whose name CONTAINS any hint */
 function findAllByNameContains(root: any, hints: string[]): any[] {
   const res: any[] = [];
   const lowerHints = hints.map((h) => h.toLowerCase());
@@ -179,6 +189,8 @@ function findAllByNameContains(root: any, hints: string[]): any[] {
   });
   return res;
 }
+
+/** collect all meshes whose material name CONTAINS any hint */
 function findAllByMaterialIncludes(root: any, hints: string[]): any[] {
   const res: any[] = [];
   const lowerHints = hints.map((h) => h.toLowerCase());
@@ -191,6 +203,7 @@ function findAllByMaterialIncludes(root: any, hints: string[]): any[] {
   });
   return res;
 }
+
 function findMeshByMaterialName(root: any, materialName: string): any {
   if (!root) return null;
   const target = materialName.toLowerCase();
@@ -206,6 +219,7 @@ function findMeshByMaterialName(root: any, materialName: string): any {
 }
 
 /* -------------- Compose artwork centered on large transparent canvas -------------- */
+
 function loadHtmlImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -273,46 +287,34 @@ export default function ARPreview() {
 
   const mvRef = useRef<ModelViewerHandle | null>(null);
 
-  /* ------------------ NEW: full-screen intro overlay video ------------------ */
-  const [showIntro, setShowIntro] = useState(true);
-  const [introSrc, setIntroSrc] = useState<string | null>(null);
-  const introRef = useRef<HTMLVideoElement | null>(null);
+  /* Movement state (WASD + QE) */
+  const movementRef = useRef({
+    active: false,
+    keys: new Set<string>(),
+    target: { x: 0, y: EYE_LEVEL_M, z: ART_ZOFF_M },
+    radius: START_RADIUS,
+    theta: START_THETA,
+    phi: START_PHI,
+    timer: 0 as any,
+  });
 
-  // Try to resolve both URLs ASAP
+  /* --------------------------- resolve room URL --------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
-      const [room, intro] = await Promise.all([resolveRoomUrl(), resolveIntroUrl()]);
+      const url = await resolveRoomUrl();
       if (!alive) return;
-      if (!room) {
+      if (!url) {
         setLastError(
-          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets."
+          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets (public/assets/rooms)."
         );
       }
-      setRoomSrc(room);
-      setIntroSrc(intro);
+      setRoomSrc(url);
     })();
     return () => {
       alive = false;
     };
   }, []);
-
-  // Start intro video immediately and keep it until the room is fully loaded
-  useEffect(() => {
-    const v = introRef.current;
-    if (!v || !showIntro) return;
-    ensureAutoplayWithSound(v, 0.9);
-  }, [introSrc, showIntro]);
-
-  // When model-viewer finishes loading, fade out intro
-  useEffect(() => {
-    if (!showIntro) return;
-    if (progress >= 1 && roomLoaded) {
-      // small grace period for a clean fade
-      const t = setTimeout(() => setShowIntro(false), 400);
-      return () => clearTimeout(t);
-    }
-  }, [progress, roomLoaded, showIntro]);
 
   /* ----------------------------- Load artwork ---------------------------- */
   useEffect(() => {
@@ -379,7 +381,9 @@ export default function ARPreview() {
     try {
       const names = listNames(root, 64);
       setDebugInfo(
-        `Found ${names.length} nodes: ${names.slice(0, 10).join(", ")}${names.length > 10 ? "..." : ""}`
+        `Found ${names.length} nodes: ${names.slice(0, 10).join(", ")}${
+          names.length > 10 ? "..." : ""
+        }`
       );
     } catch {}
   }, [roomLoaded]);
@@ -396,6 +400,11 @@ export default function ARPreview() {
     el.setAttribute("min-camera-orbit", `${-360}deg ${70}deg ${MIN_RADIUS}m`);
     el.setAttribute("max-camera-orbit", `${360}deg ${100}deg ${MAX_RADIUS}m`);
     el.jumpCameraToGoal?.();
+
+    movementRef.current.target = { x: 0, y: EYE_LEVEL_M, z: ART_ZOFF_M };
+    movementRef.current.radius = START_RADIUS;
+    movementRef.current.theta = START_THETA;
+    movementRef.current.phi = START_PHI;
 
     const root = getRoot(el);
 
@@ -477,7 +486,9 @@ export default function ARPreview() {
       if (!movementRef.current.active) return;
       const k = ev.key.toLowerCase();
       if (
-        ["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)
+        ["w", "a", "s", "d", "q", "e", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(
+          k
+        )
       ) {
         ev.preventDefault();
         movementRef.current.keys.add(k);
@@ -502,8 +513,10 @@ export default function ARPreview() {
           dz = 0,
           dr = 0;
 
+        // Swapped mapping
         if (mv.keys.has("w")) dz += MOVE_SPEED;
         if (mv.keys.has("s")) dz -= MOVE_SPEED;
+
         if (mv.keys.has("arrowup")) dz += MOVE_SPEED;
         if (mv.keys.has("arrowdown")) dz -= MOVE_SPEED;
 
@@ -649,17 +662,6 @@ export default function ARPreview() {
     })();
   }, [art?.image_url, roomLoaded, dims]);
 
-  /* ------------------------------ Movement store ------------------------------ */
-  const movementRef = useRef({
-    active: false,
-    keys: new Set<string>(),
-    target: { x: 0, y: EYE_LEVEL_M, z: ART_ZOFF_M },
-    radius: START_RADIUS,
-    theta: START_THETA,
-    phi: START_PHI,
-    timer: 0 as any,
-  });
-
   /* -------------------------------- Render -------------------------------- */
   const originalDimsLabel =
     art?.width && art?.height && art?.dim_unit
@@ -672,60 +674,20 @@ export default function ARPreview() {
   const hotspotHeightPos =
     rendered && `${(rendered.w ?? 0) / 2 + 0.08} ${EYE_LEVEL_M} ${ART_ZOFF_M + 0.001}`;
 
-  const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
-
   return (
-    <div className="relative mx-auto max-w-[1400px] px-4 py-6 text-neutral-200">
-      {/* INTRO OVERLAY */}
-      {showIntro && (
-        <div className="fixed inset-0 z-[100] bg-black">
-          {/* video backdrop */}
-          {introSrc && (
-            <video
-              ref={introRef}
-              className="absolute inset-0 h-full w-full object-cover"
-              src={introSrc}
-              autoPlay
-              playsInline
-              preload="auto"
-            />
-          )}
-          <div className="absolute inset-0 bg-black/25" />
-
-          {/* centered progress ring + label */}
-          <div className="absolute inset-0 grid place-items-center p-6">
-            <div className="relative h-44 w-44 sm:h-52 sm:w-52">
-              <div
-                className="absolute inset-0 rounded-full"
-                style={{
-                  background: `conic-gradient(white ${pct * 3.6}deg, rgba(255,255,255,0.15) 0deg)`,
-                  WebkitMask:
-                    "radial-gradient(transparent 62%, black 63%)",
-                  mask: "radial-gradient(transparent 62%, black 63%)",
-                }}
-              />
-              <div className="absolute inset-0 grid place-items-center text-center">
-                <div className="text-[11px] tracking-[0.2em] text-white/85 uppercase">
-                  Loading room
-                </div>
-                <div className="mt-1 text-3xl font-semibold">{pct}%</div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
+    <div className="mx-auto max-w-[1400px] px-4 py-6 text-neutral-200">
       <div className="mb-4">
         <Link to={`/art/${id}`} className="text-sm text-neutral-400 hover:text-white">
           ← Back to artwork
         </Link>
       </div>
 
-      <div className={`grid grid-cols-12 gap-6 transition-opacity ${showIntro ? "opacity-0" : "opacity-100"}`}>
+      <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-8">
           <div className="relative">
             <ModelViewer
               ref={mvRef}
+              // Safe room source (may be null while resolving)
               src={roomSrc ?? ""}
               ar
               arModes="webxr scene-viewer quick-look"
@@ -766,7 +728,7 @@ export default function ARPreview() {
 
             {!roomLoaded && (
               <div className="absolute top-4 left-4 rounded bg-blue-900/50 px-3 py-1 text-xs text-white">
-                Loading room… {pct}%
+                Loading room… {progress > 0 && `${Math.round(progress * 100)}%`}
               </div>
             )}
             {lastError && (
@@ -793,11 +755,14 @@ export default function ARPreview() {
             <div className="mb-3 text-sm text-neutral-400">AR Wall Preview</div>
             {art?.title && <h3 className="mb-3 text-lg font-medium text-white">{art.title}</h3>}
 
+            {/* Art wall (hard-coded) */}
             <div className="mb-2 text-xs text-neutral-400">
-              Art wall: <span className="text-neutral-200">{ART_WALL_W.toFixed(2)} m</span> W ×{" "}
+              Art wall:{" "}
+              <span className="text-neutral-200">{ART_WALL_W.toFixed(2)} m</span> W ×{" "}
               <span className="text-neutral-200">{ART_WALL_H.toFixed(2)} m</span> H
             </div>
 
+            {/* Reference human height (hard-coded) + toggle */}
             <div className="mb-3 text-xs text-neutral-400 flex items-center justify-between gap-3">
               <div>
                 Reference human: <span className="text-neutral-200">{HUMAN_HEIGHT_M.toFixed(2)} m</span>
@@ -813,6 +778,7 @@ export default function ARPreview() {
               </label>
             </div>
 
+            {/* Size labels toggle */}
             <div className="mb-3 text-xs text-neutral-400 flex items-center justify-between gap-3">
               <div>Size labels</div>
               <label className="inline-flex items-center gap-2 cursor-pointer">
@@ -828,7 +794,12 @@ export default function ARPreview() {
 
             <div className="mb-2 text-xs text-neutral-400">
               Artwork: <span className="text-neutral-200">{originalDimsLabel}</span>
-              {dims && <span className="text-neutral-500"> ({metersDimsLabel})</span>}
+              {dims && (
+                <>
+                  {" "}
+                  <span className="text-neutral-500"> ({metersDimsLabel})</span>
+                </>
+              )}
             </div>
 
             <div className="mb-2 text-xs text-neutral-400">
@@ -836,6 +807,13 @@ export default function ARPreview() {
               <span className="text-neutral-200">
                 {ARTQUAD_CANVAS_W.toFixed(1)}m × {ARTQUAD_CANVAS_H.toFixed(1)}m
                 {wallInfo && <span className="text-neutral-500"> ({wallInfo.name})</span>}
+              </span>
+            </div>
+
+            <div className="mb-2 text-xs text-neutral-400">
+              Reference box (ArtFrameBox):{" "}
+              <span className="text-neutral-200">
+                {frameBox ? `${frameBox.w.toFixed(2)} m × ${frameBox.h.toFixed(2)} m` : "—"}
               </span>
             </div>
 
