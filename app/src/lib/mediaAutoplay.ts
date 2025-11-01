@@ -77,12 +77,17 @@ export async function tryPlayWithSound(
  * Attaches one-shot listeners to unmute and resume playback
  * on the first user gesture (click/touch/keydown/scroll).
  */
-export function bindUnmuteOnFirstGesture(
-  el: HTMLMediaElement,
-  volume = 0.85
-) {
+export function bindUnmuteOnFirstGesture(el: HTMLMediaElement, volume = 0.85) {
   if (!el) return;
-  const unlock = async () => {
+  if (hasAudioConsent()) return; // nothing to do, already unlocked
+
+  function remove() {
+    ["pointerdown", "click", "keydown", "touchstart", "scroll"].forEach((evt) =>
+      window.removeEventListener(evt, unlock as any)
+    );
+  }
+
+  async function unlock() {
     try {
       el.muted = false;
       el.volume = volume;
@@ -92,12 +97,8 @@ export function bindUnmuteOnFirstGesture(
       /* ignore */
     }
     remove();
-  };
-  const remove = () => {
-    ["pointerdown", "click", "keydown", "touchstart", "scroll"].forEach((evt) =>
-      window.removeEventListener(evt, unlock as any)
-    );
-  };
+  }
+
   ["pointerdown", "click", "keydown", "touchstart", "scroll"].forEach((evt) =>
     window.addEventListener(evt, unlock as any, {
       once: true,
@@ -113,7 +114,7 @@ export function bindUnmuteOnFirstGesture(
 export async function ensureAutoplayWithSound(
   el: HTMLMediaElement,
   volume = 0.85
-) {
+): Promise<"playing-with-sound" | "playing-muted" | "failed"> {
   const res = await tryPlayWithSound(el, volume);
   if (res !== "playing-with-sound") {
     bindUnmuteOnFirstGesture(el, volume);
