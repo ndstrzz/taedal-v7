@@ -13,7 +13,6 @@ import {
 import CreateArtwork from "./routes/create/CreateArtwork";
 import ArtworkDetail from "./routes/art/ArtworkDetail";
 import CheckoutSuccess from "./routes/checkout/Success";
-import CollectionPage from "./routes/collection/CollectionPage";
 
 /* styles */
 import "./App.css";
@@ -43,7 +42,7 @@ function TopNav() {
   return (
     <header className="sticky top-0 z-40 flex items-center justify-between gap-3 px-4 py-3 border-b border-white/10 bg-neutral-950/80 backdrop-blur">
       <div className="flex items-center gap-2 min-w-0">
-        <Link to="/" className="flex items-center gap-2">
+        <Link to="/home" className="flex items-center gap-2">
           <div className="h-7 w-7 rounded-xl bg-white text-black grid place-items-center font-black">
             T
           </div>
@@ -52,9 +51,9 @@ function TopNav() {
         <span className="mx-3 text-white/20">|</span>
         <nav className="flex items-center gap-1 text-sm">
           <Link
-            to="/"
+            to="/home"
             className={`px-2 py-1 rounded hover:bg-white/10 ${
-              loc.pathname === "/" ? "bg-white text-black" : "text-white/80"
+              loc.pathname === "/home" ? "bg-white text-black" : "text-white/80"
             }`}
           >
             Explore
@@ -204,6 +203,11 @@ const PublicProfile = lazy(() => import("./routes/profiles/PublicProfile"));
 const ARPreview = lazy(() => import("./routes/art/ARPreview"));
 
 /* ----------------------------------------- */
+/* NEW: Boot screen                          */
+/* ----------------------------------------- */
+const Boot = lazy(() => import("./routes/boot/Boot"));
+
+/* ----------------------------------------- */
 /* 404                                       */
 /* ----------------------------------------- */
 function NotFound() {
@@ -214,7 +218,7 @@ function NotFound() {
         The page you’re looking for doesn’t exist.
       </p>
       <div className="mt-4">
-        <Link to="/" className="btn">
+        <Link to="/home" className="btn">
           Back home
         </Link>
       </div>
@@ -242,25 +246,24 @@ function App() {
             }
           >
             <Routes>
-              <Route path="/" element={<Explore />} />
+              {/* Boot is now the landing route */}
+              <Route path="/" element={<Boot />} />
+
+              {/* Explore moved to /home */}
+              <Route path="/home" element={<Explore />} />
+
               <Route path="/create" element={<CreateArtwork />} />
               <Route path="/art/:id" element={<ArtworkDetail />} />
               {/* NEW: AR preview route */}
               <Route path="/art/:id/ar" element={<ARPreview />} />
               <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
-              {/* NEW: collection route by slug (or UUID) */}
-              <Route path="/collection/:slug" element={<div style={{padding:20}}>✅ collection route matched</div>} />
-
               {/* Public profile routes */}
               <Route path="/u/:handle" element={<PublicProfile />} />
               <Route path="/profiles/:handle" element={<PublicProfile />} />
 
               {/* Optional redirect for legacy links */}
-              <Route
-                path="/profile/:handle"
-                element={<Navigate to="/u/:handle" replace />}
-              />
+              <Route path="/profile/:handle" element={<Navigate to="/u/:handle" replace />} />
 
               {/* 404 fallback */}
               <Route path="*" element={<NotFound />} />

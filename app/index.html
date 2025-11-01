@@ -15,6 +15,13 @@
     <link rel="preconnect" href="https://plum-fascinating-armadillo-813.mypinata.cloud" crossorigin />
     <link rel="dns-prefetch" href="https://plum-fascinating-armadillo-813.mypinata.cloud" />
 
+    <!-- Boot screen local assets (instant start) -->
+    <link rel="preload" href="/images/unpacking.mp4" as="video" type="video/mp4" />
+    <link rel="preload" href="/images/start-button.svg" as="image" type="image/svg+xml" />
+
+    <!-- Optional local AR intro fallback -->
+    <link rel="preload" href="/media/ar-intro.mp4" as="video" type="video/mp4" />
+
     <!-- Preload the homepage hero video so bytes are ready before React mounts -->
     <link
       rel="preload"
@@ -70,7 +77,7 @@
           host.title = 'Assistant (fallback)';
           host.textContent = '🦊';
           host.onclick = function () {
-            alert('Assistant fallback: React dock did not mount.\nCheck console for [assistant] logs.');
+            alert('Assistant fallback: React dock did not mount.\\nCheck console for [assistant] logs.');
           };
           document.body.appendChild(host);
           console.warn('[assistant] Fallback bubble injected (React dock not found).');

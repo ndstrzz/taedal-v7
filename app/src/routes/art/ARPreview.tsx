@@ -1,4 +1,3 @@
-// app/src/routes/art/ARPreview.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -47,12 +46,12 @@ const MOVE_SPEED = 0.25;
 const ZOOM_SPEED = 0.35;
 const TICK_MS = 16;
 
-/* Human identifiers (both node and material hints) */
+/* Human identifiers */
 const HUMAN_NODE_NAMES = ["rp_posed_00178_29", "Person175"];
 const HUMAN_NAME_HINTS = ["rp_posed", "person", "human"];
 const HUMAN_MATERIAL_HINTS = ["rp_posed_00178_29_mat_", "rp_posed", "person"];
 
-/* ------------------------ Env + URL resolution helpers --------------------- */
+/* ------------------------ Env + URL resolution --------------------- */
 function getEnv(key: string): string | undefined {
   try {
     // @ts-ignore
@@ -92,8 +91,6 @@ async function resolveRoomUrl(): Promise<string | null> {
   }
   return null;
 }
-
-// Intro video (env or __CONFIG__)
 async function resolveIntroUrl(): Promise<string | null> {
   const cfg = (globalThis as any)?.window?.__CONFIG__;
   const cfgUrl = cfg?.AR_INTRO_URL;
@@ -101,11 +98,10 @@ async function resolveIntroUrl(): Promise<string | null> {
 
   const envUrl = getEnv("VITE_AR_INTRO_URL");
   if (envUrl && (await urlExists(envUrl))) return envUrl;
-
   return null;
 }
 
-/* ------------------------ Scene-graph helpers (safe) --------------------- */
+/* ------------------------ Scene helpers --------------------- */
 function getRoot(el: any): any {
   if (!el) return null;
   return el.model?.scene ?? el.model ?? el.scene ?? null;
@@ -186,7 +182,7 @@ function findMeshByMaterialName(root: any, materialName: string): any {
   return out;
 }
 
-/* -------------- Compose artwork centered on large transparent canvas -------------- */
+/* -------------- Compose artwork on large canvas -------------- */
 function loadHtmlImage(url: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
@@ -235,10 +231,9 @@ export default function ARPreview() {
   const [roomSrc, setRoomSrc] = useState<string | null>(null);
   const [roomLoaded, setRoomLoaded] = useState(false);
 
-  // Intro overlay video while loading
+  // Full-page intro overlay video
   const introVideoRef = useRef<HTMLVideoElement | null>(null);
   const [introSrc, setIntroSrc] = useState<string | null>(null);
-  const [introReady, setIntroReady] = useState(false);
   const [showIntro, setShowIntro] = useState(true);
 
   const [artworkApplied, setArtworkApplied] = useState(false);
@@ -267,7 +262,7 @@ export default function ARPreview() {
     timer: 0 as any,
   });
 
-  /* ----------------------------- Load artwork (DB) ---------------------------- */
+  /* ----------------------------- Load artwork ---------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -283,7 +278,7 @@ export default function ARPreview() {
     return () => { alive = false; };
   }, [id]);
 
-  /* ---------------------- Convert DB dims to meters (DEFINE dims HERE) ---------------------- */
+  /* ---------------------- Convert DB dims to meters ---------------------- */
   const dims = useMemo(() => {
     if (!art?.width || !art?.height || !art?.dim_unit) return null;
     if (art.dim_unit === "cm") return { w: cmToMeters(art.width), h: cmToMeters(art.height) };
@@ -300,7 +295,7 @@ export default function ARPreview() {
       if (!alive) return;
       if (!url) {
         setLastError(
-          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets (public/assets/rooms)."
+          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets."
         );
       }
       setRoomSrc(url);
@@ -308,75 +303,79 @@ export default function ARPreview() {
     return () => { alive = false; };
   }, []);
 
-  /* --------------------------- resolve intro URL --------------------------- */
+  /* --------------------------- resolve intro URL + prewarm --------------------------- */
   useEffect(() => {
     let alive = true;
     (async () => {
       const url = await resolveIntroUrl();
       if (!alive) return;
       setIntroSrc(url);
+
       if (url) {
-        // Preconnect + Preload
+        // Preconnect early
         try {
           const u = new URL(url);
-          const link1 = document.createElement("link");
-          link1.rel = "preconnect";
-          link1.href = u.origin;
-          link1.crossOrigin = "";
-          document.head.appendChild(link1);
+          const pre = document.createElement("link");
+          pre.rel = "preconnect";
+          pre.href = u.origin;
+          pre.crossOrigin = "";
+          document.head.appendChild(pre);
         } catch {}
-        const link2 = document.createElement("link");
-        link2.rel = "preload";
-        link2.as = "video";
-        link2.href = url;
-        link2.crossOrigin = "";
-        document.head.appendChild(link2);
+        // Preload the video
+        const link = document.createElement("link");
+        link.rel = "preload";
+        link.as = "video";
+        link.href = url;
+        link.crossOrigin = "";
+        document.head.appendChild(link);
       }
     })();
     return () => { alive = false; };
   }, []);
 
-  /* -------- Intro video: autoplay muted, unmute on first gesture ---------- */
+  /* -------- Intro video: start immediately, unmute when allowed ---------- */
   useEffect(() => {
     const v = introVideoRef.current;
     if (!v || !introSrc) return;
 
-    v.muted = true;
-    v.playsInline = true;
-    v.autoplay = true;
+    // Fastest-possible start
+    v.src = introSrc;
     v.preload = "auto";
-    v.crossOrigin = "anonymous";
     v.loop = true;
-    v.play().catch(() => {});
+    v.playsInline = true;
+    v.crossOrigin = "anonymous";
+    v.muted = true;              // guarantees autoplay
+    void v.play();               // fire and forget
 
-    const onCanPlay = () => {
-      setIntroReady(true);
-      if (v.paused) v.play().catch(() => {});
-    };
-    v.addEventListener("canplay", onCanPlay);
-
-    const unmuteOnce = async () => {
-      try { v.muted = false; v.volume = 0.85; await v.play(); } catch {}
-      window.removeEventListener("pointerdown", unmuteOnce);
-      window.removeEventListener("touchstart", unmuteOnce);
-      window.removeEventListener("click", unmuteOnce);
-      window.removeEventListener("keydown", unmuteOnce);
-    };
-    window.addEventListener("pointerdown", unmuteOnce, { once: true });
-    window.addEventListener("touchstart", unmuteOnce, { once: true, passive: true });
-    window.addEventListener("click", unmuteOnce, { once: true });
-    window.addEventListener("keydown", unmuteOnce, { once: true });
-
-    return () => {
-      v.removeEventListener("canplay", onCanPlay);
-      window.removeEventListener("pointerdown", unmuteOnce);
-      window.removeEventListener("touchstart", unmuteOnce);
-      window.removeEventListener("click", unmuteOnce);
-      window.removeEventListener("keydown", unmuteOnce);
-    };
+    // If user has already granted audio, unmute right away
+    const ok = (() => {
+      try { return localStorage.getItem("taedal_audio_ok") === "1"; } catch { return false; }
+    })();
+    if (ok) {
+      (async () => {
+        try { v.muted = false; v.volume = 0.85; await v.play(); } catch {}
+      })();
+    } else {
+      // First gesture: unmute + remember
+      const unmuteOnce = async () => {
+        try { v.muted = false; v.volume = 0.85; await v.play(); } catch {}
+        try { localStorage.setItem("taedal_audio_ok", "1"); } catch {}
+        window.removeEventListener("pointerdown", unmuteOnce);
+        window.removeEventListener("click", unmuteOnce);
+        window.removeEventListener("keydown", unmuteOnce);
+        window.removeEventListener("touchstart", unmuteOnce);
+        window.removeEventListener("scroll", unmuteOnce);
+      };
+      window.addEventListener("pointerdown", unmuteOnce, { once: true });
+      window.addEventListener("click", unmuteOnce, { once: true });
+      window.addEventListener("keydown", unmuteOnce, { once: true });
+      window.addEventListener("touchstart", unmuteOnce, { once: true, passive: true });
+      // even a scroll counts as interaction on many browsers
+      window.addEventListener("scroll", unmuteOnce, { once: true, passive: true });
+    }
   }, [introSrc]);
 
-  /* --------- model-viewer lifecycle + progress/error listeners ---------- */
+  /* --------- model-viewer lifecycle + progress ---------- */
   useEffect(() => {
     const el: any = mvRef.current;
     if (!el) return;
@@ -401,7 +400,7 @@ export default function ARPreview() {
     };
   }, []);
 
-  /* Fade out + stop intro when room is ready */
+  /* Fade out + pause intro when room is ready */
   useEffect(() => {
     if (!roomLoaded) return;
     setShowIntro(false);
@@ -411,7 +410,7 @@ export default function ARPreview() {
     return () => clearTimeout(t);
   }, [roomLoaded]);
 
-  /* --------------------- Debug: list some nodes -------------------------- */
+  /* --------------------- Debug & camera init (unchanged) -------------------- */
   useEffect(() => {
     if (!roomLoaded) return;
     const el: any = mvRef.current;
@@ -423,7 +422,6 @@ export default function ARPreview() {
     } catch {}
   }, [roomLoaded]);
 
-  /* --------------------- Camera init + frame box -------------------- */
   useEffect(() => {
     if (!roomLoaded) return;
     const el: any = mvRef.current;
@@ -641,6 +639,32 @@ export default function ARPreview() {
 
   return (
     <div className="mx-auto max-w-[1400px] px-4 py-6 text-neutral-200">
+      {/* FULL-PAGE INTRO — fixed, on top of the whole page */}
+      {introSrc && (
+        <div
+          className={`fixed inset-0 z-[9999] transition-opacity duration-300 ${
+            showIntro ? "opacity-100" : "opacity-0 pointer-events-none"
+          }`}
+          aria-hidden={!showIntro}
+        >
+          <video
+            ref={introVideoRef}
+            className="absolute inset-0 h-full w-full object-cover"
+            autoPlay
+            loop
+            playsInline
+            preload="auto"
+            crossOrigin="anonymous"
+            disablePictureInPicture
+            controlsList="nodownload noremoteplayback"
+          />
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/55 via-black/25 to-black/55" />
+          <div className="absolute left-1/2 top-6 -translate-x-1/2 rounded bg-blue-900/70 px-3 py-1 text-xs text-white">
+            Loading room… {progress > 0 && `${Math.round(progress * 100)}%`}
+          </div>
+        </div>
+      )}
+
       <div className="mb-4">
         <Link to={`/art/${id}`} className="text-sm text-neutral-400 hover:text-white">
           ← Back to artwork
@@ -664,33 +688,6 @@ export default function ARPreview() {
               reveal="auto"
               style={{ width: "100%", height: "100%", background: "#0b0b0b", outline: "none" }}
             />
-
-            {/* Intro overlay */}
-            {introSrc && (
-              <div
-                className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-300 ${
-                  showIntro ? "opacity-100" : "opacity-0"
-                }`}
-                aria-hidden={!showIntro}
-              >
-                <video
-                  ref={introVideoRef}
-                  className="pointer-events-none absolute inset-0 h-full w-full object-cover"
-                  src={introSrc}
-                  autoPlay
-                  loop
-                  playsInline
-                  preload="auto"
-                  crossOrigin="anonymous"
-                  disablePictureInPicture
-                  controlsList="nodownload noremoteplayback"
-                />
-                <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/45 via-black/20 to-black/45" />
-                <div className="absolute top-4 left-4 rounded bg-blue-900/60 px-3 py-1 text-xs text-white">
-                  Loading room… {progress > 0 && `${Math.round(progress * 100)}%`}
-                </div>
-              </div>
-            )}
 
             <div className="absolute bottom-4 left-4 rounded bg-black/50 px-3 py-1 text-xs text-white z-10">
               Walk: <b>S</b>=forward <b>W</b>=back • Strafe: <b>A/D</b> • Zoom: <b>Q/E</b>
