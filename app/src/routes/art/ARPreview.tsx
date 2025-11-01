@@ -66,11 +66,18 @@ function getEnv(key: string): string | undefined {
   }
 }
 
+/** Lightweight existence probe without CORS-hostile headers. */
 async function urlExists(url: string): Promise<boolean> {
   try {
-    // tiny ranged GET avoids full download (helps on Pinata/CORS/CDN)
-    const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
-    return r.ok || r.status === 206;
+    // Try HEAD first
+    const r = await fetch(url, { method: "HEAD" });
+    if (r.ok) return true;
+    // Some gateways disallow HEAD; fall back to a simple GET
+    if (r.status === 405) {
+      const r2 = await fetch(url, { method: "GET", cache: "no-store" });
+      return r2.ok;
+    }
+    return false;
   } catch {
     return false;
   }
@@ -82,15 +89,30 @@ async function resolveRoomUrl(): Promise<string | null> {
   const winCfg = (globalThis as any)?.window?.__CONFIG__;
   if (winCfg?.ROOM_URL && (await urlExists(winCfg.ROOM_URL))) return winCfg.ROOM_URL as string;
 
-  // 2) VITE_ROOM_URL
+  // 2) Build from CID via subdomain gateway (preferred)
+  const cid = getEnv("VITE_ROOM_CID");
+  const gw = (getEnv("VITE_PINATA_GATEWAY") || "").replace(/\/+$/, "");
+  if (cid && gw) {
+    const url = `${gw}/ipfs/${cid}?filename=room_artquad_v3.glb`;
+    if (await urlExists(url)) return url;
+  }
+
+  // 3) Explicit env URL override
   const envUrl = getEnv("VITE_ROOM_URL");
   if (envUrl && (await urlExists(envUrl))) return envUrl;
 
-  // 3) Local public file
+  // 4) Public gateway fallback (optional)
+  const ipfsFallback = (getEnv("VITE_PINATA_FALLBACK") || "https://ipfs.io").replace(/\/+$/, "");
+  if (cid) {
+    const ipfsIo = `${ipfsFallback}/ipfs/${cid}?filename=room_artquad_v3.glb`;
+    if (await urlExists(ipfsIo)) return ipfsIo;
+  }
+
+  // 5) Local public file
   const local = "/3d/room_artquad_v3.glb";
   if (await urlExists(local)) return local;
 
-  // 4) Supabase buckets
+  // 6) Supabase buckets
   const candidates: Array<{ bucket: string; path: string }> = [
     { bucket: "public", path: "3d/room_artquad_v3.glb" },
     { bucket: "assets", path: "3d/room_artquad_v3.glb" },
@@ -298,7 +320,7 @@ export default function ARPreview() {
       if (!alive) return;
       if (!room) {
         setLastError(
-          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL, /3d path, and Supabase buckets."
+          "Room GLB not accessible. Tried window.__CONFIG__.ROOM_URL, VITE_ROOM_URL/CID via gateway, local /3d path, and Supabase buckets."
         );
       }
       setRoomSrc(room);
