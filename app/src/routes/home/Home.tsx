@@ -9,7 +9,6 @@ function getEnv(key: string): string | undefined {
     return undefined;
   }
 }
-
 async function urlExists(url: string): Promise<boolean> {
   try {
     const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
@@ -18,7 +17,6 @@ async function urlExists(url: string): Promise<boolean> {
     return false;
   }
 }
-
 async function resolveHomeVideoUrl(): Promise<string> {
   const cfg = (globalThis as any)?.window?.__CONFIG__;
   if (cfg?.HOME_VIDEO_URL && (await urlExists(cfg.HOME_VIDEO_URL))) return cfg.HOME_VIDEO_URL;
@@ -26,7 +24,7 @@ async function resolveHomeVideoUrl(): Promise<string> {
   const envUrl = getEnv("VITE_HOME_VIDEO_URL");
   if (envUrl && (await urlExists(envUrl))) return envUrl;
 
-  // Hard fallback to Pinata URL so prod never blocks on env/config
+  // Hard fallback to Pinata URL (your current file)
   return "https://plum-fascinating-armadillo-813.mypinata.cloud/ipfs/bafybeigtp5guwdkm52wrbapmijnlf2ezwb5mmrt7eur4cv4rghsvfik5jm";
 }
 /* ---------------------------------------------------- */
@@ -37,6 +35,7 @@ export default function Home() {
     "https://plum-fascinating-armadillo-813.mypinata.cloud/ipfs/bafybeigtp5guwdkm52wrbapmijnlf2ezwb5mmrt7eur4cv4rghsvfik5jm"
   );
   const [ready, setReady] = useState(false);
+  const [hasAudio, setHasAudio] = useState<boolean | null>(null);
 
   // Resolve final URL early (keeps __CONFIG__/env behavior)
   useEffect(() => {
@@ -46,9 +45,7 @@ export default function Home() {
       if (!alive) return;
       setSrc(url);
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, []);
 
   // Autoplay immediately (muted to satisfy policy), then unmute on first gesture
@@ -56,14 +53,32 @@ export default function Home() {
     const v = videoRef.current;
     if (!v) return;
 
-    v.muted = true;          // guarantees autoplay
+    // Start muted to guarantee autoplay
+    v.muted = true;
     v.playsInline = true;
     v.autoplay = true;
-    v.preload = "auto";      // fetch ASAP
+    v.preload = "auto";
     v.crossOrigin = "anonymous";
 
-    // Kick off playback as soon as possible
-    v.play().catch(() => { /* ignore; we'll retry after canplay */ });
+    // Try to play immediately (muted)
+    v.play().catch(() => {});
+
+    const onLoadedMeta = () => {
+  try {
+    const anyV = v as any;
+    // consider multiple browser hints; none of these expressions are “nullish”
+    const has =
+      (typeof anyV.audioTracks?.length === "number" && anyV.audioTracks.length > 0) ||
+      !!anyV.mozHasAudio ||
+      (typeof anyV.webkitAudioDecodedByteCount === "number" && anyV.webkitAudioDecodedByteCount > 0);
+
+    setHasAudio(has);
+  } catch {
+    setHasAudio(null);
+  }
+};
+
+    v.addEventListener("loadedmetadata", onLoadedMeta);
 
     const onCanPlay = () => {
       setReady(true);
@@ -75,22 +90,25 @@ export default function Home() {
     const unmuteOnce = async () => {
       try {
         v.muted = false;
-        v.volume = 0.8;
+        v.volume = 0.85;
         await v.play();
-      } finally {
-        window.removeEventListener("pointerdown", unmuteOnce);
-        window.removeEventListener("touchstart", unmuteOnce);
-        window.removeEventListener("keydown", unmuteOnce);
-      }
+      } catch {}
+      window.removeEventListener("pointerdown", unmuteOnce);
+      window.removeEventListener("touchstart", unmuteOnce);
+      window.removeEventListener("click", unmuteOnce);
+      window.removeEventListener("keydown", unmuteOnce);
     };
     window.addEventListener("pointerdown", unmuteOnce, { once: true });
-    window.addEventListener("touchstart", unmuteOnce, { once: true });
+    window.addEventListener("touchstart", unmuteOnce, { once: true, passive: true });
+    window.addEventListener("click", unmuteOnce, { once: true });
     window.addEventListener("keydown", unmuteOnce, { once: true });
 
     return () => {
+      v.removeEventListener("loadedmetadata", onLoadedMeta);
       v.removeEventListener("canplay", onCanPlay);
       window.removeEventListener("pointerdown", unmuteOnce);
       window.removeEventListener("touchstart", unmuteOnce);
+      window.removeEventListener("click", unmuteOnce);
       window.removeEventListener("keydown", unmuteOnce);
     };
   }, [src]);
@@ -105,10 +123,9 @@ export default function Home() {
           autoPlay
           loop
           playsInline
-          muted           /* starts instantly; we unmute on first interaction */
           preload="auto"
           crossOrigin="anonymous"
-          poster="/images/taedal-poster.jpg"  /* optional: add this file for instant first paint */
+          poster="/images/taedal-poster.jpg"
           disablePictureInPicture
           controlsList="nodownload noremoteplayback"
         />
@@ -131,6 +148,13 @@ export default function Home() {
         {!ready && (
           <div className="absolute bottom-8 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs text-white">
             Loading…
+          </div>
+        )}
+
+        {/* optional debug: no audio track detected */}
+        {ready && hasAudio === false && (
+          <div className="absolute bottom-8 right-8 z-30 rounded bg-black/60 px-3 py-1 text-[10px] text-white">
+            No audio track in this video
           </div>
         )}
       </section>

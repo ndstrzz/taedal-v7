@@ -92,6 +92,18 @@ async function resolveRoomUrl(): Promise<string | null> {
   return null;
 }
 
+// NEW: resolve AR intro video (env or __CONFIG__)
+async function resolveIntroUrl(): Promise<string | null> {
+  const cfg = (globalThis as any)?.window?.__CONFIG__;
+  const cfgUrl = cfg?.AR_INTRO_URL;
+  if (cfgUrl && (await urlExists(cfgUrl))) return cfgUrl;
+
+  const envUrl = getEnv("VITE_AR_INTRO_URL");
+  if (envUrl && (await urlExists(envUrl))) return envUrl;
+
+  return null;
+}
+
 /* ------------------------ Scene-graph helpers (safe) --------------------- */
 function getRoot(el: any): any {
   if (!el) return null;
@@ -221,8 +233,13 @@ export default function ARPreview() {
 
   const [roomSrc, setRoomSrc] = useState<string | null>(null);
   const [roomLoaded, setRoomLoaded] = useState(false);
-  const [artworkApplied, setArtworkApplied] = useState(false);
 
+  // NEW: intro banner video
+  const introVideoRef = useRef<HTMLVideoElement | null>(null);
+  const [introSrc, setIntroSrc] = useState<string | null>(null);
+  const [introReady, setIntroReady] = useState(false);
+
+  const [artworkApplied, setArtworkApplied] = useState(false);
   const [frameBox, setFrameBox] = useState<{ w: number; h: number } | null>(null);
   const [rendered, setRendered] = useState<{ w: number; h: number } | null>(null);
   const [wallInfo, setWallInfo] = useState<{ name: string; w: number; h: number } | null>(null);
@@ -237,7 +254,7 @@ export default function ARPreview() {
 
   const mvRef = useRef<ModelViewerHandle | null>(null);
 
-  /* --------- declare movementRef BEFORE any effects/handlers use it --------- */
+  /* movementRef etc... (unchanged) */
   const movementRef = useRef({
     active: false,
     keys: new Set<string>(),
@@ -264,6 +281,27 @@ export default function ARPreview() {
     return () => { alive = false; };
   }, []);
 
+  /* --------------------------- resolve intro URL --------------------------- */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const url = await resolveIntroUrl();
+      if (!alive) return;
+      setIntroSrc(url);
+
+      // runtime <link rel="preload"> to begin fetching ASAP
+      if (url) {
+        const l = document.createElement("link");
+        l.rel = "preload";
+        l.as = "video";
+        l.crossOrigin = "";
+        l.href = url;
+        document.head.appendChild(l);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
   /* ----------------------------- Load artwork ---------------------------- */
   useEffect(() => {
     let alive = true;
@@ -279,6 +317,49 @@ export default function ARPreview() {
     })();
     return () => { alive = false; };
   }, [id]);
+
+  /* -------- Intro video: autoplay muted, unmute on first gesture ---------- */
+  useEffect(() => {
+    const v = introVideoRef.current;
+    if (!v || !introSrc) return;
+
+    v.muted = true;
+    v.playsInline = true;
+    v.autoplay = true;
+    v.preload = "auto";
+    v.crossOrigin = "anonymous";
+    v.play().catch(() => {});
+
+    const onCanPlay = () => {
+      setIntroReady(true);
+      if (v.paused) v.play().catch(() => {});
+    };
+    v.addEventListener("canplay", onCanPlay);
+
+    const unmuteOnce = async () => {
+      try {
+        v.muted = false;
+        v.volume = 0.85;
+        await v.play();
+      } catch {}
+      window.removeEventListener("pointerdown", unmuteOnce);
+      window.removeEventListener("touchstart", unmuteOnce);
+      window.removeEventListener("click", unmuteOnce);
+      window.removeEventListener("keydown", unmuteOnce);
+    };
+    window.addEventListener("pointerdown", unmuteOnce, { once: true });
+    window.addEventListener("touchstart", unmuteOnce, { once: true, passive: true });
+    window.addEventListener("click", unmuteOnce, { once: true });
+    window.addEventListener("keydown", unmuteOnce, { once: true });
+
+    return () => {
+      v.removeEventListener("canplay", onCanPlay);
+      window.removeEventListener("pointerdown", unmuteOnce);
+      window.removeEventListener("touchstart", unmuteOnce);
+      window.removeEventListener("click", unmuteOnce);
+      window.removeEventListener("keydown", unmuteOnce);
+    };
+  }, [introSrc]);
 
   /* ---------------------- Convert DB dims to meters ---------------------- */
   const dims = useMemo(() => {
@@ -444,7 +525,7 @@ export default function ARPreview() {
     };
   }, []);
 
-  /* -------- Apply artwork: compose on large canvas, then texture -------- */
+  /* -------- Apply artwork … (unchanged below this line except render) ----- */
   useEffect(() => {
     (async () => {
       if (!art?.image_url || !dims || !roomLoaded) return;
@@ -532,6 +613,7 @@ export default function ARPreview() {
     })();
   }, [art?.image_url, roomLoaded, dims]);
 
+  /* -------------------------------- Render ----
   /* -------------------------------- Render -------------------------------- */
   const originalDimsLabel =
     art?.width && art?.height && art?.dim_unit
@@ -724,3 +806,5 @@ export default function ARPreview() {
     </div>
   );
 }
+
+
