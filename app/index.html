@@ -11,7 +11,20 @@
     <link rel="apple-touch-icon" href="/images/taedal-logo-180.png" />
     <meta name="theme-color" content="#000000" />
 
-    <!-- Preloads -->
+    <!-- Speed up connection to Pinata gateway for hero video -->
+    <link rel="preconnect" href="https://plum-fascinating-armadillo-813.mypinata.cloud" crossorigin />
+    <link rel="dns-prefetch" href="https://plum-fascinating-armadillo-813.mypinata.cloud" />
+
+    <!-- Preload the homepage hero video so bytes are ready before React mounts -->
+    <link
+      rel="preload"
+      as="video"
+      href="https://plum-fascinating-armadillo-813.mypinata.cloud/ipfs/bafybeigtp5guwdkm52wrbapmijnlf2ezwb5mmrt7eur4cv4rghsvfik5jm"
+      type="video/mp4"
+      crossorigin
+    />
+
+    <!-- Existing preloads -->
     <link rel="preload" href="/media/similarity.webm" as="video" type="video/webm" />
     <link rel="preload" href="/media/taedal-coin.glb" as="fetch" crossorigin="anonymous" />
     <link rel="preload" href="/images/chatbot.webm" as="video" type="video/webm" />

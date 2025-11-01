@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-/* ---------------- env/url resolution (same pattern as AR) ---------------- */
+/* ---------------- env/url resolution ---------------- */
 function getEnv(key: string): string | undefined {
   try {
     // @ts-ignore
@@ -9,6 +9,7 @@ function getEnv(key: string): string | undefined {
     return undefined;
   }
 }
+
 async function urlExists(url: string): Promise<boolean> {
   try {
     const r = await fetch(url, { method: "GET", headers: { Range: "bytes=0-0" } });
@@ -17,20 +18,27 @@ async function urlExists(url: string): Promise<boolean> {
     return false;
   }
 }
+
 async function resolveHomeVideoUrl(): Promise<string> {
   const cfg = (globalThis as any)?.window?.__CONFIG__;
   if (cfg?.HOME_VIDEO_URL && (await urlExists(cfg.HOME_VIDEO_URL))) return cfg.HOME_VIDEO_URL;
+
   const envUrl = getEnv("VITE_HOME_VIDEO_URL");
   if (envUrl && (await urlExists(envUrl))) return envUrl;
-  return "/images/home-video.mp4";
+
+  // Hard fallback to Pinata URL so prod never blocks on env/config
+  return "https://plum-fascinating-armadillo-813.mypinata.cloud/ipfs/bafybeigtp5guwdkm52wrbapmijnlf2ezwb5mmrt7eur4cv4rghsvfik5jm";
 }
-/* ------------------------------------------------------------------------ */
+/* ---------------------------------------------------- */
 
 export default function Home() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const [src, setSrc] = useState("/images/home-video.mp4");
-  const [needsUserGesture, setNeedsUserGesture] = useState(false);
+  const [src, setSrc] = useState<string>(
+    "https://plum-fascinating-armadillo-813.mypinata.cloud/ipfs/bafybeigtp5guwdkm52wrbapmijnlf2ezwb5mmrt7eur4cv4rghsvfik5jm"
+  );
+  const [ready, setReady] = useState(false);
 
+  // Resolve final URL early (keeps __CONFIG__/env behavior)
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -43,40 +51,49 @@ export default function Home() {
     };
   }, []);
 
+  // Autoplay immediately (muted to satisfy policy), then unmute on first gesture
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return;
-    const tryPlay = async () => {
+
+    v.muted = true;          // guarantees autoplay
+    v.playsInline = true;
+    v.autoplay = true;
+    v.preload = "auto";      // fetch ASAP
+    v.crossOrigin = "anonymous";
+
+    // Kick off playback as soon as possible
+    v.play().catch(() => { /* ignore; we'll retry after canplay */ });
+
+    const onCanPlay = () => {
+      setReady(true);
+      if (v.paused) v.play().catch(() => {});
+    };
+    v.addEventListener("canplay", onCanPlay);
+
+    // First interaction anywhere -> unmute + keep playing
+    const unmuteOnce = async () => {
       try {
-        v.muted = false;      // we always want sound
-        v.volume = 0.7;
-        await v.play();       // may throw if autoplay w/ sound is blocked
-        setNeedsUserGesture(false);
-      } catch {
-        // fall back: wait for a tap
-        v.muted = true;       // allow muted motion until user taps
-        try {
-          await v.play();
-        } catch {}
-        setNeedsUserGesture(true);
+        v.muted = false;
+        v.volume = 0.8;
+        await v.play();
+      } finally {
+        window.removeEventListener("pointerdown", unmuteOnce);
+        window.removeEventListener("touchstart", unmuteOnce);
+        window.removeEventListener("keydown", unmuteOnce);
       }
     };
-    tryPlay();
-  }, [src]);
+    window.addEventListener("pointerdown", unmuteOnce, { once: true });
+    window.addEventListener("touchstart", unmuteOnce, { once: true });
+    window.addEventListener("keydown", unmuteOnce, { once: true });
 
-  const enableSound = async () => {
-    const v = videoRef.current;
-    if (!v) return;
-    try {
-      v.muted = false;
-      v.volume = 0.7;
-      await v.play();
-      setNeedsUserGesture(false);
-    } catch {
-      // show native controls as last resort
-      v.setAttribute("controls", "true");
-    }
-  };
+    return () => {
+      v.removeEventListener("canplay", onCanPlay);
+      window.removeEventListener("pointerdown", unmuteOnce);
+      window.removeEventListener("touchstart", unmuteOnce);
+      window.removeEventListener("keydown", unmuteOnce);
+    };
+  }, [src]);
 
   return (
     <main className="min-h-[100svh]">
@@ -88,6 +105,12 @@ export default function Home() {
           autoPlay
           loop
           playsInline
+          muted           /* starts instantly; we unmute on first interaction */
+          preload="auto"
+          crossOrigin="anonymous"
+          poster="/images/taedal-poster.jpg"  /* optional: add this file for instant first paint */
+          disablePictureInPicture
+          controlsList="nodownload noremoteplayback"
         />
 
         {/* gradient & subtle dark overlay */}
@@ -104,15 +127,10 @@ export default function Home() {
           />
         </div>
 
-        {/* one-time enable button ONLY if the browser blocked sound */}
-        {needsUserGesture && (
-          <div className="absolute inset-0 z-30 flex items-center justify-center">
-            <button
-              onClick={enableSound}
-              className="rounded-2xl bg-white/90 px-4 py-2 text-sm text-black ring-1 ring-black/10 hover:bg-white"
-            >
-              Enable sound
-            </button>
+        {/* small loading cue until canplay fires */}
+        {!ready && (
+          <div className="absolute bottom-8 left-1/2 z-30 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-xs text-white">
+            Loading…
           </div>
         )}
       </section>
