@@ -1,3 +1,4 @@
+// app/src/routes/art/ARPreview.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -92,7 +93,7 @@ async function resolveRoomUrl(): Promise<string | null> {
   return null;
 }
 
-// NEW: resolve AR intro video (env or __CONFIG__)
+// Intro video (env or __CONFIG__)
 async function resolveIntroUrl(): Promise<string | null> {
   const cfg = (globalThis as any)?.window?.__CONFIG__;
   const cfgUrl = cfg?.AR_INTRO_URL;
@@ -234,10 +235,11 @@ export default function ARPreview() {
   const [roomSrc, setRoomSrc] = useState<string | null>(null);
   const [roomLoaded, setRoomLoaded] = useState(false);
 
-  // NEW: intro banner video
+  // Intro overlay video while loading
   const introVideoRef = useRef<HTMLVideoElement | null>(null);
   const [introSrc, setIntroSrc] = useState<string | null>(null);
   const [introReady, setIntroReady] = useState(false);
+  const [showIntro, setShowIntro] = useState(true);
 
   const [artworkApplied, setArtworkApplied] = useState(false);
   const [frameBox, setFrameBox] = useState<{ w: number; h: number } | null>(null);
@@ -254,7 +256,7 @@ export default function ARPreview() {
 
   const mvRef = useRef<ModelViewerHandle | null>(null);
 
-  /* movementRef etc... (unchanged) */
+  // Movement state
   const movementRef = useRef({
     active: false,
     keys: new Set<string>(),
@@ -264,6 +266,31 @@ export default function ARPreview() {
     phi: START_PHI,
     timer: 0 as any,
   });
+
+  /* ----------------------------- Load artwork (DB) ---------------------------- */
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!id) return;
+      const { data, error } = await supabase
+        .from("artworks")
+        .select("id,title,image_url,width,height,dim_unit")
+        .eq("id", id)
+        .single();
+      if (!alive) return;
+      if (!error) setArt((data || null) as any);
+    })();
+    return () => { alive = false; };
+  }, [id]);
+
+  /* ---------------------- Convert DB dims to meters (DEFINE dims HERE) ---------------------- */
+  const dims = useMemo(() => {
+    if (!art?.width || !art?.height || !art?.dim_unit) return null;
+    if (art.dim_unit === "cm") return { w: cmToMeters(art.width), h: cmToMeters(art.height) };
+    if (art.dim_unit === "in") return { w: inchToMeters(art.width), h: inchToMeters(art.height) };
+    if (art.dim_unit === "px") return { w: inchToMeters(art.width / 96), h: inchToMeters(art.height / 96) };
+    return null;
+  }, [art]);
 
   /* --------------------------- resolve room URL --------------------------- */
   useEffect(() => {
@@ -288,35 +315,26 @@ export default function ARPreview() {
       const url = await resolveIntroUrl();
       if (!alive) return;
       setIntroSrc(url);
-
-      // runtime <link rel="preload"> to begin fetching ASAP
       if (url) {
-        const l = document.createElement("link");
-        l.rel = "preload";
-        l.as = "video";
-        l.crossOrigin = "";
-        l.href = url;
-        document.head.appendChild(l);
+        // Preconnect + Preload
+        try {
+          const u = new URL(url);
+          const link1 = document.createElement("link");
+          link1.rel = "preconnect";
+          link1.href = u.origin;
+          link1.crossOrigin = "";
+          document.head.appendChild(link1);
+        } catch {}
+        const link2 = document.createElement("link");
+        link2.rel = "preload";
+        link2.as = "video";
+        link2.href = url;
+        link2.crossOrigin = "";
+        document.head.appendChild(link2);
       }
     })();
     return () => { alive = false; };
   }, []);
-
-  /* ----------------------------- Load artwork ---------------------------- */
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      if (!id) return;
-      const { data, error } = await supabase
-        .from("artworks")
-        .select("id,title,image_url,width,height,dim_unit")
-        .eq("id", id)
-        .single();
-      if (!alive) return;
-      if (!error) setArt((data || null) as any);
-    })();
-    return () => { alive = false; };
-  }, [id]);
 
   /* -------- Intro video: autoplay muted, unmute on first gesture ---------- */
   useEffect(() => {
@@ -328,6 +346,7 @@ export default function ARPreview() {
     v.autoplay = true;
     v.preload = "auto";
     v.crossOrigin = "anonymous";
+    v.loop = true;
     v.play().catch(() => {});
 
     const onCanPlay = () => {
@@ -337,11 +356,7 @@ export default function ARPreview() {
     v.addEventListener("canplay", onCanPlay);
 
     const unmuteOnce = async () => {
-      try {
-        v.muted = false;
-        v.volume = 0.85;
-        await v.play();
-      } catch {}
+      try { v.muted = false; v.volume = 0.85; await v.play(); } catch {}
       window.removeEventListener("pointerdown", unmuteOnce);
       window.removeEventListener("touchstart", unmuteOnce);
       window.removeEventListener("click", unmuteOnce);
@@ -360,15 +375,6 @@ export default function ARPreview() {
       window.removeEventListener("keydown", unmuteOnce);
     };
   }, [introSrc]);
-
-  /* ---------------------- Convert DB dims to meters ---------------------- */
-  const dims = useMemo(() => {
-    if (!art?.width || !art?.height || !art?.dim_unit) return null;
-    if (art.dim_unit === "cm") return { w: cmToMeters(art.width), h: cmToMeters(art.height) };
-    if (art.dim_unit === "in") return { w: inchToMeters(art.width), h: inchToMeters(art.height) };
-    if (art.dim_unit === "px") return { w: inchToMeters(art.width / 96), h: inchToMeters(art.height / 96) };
-    return null;
-  }, [art]);
 
   /* --------- model-viewer lifecycle + progress/error listeners ---------- */
   useEffect(() => {
@@ -394,6 +400,16 @@ export default function ARPreview() {
       el.removeEventListener("progress", onProgress);
     };
   }, []);
+
+  /* Fade out + stop intro when room is ready */
+  useEffect(() => {
+    if (!roomLoaded) return;
+    setShowIntro(false);
+    const v = introVideoRef.current;
+    if (!v) return;
+    const t = setTimeout(() => { try { v.pause(); } catch {} }, 350);
+    return () => clearTimeout(t);
+  }, [roomLoaded]);
 
   /* --------------------- Debug: list some nodes -------------------------- */
   useEffect(() => {
@@ -525,7 +541,7 @@ export default function ARPreview() {
     };
   }, []);
 
-  /* -------- Apply artwork … (unchanged below this line except render) ----- */
+  /* -------- Apply artwork: compose on large canvas, then texture -------- */
   useEffect(() => {
     (async () => {
       if (!art?.image_url || !dims || !roomLoaded) return;
@@ -613,7 +629,6 @@ export default function ARPreview() {
     })();
   }, [art?.image_url, roomLoaded, dims]);
 
-  /* -------------------------------- Render ----
   /* -------------------------------- Render -------------------------------- */
   const originalDimsLabel =
     art?.width && art?.height && art?.dim_unit
@@ -634,7 +649,7 @@ export default function ARPreview() {
 
       <div className="grid grid-cols-12 gap-6">
         <div className="col-span-12 lg:col-span-8">
-          <div className="relative">
+          <div className="relative" style={{ width: "100%", height: "70vh" }}>
             <ModelViewer
               ref={mvRef}
               src={roomSrc ?? ""}
@@ -647,52 +662,53 @@ export default function ARPreview() {
               shadowIntensity={0.4}
               poster="/3d/poster.jpg"
               reveal="auto"
-              style={{ width: "100%", height: "70vh", background: "#0b0b0b", outline: "none" }}
-            >
-              {showDims && rendered && (
-                <>
-                  <div
-                    slot="hotspot-dim-width"
-                    data-position={hotspotWidthPos as string}
-                    data-visibility-attribute="visible"
-                    className="pointer-events-none select-none rounded bg-black/70 px-2 py-1 text-[11px] text-white shadow"
-                  >
-                    width: <span className="font-semibold">{fmtMeters(rendered.w)}</span>
-                  </div>
-                  <div
-                    slot="hotspot-dim-height"
-                    data-position={hotspotHeightPos as string}
-                    data-visibility-attribute="visible"
-                    className="pointer-events-none select-none rounded bg-black/70 px-2 py-1 text-[11px] text-white shadow"
-                  >
-                    height: <span className="font-semibold">{fmtMeters(rendered.h)}</span>
-                  </div>
-                </>
-              )}
-            </ModelViewer>
+              style={{ width: "100%", height: "100%", background: "#0b0b0b", outline: "none" }}
+            />
 
-            <div className="absolute bottom-4 left-4 rounded bg-black/50 px-3 py-1 text-xs text-white">
+            {/* Intro overlay */}
+            {introSrc && (
+              <div
+                className={`pointer-events-none absolute inset-0 z-20 transition-opacity duration-300 ${
+                  showIntro ? "opacity-100" : "opacity-0"
+                }`}
+                aria-hidden={!showIntro}
+              >
+                <video
+                  ref={introVideoRef}
+                  className="pointer-events-none absolute inset-0 h-full w-full object-cover"
+                  src={introSrc}
+                  autoPlay
+                  loop
+                  playsInline
+                  preload="auto"
+                  crossOrigin="anonymous"
+                  disablePictureInPicture
+                  controlsList="nodownload noremoteplayback"
+                />
+                <div className="pointer-events-none absolute inset-0 bg-gradient-to-r from-black/45 via-black/20 to-black/45" />
+                <div className="absolute top-4 left-4 rounded bg-blue-900/60 px-3 py-1 text-xs text-white">
+                  Loading room… {progress > 0 && `${Math.round(progress * 100)}%`}
+                </div>
+              </div>
+            )}
+
+            <div className="absolute bottom-4 left-4 rounded bg-black/50 px-3 py-1 text-xs text-white z-10">
               Walk: <b>S</b>=forward <b>W</b>=back • Strafe: <b>A/D</b> • Zoom: <b>Q/E</b>
             </div>
 
-            {!roomLoaded && (
-              <div className="absolute top-4 left-4 rounded bg-blue-900/50 px-3 py-1 text-xs text-white">
-                Loading room… {progress > 0 && `${Math.round(progress * 100)}%`}
-              </div>
-            )}
             {lastError && (
-              <div className="absolute top-4 left-4 mt-8 rounded bg-red-900/60 px-3 py-2 text-xs text-white max-w-md">
+              <div className="absolute top-4 left-4 mt-8 rounded bg-red-900/60 px-3 py-2 text-xs text-white max-w-md z-10">
                 <div className="font-semibold mb-1">⚠️ Error: {lastError}</div>
                 {debugInfo && <div className="text-[10px] opacity-80 mt-1">{debugInfo}</div>}
               </div>
             )}
             {artworkApplied && (
-              <div className="absolute top-4 left-4 rounded bg-green-900/50 px-3 py-1 text-xs text-white">
+              <div className="absolute top-4 left-4 rounded bg-green-900/50 px-3 py-1 text-xs text-white z-10">
                 ✓ Artwork at true size
               </div>
             )}
             {debugInfo && !lastError && (
-              <div className="absolute top-4 right-4 rounded bg-neutral-900/70 px-3 py-1 text-[10px] text-neutral-300 max-w-md">
+              <div className="absolute top-4 right-4 rounded bg-neutral-900/70 px-3 py-1 text-[10px] text-neutral-300 max-w-md z-10">
                 {debugInfo}
               </div>
             )}
@@ -806,5 +822,3 @@ export default function ARPreview() {
     </div>
   );
 }
-
-
