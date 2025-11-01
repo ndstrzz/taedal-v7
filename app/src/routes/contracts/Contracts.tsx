@@ -1,11 +1,13 @@
 // app/src/routes/contracts/Contracts.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import type { LicenseRequest, LicenseTerms } from "../../lib/licensing";
 
-/* ----------------------------- types & helpers ---------------------------- */
+/** Sidebar width in px (adjust if your sidebar width changes) */
+const SIDEBAR_W = 72;
 
+/* ----------------------------- types & helpers ---------------------------- */
 type Row = LicenseRequest & {
   artworks?: { id: string; title: string | null; image_url: string | null } | null;
   requester?: { id: string; display_name: string | null; username: string | null; avatar_url: string | null } | null;
@@ -43,9 +45,7 @@ function statusLabel(s: LicenseRequest["status"]) {
 }
 
 /* ---------------------------------- row ---------------------------------- */
-
 function RowCard({ r, me }: { r: Row; me: string }) {
-  const other = r.owner_id === me ? r.requester : r.owner;
   const terms = r.accepted_terms ?? (r.requested as LicenseTerms);
   const st = statusLabel(r.status);
 
@@ -71,7 +71,6 @@ function RowCard({ r, me }: { r: Row; me: string }) {
             </div>
           </div>
 
-          {/* subtitle line like your mock */}
           <div className="text-sm text-white/70 mt-1 truncate">
             {terms.purpose} — {terms.term_months}-month {terms.exclusivity} license
           </div>
@@ -97,7 +96,6 @@ function RowCard({ r, me }: { r: Row; me: string }) {
 }
 
 /* --------------------------------- page ---------------------------------- */
-
 const TABS = [
   { key: "all", label: "All Contracts" },
   { key: "open", label: "Pending" },
@@ -115,6 +113,62 @@ export default function Contracts() {
 
   const [q, setQ] = useState("");
   const [tab, setTab] = useState<TabKey>("all");
+
+  // Intro overlay (always with music; no mute option)
+  const [showIntro, setShowIntro] = useState(true);
+  const [needsUserGesture, setNeedsUserGesture] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    // Try autoplay WITH audio first.
+    v.muted = false;
+    v.volume = 0.8;
+
+    const start = async () => {
+      try {
+        await v.play();
+        setNeedsUserGesture(false);
+      } catch {
+        // If blocked, fall back to muted play but ask for a tap to enable audio.
+        try {
+          v.muted = true;
+          v.volume = 0;
+          await v.play();
+        } catch {
+          // If even muted autoplay fails, show the button to start.
+          setNeedsUserGesture(true);
+        }
+      }
+    };
+
+    start();
+
+    const t = setTimeout(() => {
+      setShowIntro(false);
+      try {
+        v.pause(); // stop music after the 9s intro
+      } catch {}
+    }, 9000);
+
+    return () => clearTimeout(t);
+  }, []);
+
+  const enableSound = async () => {
+    const v = videoRef.current;
+    if (!v) return;
+    try {
+      v.muted = false;
+      v.volume = 0.85;
+      await v.play();
+      setNeedsUserGesture(false);
+    } catch {
+      // If browser insists, show native controls as a last resort
+      v.setAttribute("controls", "true");
+    }
+  };
 
   useEffect(() => {
     let alive = true;
@@ -151,6 +205,11 @@ export default function Contracts() {
     })();
     return () => {
       alive = false;
+      if (videoRef.current) {
+        try {
+          videoRef.current.pause();
+        } catch {}
+      }
     };
   }, []);
 
@@ -189,19 +248,49 @@ export default function Contracts() {
     });
   }, [rows, tab, q]);
 
+  const shellClass = showIntro
+    ? "relative h-[100svh] overflow-hidden bg-black"
+    : "relative min-h-[100svh] bg-black";
+
   return (
-    // 🔒 Force full-page black background behind everything on this route
-    <div className="bg-black min-h-[calc(100dvh-56px)]">
+    <div className={shellClass}>
+      {/* Fixed overlay — matches Home sizing, leaves sidebar visible */}
+      {showIntro && (
+        <div
+          className="fixed top-0 bottom-0 right-0 z-40 overflow-hidden"
+          style={{ left: `${SIDEBAR_W}px` }}
+        >
+          <video
+            ref={videoRef}
+            className="absolute inset-0 h-full w-full object-cover"
+            src={"/images/contract%20loading.mp4"}
+            autoPlay
+            playsInline
+            preload="auto"
+          />
+          <div className="absolute inset-0 bg-black/20 pointer-events-none" />
+
+          {needsUserGesture && (
+            <div className="absolute inset-0 z-10 grid place-items-center">
+              <button
+                type="button"
+                onClick={enableSound}
+                className="rounded-2xl bg-white/90 px-5 py-3 text-sm text-black shadow ring-1 ring-black/10 hover:bg-white"
+              >
+                Enable sound
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Page content (independent sizing) */}
       <div className="max-w-6xl mx-auto p-6">
-        {/* Header with icon */}
+        {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <img
-                src="/images/contract-icon.svg"
-                alt="Contracts"
-                className="h-6 w-6 opacity-90"
-              />
+              <img src="/images/contract-icon.svg" alt="Contracts" className="h-6 w-6 opacity-90" />
               <span className="text-2xl font-semibold">Contract Requests</span>
             </div>
             <div className="text-white/60 text-sm">Manage IP licensing and usage negotiations</div>
@@ -228,22 +317,12 @@ export default function Contracts() {
 
         {/* Tabs */}
         <div className="mt-3 flex flex-wrap gap-2">
-          {(
-            [
-              { key: "all", label: "All Contracts" },
-              { key: "open", label: "Pending" },
-              { key: "negotiating", label: "Active" },
-              { key: "accepted", label: "Completed" },
-              { key: "rejected", label: "Rejected" },
-            ] as const
-          ).map((t) => (
+          {(TABS as readonly { key: TabKey; label: string }[]).map((t) => (
             <button
               key={t.key}
-              onClick={() => setTab(t.key as TabKey)}
+              onClick={() => setTab(t.key)}
               className={`px-3 py-1.5 rounded-full text-sm border ${
-                tab === (t.key as TabKey)
-                  ? "bg-white text-black border-white"
-                  : "bg-white/0 border-white/15 text-white/85 hover:bg-white/10"
+                tab === t.key ? "bg-white text-black border-white" : "bg-white/0 border-white/15 text-white/85 hover:bg-white/10"
               }`}
             >
               {t.label}
