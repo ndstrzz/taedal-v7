@@ -1,4 +1,3 @@
-// app/src/components/Sidebar.tsx
 import { NavLink, Link, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
@@ -286,7 +285,7 @@ export default function Sidebar() {
       >
         {/* Brand (collapsed: taedal-static; expanded: BIG taedal-logo; no wordmark) */}
         <Link
-          to="/"
+          to="/home"  // go to home, not boot
           title="Home"
           className="
             w-full flex items-center gap-3 h-11 px-3 rounded-xl
@@ -316,7 +315,6 @@ export default function Sidebar() {
               "
             />
           </div>
-          {/* Accessible name; visually hidden */}
           <span className="sr-only">taedal</span>
         </Link>
 

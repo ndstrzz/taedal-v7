@@ -1,5 +1,5 @@
-// app/src/routes/discover/Discover.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import { fetchTopBid } from "../../lib/bids";
@@ -457,11 +457,16 @@ function Sparkline({ points }: { points: number[] }) {
   );
 }
 
-function StatPill({ children }: { children: React.ReactNode }) {
+function StatPill({ children }: { children: ReactNode }) {
   return <span className="px-1.5 py-0.5 rounded-md bg-white/10 text-[11px]">{children}</span>;
 }
 
-function Pill({ children, tone = "neutral" as "neutral" | "success" | "warn" }) {
+type PillProps = {
+  children: ReactNode;
+  tone?: "neutral" | "success" | "warn";
+};
+
+function Pill({ children, tone = "neutral" }: PillProps) {
   const base =
     tone === "success"
       ? "bg-emerald-400 text-black"

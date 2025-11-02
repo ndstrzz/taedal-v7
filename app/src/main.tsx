@@ -24,6 +24,7 @@ import Topbar from "./components/Topbar";
 /* Pages */
 import Home from "./routes/home/Home";
 import Explore from "./routes/explore/Explore";
+import Discover from "./routes/discover/Discover";
 import Contracts from "./routes/contracts/Contracts";
 import RequestDetail from "./routes/contracts/RequestDetail";
 import PublicProfile from "./routes/profiles/PublicProfile";
@@ -38,7 +39,7 @@ import CreateChooser from "./routes/studio/CreateChooser";
 import DeployCollection from "./routes/studio/DeployCollection";
 import Deploying from "./routes/studio/Deploying";
 import CheckoutSuccess from "./routes/checkout/Success";
-import Discover from "./routes/discover/Discover";
+import DiscoverPage from "./routes/discover/Discover";
 import CollectionEdit from "./routes/collection/CollectionEdit";
 import CollectionPage from "./routes/collection/CollectionPage";
 
@@ -49,6 +50,7 @@ import "./assistant/standalone";
 
 /* Boot */
 import Boot from "./routes/boot/Boot";
+import { shouldShowBootOnce } from "./lib/bootGate";
 
 import ErrorBoundary from "./components/_debug/ErrorBoundary";
 
@@ -78,17 +80,34 @@ function RouteErrorPage() {
   );
 }
 
-/* ---------- Gate: require Boot once per tab ---------- */
+/* ---------- Global media guard (pause/mute on route change) ---------- */
+function GlobalMediaGuard() {
+  const loc = useLocation();
+  useEffect(() => {
+    const media = Array.from(document.querySelectorAll("video, audio")) as HTMLMediaElement[];
+    media.forEach((m) => {
+      try {
+        m.pause();
+        m.muted = true;
+      } catch {}
+    });
+  }, [loc.pathname, loc.search, loc.hash]);
+  return null;
+}
+
+/* ---------- Gate: require Boot once per *site* version ---------- */
 function RequireBootGate() {
   const nav = useNavigate();
   const loc = useLocation();
+
   useEffect(() => {
-    const done = sessionStorage.getItem("taedal_boot_done") === "1";
+    const needBoot = shouldShowBootOnce("site"); // localStorage + BOOT_VERSION
     const onBoot = loc.pathname === "/";
-    if (!done && !onBoot) {
+    if (needBoot && !onBoot) {
       nav("/", { replace: true });
     }
   }, [loc.pathname, nav]);
+
   return <Outlet />;
 }
 
@@ -96,6 +115,7 @@ function RequireBootGate() {
 function AppLayout() {
   return (
     <>
+      <GlobalMediaGuard />
       <Topbar />
       <Sidebar />
       <div className="pl-14">
@@ -115,6 +135,9 @@ const router = createBrowserRouter([
     children: [
       { path: "/home", element: <AppLayout />, children: [{ index: true, element: <Home /> }] },
       { path: "/explore", element: <AppLayout />, children: [{ index: true, element: <Explore /> }] },
+
+      // ✅ Discover route
+      { path: "/discover", element: <AppLayout />, children: [{ index: true, element: <DiscoverPage /> }] },
 
       // Auth-protected
       { path: "/contracts", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Contracts /></RequireAuth> }] },
