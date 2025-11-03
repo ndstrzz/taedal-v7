@@ -264,6 +264,8 @@ export default function Sidebar() {
     { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
     { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
     { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
+    { to: "/social", label: "Social", iconSrc: "/icons/social.svg" },
+
   ];
 
   /* ---------------------------- render ---------------------------- */

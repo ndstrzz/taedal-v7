@@ -43,6 +43,15 @@ import DiscoverPage from "./routes/discover/Discover";
 import CollectionEdit from "./routes/collection/CollectionEdit";
 import CollectionPage from "./routes/collection/CollectionPage";
 
+/* NEW: Social feed */
+import SocialFeed from "./routes/social/Feed";
+
+/* NEW: Follow lists (followers / following) */
+import FollowListPage from "./routes/profiles/FollowListPage";
+
+/* Streak HUD */
+import StreakHUD from "./components/streaks/StreakHUD";
+
 import "@google/model-viewer";
 
 /* Assistant */
@@ -121,6 +130,8 @@ function AppLayout() {
       <div className="pl-14">
         <Outlet />
       </div>
+      {/* Streaks HUD floats in the corner across pages */}
+      <StreakHUD />
     </>
   );
 }
@@ -136,8 +147,11 @@ const router = createBrowserRouter([
       { path: "/home", element: <AppLayout />, children: [{ index: true, element: <Home /> }] },
       { path: "/explore", element: <AppLayout />, children: [{ index: true, element: <Explore /> }] },
 
-      // ✅ Discover route
+      // Discover route
       { path: "/discover", element: <AppLayout />, children: [{ index: true, element: <DiscoverPage /> }] },
+
+      // NEW: Social route
+      { path: "/social", element: <AppLayout />, children: [{ index: true, element: <SocialFeed /> }] },
 
       // Auth-protected
       { path: "/contracts", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Contracts /></RequireAuth> }] },
@@ -150,7 +164,15 @@ const router = createBrowserRouter([
       { path: "/studio/create/collection/deploying", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Deploying /></RequireAuth> }] },
 
       // Public
-      { path: "/u/:handle", element: <AppLayout />, children: [{ index: true, element: <PublicProfile /> }] },
+      {
+        path: "/u/:handle",
+        element: <AppLayout />,
+        children: [
+          { index: true, element: <PublicProfile /> },
+          { path: "followers", element: <FollowListPage /> },  // NEW
+          { path: "following", element: <FollowListPage /> },  // NEW
+        ],
+      },
       { path: "/art/:id", element: <AppLayout />, children: [{ index: true, element: <ArtworkDetail /> }] },
       { path: "/art/:id/ar", element: <AppLayout />, children: [{ index: true, element: <ARPreview /> }] },
       { path: "/checkout/success", element: <AppLayout />, children: [{ index: true, element: <CheckoutSuccess /> }] },

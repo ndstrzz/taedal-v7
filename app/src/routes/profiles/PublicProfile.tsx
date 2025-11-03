@@ -1,7 +1,10 @@
-// app/src/routes/profiles/PublicProfile.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+
+/* follow */
+import FollowButton from "../../components/social/FollowButton";
+import { getFollowCounts } from "../../lib/follow";
 
 /* ---------- types ---------- */
 type Artwork = { id: string; title: string | null; image_url: string | null };
@@ -39,6 +42,9 @@ export default function PublicProfile() {
   const [created, setCreated] = useState<Artwork[]>([]);
   const [purchased, setPurchased] = useState<Artwork[]>([]);
   const [hidden, setHidden] = useState<Artwork[]>([]);
+
+  const [followers, setFollowers] = useState<number>(0);
+  const [following, setFollowing] = useState<number>(0);
 
   const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
 
@@ -94,13 +100,28 @@ export default function PublicProfile() {
     };
   }, [handle]);
 
+  /* counts (followers / following) */
+  useEffect(() => {
+    let alive = true;
+    if (!p?.id) return;
+    (async () => {
+      try {
+        const { followers, following } = await getFollowCounts(p.id);
+        if (!alive) return;
+        setFollowers(followers || 0);
+        setFollowing(following || 0);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [p?.id]);
+
   /* helpers */
   const mapArt = (rows: any[]): Artwork[] =>
-    (rows || []).map((r) => ({
-      id: r.id,
-      title: r.title ?? null,
-      image_url: r.image_url ?? null,
-    }));
+    (rows || []).map((r) => ({ id: r.id, title: r.title ?? null, image_url: r.image_url ?? null }));
 
   /* loaders (Created excludes hidden when viewing your own profile) */
   async function loadCreated(profileId: string, isMe: boolean) {
@@ -118,7 +139,6 @@ export default function PublicProfile() {
       return;
     }
 
-    // You are viewing your own profile → exclude artworks you own & marked hidden.
     const ids = createdRows.map((r) => r.id);
     const { data: hiddenRows, error: hErr } = await supabase
       .from("ownerships")
@@ -271,11 +291,7 @@ export default function PublicProfile() {
               playsInline
             />
           ) : (
-            <img
-              src={coverUrl}
-              alt="cover"
-              className="absolute inset-0 h-full w-full object-cover"
-            />
+            <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
           )
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
@@ -302,7 +318,24 @@ export default function PublicProfile() {
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
               {usernameText && <p className="text-neutral-400">{usernameText}</p>}
-              <div className="mt-1">
+
+              {/* Counts (clickable, route to lists) */}
+              <div className="flex items-center gap-6 text-sm text-neutral-300 mt-1">
+                <Link
+                  to={`/u/${p?.username || p?.id}/followers`}
+                  className="hover:underline"
+                >
+                  <span className="font-semibold">{followers ?? 0}</span> followers
+                </Link>
+                <Link
+                  to={`/u/${p?.username || p?.id}/following`}
+                  className="hover:underline"
+                >
+                  <span className="font-semibold">{following ?? 0}</span> following
+                </Link>
+              </div>
+
+              <div className="mt-2">
                 <Socials p={p} />
               </div>
             </div>
@@ -312,6 +345,8 @@ export default function PublicProfile() {
               <Link to="/account" className="btn">
                 Edit profile
               </Link>
+            ) : p?.id ? (
+              <FollowButton profileId={p.id} />
             ) : null}
           </div>
         </div>
@@ -366,9 +401,7 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active
-          ? "border-white text-white"
-          : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -397,9 +430,7 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">
-              {a.title || "Untitled"}
-            </div>
+            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
           </div>
         </Link>
       ))}
