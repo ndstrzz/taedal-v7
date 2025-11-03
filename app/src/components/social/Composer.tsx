@@ -1,3 +1,4 @@
+// app/src/components/Composer.tsx
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 
@@ -17,6 +18,10 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // ----- Config -----
+  const MAX_MB = 100; // adjust to your Storage limit
+  const MAX_FILES = 10;
 
   const filePreview = useMemo(
     () =>
@@ -38,13 +43,27 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (submitting) return;
+
     const text = caption.trim();
     if (!text && files.length === 0) return;
+
+    // Basic client-side checks
+    if (files.length > MAX_FILES) {
+      alert(`Too many files (max ${MAX_FILES}).`);
+      return;
+    }
+    for (const f of files) {
+      if (f.size > MAX_MB * 1024 * 1024) {
+        alert(`"${f.name}" exceeds ${MAX_MB}MB limit`);
+        return;
+      }
+    }
 
     setSubmitting(true);
     try {
       // 1) who am I?
-      const { data: auth } = await supabase.auth.getSession();
+      const { data: auth, error: sessErr } = await supabase.auth.getSession();
+      if (sessErr) throw sessErr;
       const uid = auth.session?.user?.id;
       if (!uid) throw new Error("Please sign in.");
 
@@ -67,28 +86,42 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
       if (files.length) {
         const bucket = supabase.storage.from("post-media");
 
-        // upload sequentially to keep payload small & avoid rate limits
         for (const f of files) {
-          const path = `${uid}/${postId}/${Date.now()}_${safeName(f.name)}`;
+          const unique = cryptoSafeUUID();
+          const path = `${uid}/${postId}/${unique}_${safeName(f.name)}`;
+
+          // Important: pass contentType, and log errors with detail
           const { error: upErr } = await bucket.upload(path, f, {
             cacheControl: "3600",
             upsert: false,
+            contentType: f.type || undefined,
           });
-          if (upErr) throw upErr;
+          if (upErr) {
+            // Surface useful details for debugging (will show in dev console)
+            // Typical causes if this throws:
+            // - object already exists (upsert:false)
+            // - bucket not found / policy mismatch
+            console.error("[storage.upload] path:", path, "type:", f.type, upErr);
+            alert(upErr.message || "Upload failed");
+            throw upErr;
+          }
 
-          // public URL (for MVP you can keep bucket public)
+          // public URL (for MVP you can keep bucket public + select policy)
           const { data: pub } = bucket.getPublicUrl(path);
 
-          // detect basic metadata
           const kind: "image" | "video" = f.type.startsWith("video/")
             ? "video"
             : "image";
 
-          await supabase.from("post_media").insert({
+          const { error: mediaErr } = await supabase.from("post_media").insert({
             post_id: postId,
             url: pub.publicUrl,
             kind,
           });
+          if (mediaErr) {
+            console.error("[post_media.insert] url:", pub.publicUrl, mediaErr);
+            throw mediaErr;
+          }
         }
       }
 
@@ -100,6 +133,7 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
       // 5) let parent refresh
       onPosted?.();
     } catch (err: any) {
+      console.error("[Composer] submit error:", err);
       alert(err?.message || "Failed to post.");
     } finally {
       setSubmitting(false);
@@ -154,8 +188,15 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
               multiple
               hidden
               onChange={(e) => {
-                const f = Array.from(e.target.files || []);
-                setFiles((prev) => [...prev, ...f]);
+                const picked = Array.from(e.target.files || []);
+                setFiles((prev) => {
+                  const next = [...prev, ...picked];
+                  if (next.length > MAX_FILES) {
+                    alert(`Max ${MAX_FILES} files allowed`);
+                    return prev;
+                  }
+                  return next;
+                });
               }}
             />
             Add media
@@ -200,4 +241,14 @@ export default function Composer({ onPosted }: { onPosted?: () => void }) {
 
 function safeName(s: string) {
   return s.replace(/[^\w.\-]+/g, "_");
+}
+
+function cryptoSafeUUID(): string {
+  // Prefer Web Crypto; fallback to timestamp if unavailable
+  try {
+    if ("crypto" in window && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+  } catch {}
+  return `${Date.now()}_${Math.random().toString(36).slice(2)}`;
 }
