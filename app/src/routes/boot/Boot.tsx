@@ -37,7 +37,11 @@ function resolvePreloadList(): string[] {
     getEnv("VITE_AR_INTRO_URL"),
   ].filter(Boolean) as string[];
   const extra = getEnv("VITE_BOOT_PRELOAD_URLS");
-  if (extra) extra.split(",").map((s) => s.trim()).filter(Boolean).forEach((u) => cands.push(u));
+  if (extra) extra
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .forEach((u) => cands.push(u));
   const seen = new Set<string>();
   for (const u of cands) if (!seen.has(u)) { seen.add(u); list.push(u); }
   return list;
@@ -76,7 +80,7 @@ export default function Boot() {
   const [warmPercent, setWarmPercent] = useState(0);
   const [allWarmed, setAllWarmed] = useState(false);
 
-  // NEW: show mobile "Add to home screen" hint first
+  // mobile "Add to home screen" hint
   const [showInstallPrompt, setShowInstallPrompt] = useState(false);
 
   /* ---- 15s minimum time ---- */
@@ -112,7 +116,7 @@ export default function Boot() {
     origins.forEach(preconnect);
   }, [targets]);
 
-  // NEW: detect mobile & standalone and decide whether to show InstallPrompt
+  // Detect mobile & standalone → decide whether to show InstallPrompt
   useEffect(() => {
     if (typeof window === "undefined") return;
 
@@ -124,14 +128,7 @@ export default function Boot() {
       // iOS Safari PWA flag
       (window.navigator as any).standalone;
 
-    let dismissed = false;
-    try {
-      dismissed = window.localStorage.getItem("taedal_install_prompt_dismissed") === "1";
-    } catch {
-      dismissed = false;
-    }
-
-    if (isMobile && !isStandalone && !dismissed) {
+    if (isMobile && !isStandalone) {
       setShowInstallPrompt(true);
     }
   }, []);
@@ -212,14 +209,11 @@ export default function Boot() {
     navigate("/home");
   };
 
-  // If we should show the mobile install hint, show that first instead of the loader
+  // Show the mobile install hint first on mobile (not standalone)
   if (showInstallPrompt) {
     return (
       <InstallPrompt
         onContinue={() => {
-          try {
-            window.localStorage.setItem("taedal_install_prompt_dismissed", "1");
-          } catch {}
           setShowInstallPrompt(false);
         }}
       />
