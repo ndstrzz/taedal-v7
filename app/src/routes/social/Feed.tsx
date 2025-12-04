@@ -1,38 +1,51 @@
-import { useEffect, useRef } from "react";
-import Composer from "../../components/social/Composer";
+// app/src/routes/social/Feed.tsx
+import { useEffect, useMemo, useRef } from "react";
 import PostCard from "../../components/social/PostCard";
 import { useFeed } from "../../hooks/useFeed";
+import { useRealtimeSocial } from "../../hooks/useRealtimeSocial";
 
 export default function Feed() {
   const { loading, error, items, hasMore, loadMore, refresh } = useFeed(20);
 
+  // Realtime: refresh the list when posts/media/likes/comments change
+  useRealtimeSocial(() => {
+    refresh();
+  });
+
   // Infinite scroll sentinel
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const observer = useMemo(
+    () =>
+      new IntersectionObserver(
+        (entries) => {
+          const first = entries[0];
+          if (first?.isIntersecting && hasMore && !loading) {
+            loadMore();
+          }
+        },
+        { rootMargin: "800px 0px 800px 0px" } // eager prefetch
+      ),
+    [hasMore, loading, loadMore]
+  );
+
   useEffect(() => {
     const el = sentinelRef.current;
     if (!el) return;
-
-    const io = new IntersectionObserver(
-      (entries) => {
-        entries.forEach((e) => {
-          if (e.isIntersecting) loadMore();
-        });
-      },
-      { rootMargin: "1000px 0px 1000px 0px" }
-    );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [loadMore]);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [observer]);
 
   useEffect(() => {
-    document.title = "Social — taedal";
+    document.title = "Feed — taedal";
   }, []);
 
   return (
     <main className="max-w-3xl mx-auto p-4 space-y-4">
-      <Composer onPosted={refresh} />
-
-      {error && <div className="text-amber-300 text-sm">{error}</div>}
+      {error && (
+        <div className="text-amber-300 text-sm border border-amber-700/40 bg-amber-900/20 rounded-lg p-2">
+          {error}
+        </div>
+      )}
 
       {loading && items.length === 0 ? (
         <div className="space-y-3">
@@ -61,11 +74,18 @@ export default function Feed() {
         </div>
       )}
 
-      <div ref={sentinelRef} />
+      {/* sentinel for infinite scroll */}
+      <div ref={sentinelRef} className="h-10" />
+
       {hasMore && (
         <div className="pt-2">
-          <button className="btn w-full" onClick={loadMore}>
-            Load more
+          <button
+            className="btn w-full"
+            onClick={loadMore}
+            disabled={loading}
+            aria-disabled={loading}
+          >
+            {loading ? "Loading…" : "Load more"}
           </button>
         </div>
       )}

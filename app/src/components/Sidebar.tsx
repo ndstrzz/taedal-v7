@@ -1,4 +1,4 @@
-import { NavLink, Link, useNavigate } from "react-router-dom";
+import { NavLink, Link, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 
@@ -11,11 +11,11 @@ type UserBits = {
 };
 
 type NavItem = {
-  to?: string;             // for regular links
+  to?: string; // for regular links
   label: string;
   iconSrc: string;
   alt?: string;
-  onClick?: () => void;    // for actions like opening the search panel
+  onClick?: () => void; // for actions like opening the search panel
 };
 
 type SearchRow = {
@@ -44,7 +44,7 @@ function saveRecent(list: SearchRow[]) {
   } catch {}
 }
 
-/* ---------------------------- Component ---------------------------- */
+/* ---------------------------- Rail Link ---------------------------- */
 function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
   // Action button variant
   if (onClick) {
@@ -100,7 +100,10 @@ function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
             <img
               src={iconSrc}
               alt={alt || label}
-              className={["h-5 w-5 transition-transform", isActive ? "scale-105" : "group-hover/item:scale-105"].join(" ")}
+              className={[
+                "h-5 w-5 transition-transform",
+                isActive ? "scale-105" : "group-hover/item:scale-105",
+              ].join(" ")}
             />
           </div>
           <span
@@ -119,8 +122,12 @@ function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
   );
 }
 
+/* ---------------------------- Component ---------------------------- */
 export default function Sidebar() {
   const nav = useNavigate();
+  const location = useLocation();
+
+  const socialActive = location.pathname.startsWith("/social");
 
   /* -------------------- auth / profile -------------------- */
   const [user, setUser] = useState<UserBits | null>(null);
@@ -181,8 +188,10 @@ export default function Sidebar() {
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (panelRef.current && panelRef.current.contains(e.target as Node)) return;
-      if (accountRef.current && accountRef.current.contains(e.target as Node)) return;
+      if (panelRef.current && panelRef.current.contains(e.target as Node))
+        return;
+      if (accountRef.current && accountRef.current.contains(e.target as Node))
+        return;
       setSearchOpen(false);
       setAccountOpen(false);
     }
@@ -260,12 +269,28 @@ export default function Sidebar() {
 
   /* -------------------- nav model -------------------- */
   const mainNav: NavItem[] = [
-    { to: "/discover", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Discover" },
-    { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
-    { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
-    { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
-    { to: "/social", label: "Social", iconSrc: "/icons/social.svg" },
-
+    {
+      to: "/discover",
+      label: "Discover",
+      iconSrc: "/images/discover-icon.svg",
+      alt: "Discover",
+    },
+    {
+      to: "/explore",
+      label: "Collections",
+      iconSrc: "/images/collections-icon.svg",
+    },
+    {
+      to: "/contracts",
+      label: "Contracts",
+      iconSrc: "/images/contract-icon.svg",
+    },
+    {
+      to: "/studio",
+      label: "Studio",
+      iconSrc: "/images/studio-icon.svg",
+    },
+    // Social is handled separately (with dropdown)
   ];
 
   /* ---------------------------- render ---------------------------- */
@@ -287,7 +312,7 @@ export default function Sidebar() {
       >
         {/* Brand (collapsed: taedal-static; expanded: BIG taedal-logo; no wordmark) */}
         <Link
-          to="/home"  // go to home, not boot
+          to="/home" // go to home, not boot
           title="Home"
           className="
             w-full flex items-center gap-3 h-11 px-3 rounded-xl
@@ -337,13 +362,100 @@ export default function Sidebar() {
           {mainNav.map((it) => (
             <RailLink key={it.to} {...it} />
           ))}
+
+          {/* Social with hover dropdown (post/view feed) */}
+          <div className="relative group">
+            {/* Parent row */}
+            <button
+              type="button"
+              title="Social"
+              className={[
+                "group/item w-full flex items-center gap-3 h-11 px-3 rounded-xl transition-colors",
+                "text-white/75 hover:text-white",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
+                socialActive ? "bg-white/5" : "",
+              ].join(" ")}
+            >
+              <div className="grid place-items-center w-8 shrink-0">
+                <img
+                  src="/images/social-icon.svg"
+                  alt="Social"
+                  className="h-5 w-5 transform scale-[4.5] transition-transform group-hover/item:scale-[3.45]"
+                />
+              </div>
+              <span
+                className="
+                  overflow-hidden opacity-0 max-w-0
+                  group-hover:opacity-100 group-hover:max-w-[180px]
+                  transition-[opacity,max-width] duration-200 text-sm
+                  whitespace-nowrap
+                "
+              >
+                Social
+              </span>
+            </button>
+
+            {/* Dropdown panel (below the Social pill, inside the sidebar) */}
+            <div
+              className="
+                absolute left-14 top-full mt-4
+                w-60 rounded-xl border border-neutral-800 bg-black/95 shadow-xl
+                py-1
+                opacity-0 pointer-events-none
+                group-hover:opacity-100 group-hover:pointer-events-auto
+                transition-opacity duration-150
+              "
+            >
+              <NavLink
+                to="/social/post"
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-2 px-3 py-2 text-xs text-white/80 hover:bg-white/5",
+                    "tracking-wide uppercase",
+                    isActive ? "bg-white/10" : "",
+                  ].join(" ")
+                }
+              >
+                <img
+                  src="/images/post-feed-icon.svg"
+                  alt="Post feed"
+                  className="h-4 w-4 object-contain"
+                />
+                <span>post feed</span>
+              </NavLink>
+
+              <NavLink
+                to="/social/feed"
+                className={({ isActive }) =>
+                  [
+                    "flex items-center gap-2 px-3 py-2 text-xs text-white/80 hover:bg-white/5",
+                    "tracking-wide uppercase",
+                    "border-t border-neutral-800",
+                    isActive ? "bg-white/10" : "",
+                  ].join(" ")
+                }
+              >
+                <img
+                  src="/images/view-feed-icon.svg"
+                  alt="View feed"
+                  className="h-4 w-4 object-contain"
+                />
+                <span>view feed</span>
+              </NavLink>
+            </div>
+          </div>
         </nav>
+
 
         <div className="flex-1" />
 
         {/* Settings link */}
         <nav className="grid gap-2 px-1 mb-2">
-          <RailLink to="/settings" label="Settings" iconSrc="/images/settings-icon.svg" />
+          <RailLink
+            to="/settings"
+            label="Settings"
+            iconSrc="/images/settings-icon.svg"
+          />
         </nav>
 
         {/* Account bubble with hover/click menu */}
@@ -358,12 +470,17 @@ export default function Sidebar() {
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
               "
               onClick={() => {
-                const here = window.location.pathname + window.location.search;
+                const here =
+                  window.location.pathname + window.location.search;
                 sessionStorage.setItem("returnTo", here || "/account");
               }}
             >
               <div className="grid place-items-center w-8">
-                <img src="/images/account-icon.svg" alt="Account" className="h-5 w-5" />
+                <img
+                  src="/images/account-icon.svg"
+                  alt="Account"
+                  className="h-5 w-5"
+                />
               </div>
               <span
                 className="
@@ -388,7 +505,11 @@ export default function Sidebar() {
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
                 "
               >
-                <img src={avatar} className="h-8 w-8 rounded-lg object-cover" alt="profile avatar" />
+                <img
+                  src={avatar}
+                  className="h-8 w-8 rounded-lg object-cover"
+                  alt="profile avatar"
+                />
                 <span
                   className="
                     overflow-hidden opacity-0 max-w-0
@@ -397,7 +518,9 @@ export default function Sidebar() {
                     whitespace-nowrap
                   "
                 >
-                  {user.username ? `@${user.username}` : user.email ?? "Profile"}
+                  {user.username
+                    ? `@${user.username}`
+                    : user.email ?? "Profile"}
                 </span>
               </button>
 
@@ -499,7 +622,8 @@ export default function Sidebar() {
                     setSel((i) => (i - 1 + rows.length) % rows.length);
                   }
                   if (e.key === "Enter") {
-                    const r = rows[Math.max(0, Math.min(sel, rows.length - 1))];
+                    const r =
+                      rows[Math.max(0, Math.min(sel, rows.length - 1))];
                     if (r) goToProfile(r);
                   }
                 }}
@@ -538,8 +662,12 @@ export default function Sidebar() {
                       className="h-10 w-10 rounded-full object-cover"
                     />
                     <div className="min-w-0 text-left">
-                      <div className="truncate">{r.display_name || r.username || "User"}</div>
-                      <div className="text-sm text-neutral-400 truncate">@{r.username || r.id}</div>
+                      <div className="truncate">
+                        {r.display_name || r.username || "User"}
+                      </div>
+                      <div className="text-sm text-neutral-400 truncate">
+                        @{r.username || r.id}
+                      </div>
                     </div>
                   </button>
                 </li>
@@ -580,7 +708,9 @@ export default function Sidebar() {
                         className="h-10 w-10 rounded-full object-cover"
                       />
                       <div className="min-w-0">
-                        <div className="truncate">{r.display_name || r.username || "User"}</div>
+                        <div className="truncate">
+                          {r.display_name || r.username || "User"}
+                        </div>
                         <div className="text-sm text-neutral-400 truncate">
                           @{r.username || r.id}
                         </div>
@@ -597,7 +727,9 @@ export default function Sidebar() {
                   </li>
                 ))}
                 {recent.length === 0 && (
-                  <div className="px-6 py-8 text-neutral-400">No recent searches.</div>
+                  <div className="px-6 py-8 text-neutral-400">
+                    No recent searches.
+                  </div>
                 )}
               </ul>
             </div>

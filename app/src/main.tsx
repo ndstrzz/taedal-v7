@@ -1,3 +1,4 @@
+// C:\Users\User\Downloads\taedal-v7\app\src\main.tsx
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -43,10 +44,11 @@ import DiscoverPage from "./routes/discover/Discover";
 import CollectionEdit from "./routes/collection/CollectionEdit";
 import CollectionPage from "./routes/collection/CollectionPage";
 
-/* NEW: Social feed */
+/* Social */
 import SocialFeed from "./routes/social/Feed";
+import SocialPost from "./routes/social/Post";
 
-/* NEW: Follow lists (followers / following) */
+/* Follow lists (followers / following) */
 import FollowListPage from "./routes/profiles/FollowListPage";
 
 /* Streak HUD */
@@ -62,6 +64,13 @@ import Boot from "./routes/boot/Boot";
 import { shouldShowBootOnce } from "./lib/bootGate";
 
 import ErrorBoundary from "./components/_debug/ErrorBoundary";
+
+/* NEW: Wallet artist-pass dev page */
+import ArtistPassDev from "./routes/WalletArtistPass";
+
+/* NEW: Wallet creation + success pages */
+import CreateWallet from "./routes/wallet/CreateWallet";
+import WalletSuccess from "./routes/wallet/WalletSuccess";
 
 /* ---------- Route-level error UI ---------- */
 function RouteErrorPage() {
@@ -93,7 +102,9 @@ function RouteErrorPage() {
 function GlobalMediaGuard() {
   const loc = useLocation();
   useEffect(() => {
-    const media = Array.from(document.querySelectorAll("video, audio")) as HTMLMediaElement[];
+    const media = Array.from(
+      document.querySelectorAll("video, audio")
+    ) as HTMLMediaElement[];
     media.forEach((m) => {
       try {
         m.pause();
@@ -144,24 +155,155 @@ const router = createBrowserRouter([
     element: <RequireBootGate />,
     errorElement: <RouteErrorPage />,
     children: [
-      { path: "/home", element: <AppLayout />, children: [{ index: true, element: <Home /> }] },
-      { path: "/explore", element: <AppLayout />, children: [{ index: true, element: <Explore /> }] },
+      {
+        path: "/home",
+        element: <AppLayout />,
+        children: [{ index: true, element: <Home /> }],
+      },
+      {
+        path: "/explore",
+        element: <AppLayout />,
+        children: [{ index: true, element: <Explore /> }],
+      },
 
       // Discover route
-      { path: "/discover", element: <AppLayout />, children: [{ index: true, element: <DiscoverPage /> }] },
+      {
+        path: "/discover",
+        element: <AppLayout />,
+        children: [{ index: true, element: <DiscoverPage /> }],
+      },
 
-      // NEW: Social route
-      { path: "/social", element: <AppLayout />, children: [{ index: true, element: <SocialFeed /> }] },
+      // Social routes
+      {
+        path: "/social",
+        element: <AppLayout />,
+        children: [
+          { index: true, element: <SocialFeed /> }, // /social
+          { path: "feed", element: <SocialFeed /> }, // /social/feed
+          {
+            path: "post",
+            element: (
+              <RequireAuth>
+                <SocialPost />
+              </RequireAuth>
+            ),
+          }, // /social/post
+        ],
+      },
 
       // Auth-protected
-      { path: "/contracts", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Contracts /></RequireAuth> }] },
-      { path: "/contracts/:id", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><RequestDetail /></RequireAuth> }] },
-      { path: "/account", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Account /></RequireAuth> }] },
-      { path: "/create", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><CreateArtwork /></RequireAuth> }] },
-      { path: "/studio", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><StudioHome /></RequireAuth> }] },
-      { path: "/studio/create", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><CreateChooser /></RequireAuth> }] },
-      { path: "/studio/create/collection", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><DeployCollection /></RequireAuth> }] },
-      { path: "/studio/create/collection/deploying", element: <AppLayout />, children: [{ index: true, element: <RequireAuth><Deploying /></RequireAuth> }] },
+      {
+        path: "/contracts",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <Contracts />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/contracts/:id",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <RequestDetail />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/account",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <Account />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/create",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <CreateArtwork />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/studio",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <StudioHome />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/studio/create",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <CreateChooser />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/studio/create/collection",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <DeployCollection />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/studio/create/collection/deploying",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <Deploying />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
 
       // Public
       {
@@ -169,20 +311,90 @@ const router = createBrowserRouter([
         element: <AppLayout />,
         children: [
           { index: true, element: <PublicProfile /> },
-          { path: "followers", element: <FollowListPage /> },  // NEW
-          { path: "following", element: <FollowListPage /> },  // NEW
+          { path: "followers", element: <FollowListPage /> }, // followers
+          { path: "following", element: <FollowListPage /> }, // following
         ],
       },
-      { path: "/art/:id", element: <AppLayout />, children: [{ index: true, element: <ArtworkDetail /> }] },
-      { path: "/art/:id/ar", element: <AppLayout />, children: [{ index: true, element: <ARPreview /> }] },
-      { path: "/checkout/success", element: <AppLayout />, children: [{ index: true, element: <CheckoutSuccess /> }] },
-      { path: "/orders/success", element: <AppLayout />, children: [{ index: true, element: <CheckoutSuccess /> }] },
-      { path: "/signin", element: <AppLayout />, children: [{ index: true, element: <SignIn /> }] },
-      { path: "/auth/callback", element: <AppLayout />, children: [{ index: true, element: <Callback /> }] },
+      {
+        path: "/art/:id",
+        element: <AppLayout />,
+        children: [{ index: true, element: <ArtworkDetail /> }],
+      },
+      {
+        path: "/art/:id/ar",
+        element: <AppLayout />,
+        children: [{ index: true, element: <ARPreview /> }],
+      },
+
+      // NEW: wallet create + success routes (auth-protected)
+      {
+        path: "/wallet/create",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <CreateWallet />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+      {
+        path: "/wallet/success",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <WalletSuccess />
+              </RequireAuth>
+            ),
+          },
+        ],
+      },
+
+      // NEW: wallet artist-pass dev route (unchanged)
+      {
+        path: "/wallet/artist-pass/dev",
+        element: <AppLayout />,
+        children: [{ index: true, element: <ArtistPassDev /> }],
+      },
+
+      {
+        path: "/checkout/success",
+        element: <AppLayout />,
+        children: [{ index: true, element: <CheckoutSuccess /> }],
+      },
+      {
+        path: "/orders/success",
+        element: <AppLayout />,
+        children: [{ index: true, element: <CheckoutSuccess /> }],
+      },
+      {
+        path: "/signin",
+        element: <AppLayout />,
+        children: [{ index: true, element: <SignIn /> }],
+      },
+      {
+        path: "/auth/callback",
+        element: <AppLayout />,
+        children: [{ index: true, element: <Callback /> }],
+      },
 
       // Collections
-      { path: "/collection/:slug", element: <AppLayout />, children: [{ index: true, element: <CollectionPage /> }] },
-      { path: "/collection/:slug/edit", element: <AppLayout />, children: [{ index: true, element: <CollectionEdit /> }] },
+      {
+        path: "/collection/:slug",
+        element: <AppLayout />,
+        children: [{ index: true, element: <CollectionPage /> }],
+      },
+      {
+        path: "/collection/:slug/edit",
+        element: <AppLayout />,
+        children: [{ index: true, element: <CollectionEdit /> }],
+      },
 
       { path: "*", element: <Navigate to="/home" replace /> },
     ],

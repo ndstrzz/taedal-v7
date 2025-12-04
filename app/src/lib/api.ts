@@ -41,27 +41,60 @@ export type Shipment = {
 };
 
 export async function apiListShipments(artworkId: string, token?: string) {
-  const r = await apiFetch(`/shipments?artwork_id=${encodeURIComponent(artworkId)}`, {}, token);
+  const r = await apiFetch(
+    `/shipments?artwork_id=${encodeURIComponent(artworkId)}`,
+    {},
+    token
+  );
   return getJSON<{ shipments: Shipment[] }>(r);
 }
 
 export async function apiUpsertShipment(partial: Partial<Shipment>, token?: string) {
-  const r = await apiFetch(`/shipments`, { method: "POST", body: JSON.stringify(partial) }, token);
+  const r = await apiFetch(
+    `/shipments`,
+    { method: "POST", body: JSON.stringify(partial) },
+    token
+  );
   return getJSON<{ shipment: Shipment }>(r);
 }
 
 export async function apiCreateScanEvent(
-  payload: { shipment_id: string; artwork_id: string; location?: string | null; notes?: string | null },
+  payload: {
+    shipment_id: string;
+    artwork_id: string;
+    location?: string | null;
+    notes?: string | null;
+  },
   token?: string
 ) {
-  const r = await apiFetch(`/scan-events`, { method: "POST", body: JSON.stringify(payload) }, token);
+  const r = await apiFetch(
+    `/scan-events`,
+    { method: "POST", body: JSON.stringify(payload) },
+    token
+  );
   return getJSON<{ scan: any }>(r);
 }
 
 /* ───────────────── Notifications (poll) ───────────────── */
 
 export async function apiListNotifications(since: string | undefined, token?: string) {
-  const url = since ? `/me/notifications?since=${encodeURIComponent(since)}` : `/me/notifications`;
+  const url = since
+    ? `/me/notifications?since=${encodeURIComponent(since)}`
+    : `/me/notifications`;
   const res = await apiFetch(url, {}, token);
   return getJSON<{ rows: any[] }>(res);
+}
+
+/* ───────────────── Taedal Card ───────────────── */
+
+export type TaedalCard = {
+  publicUrl: string;
+  display_name: string | null;
+  avatar_url: string | null;
+  bio: string | null;
+};
+
+export async function apiGetMeCard(token?: string) {
+  const res = await apiFetch("/me/card", {}, token);
+  return getJSON<TaedalCard>(res);
 }

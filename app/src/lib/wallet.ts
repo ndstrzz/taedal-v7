@@ -9,7 +9,10 @@ let appkit: ReturnType<typeof createAppKit> | null = null;
 export function getWalletKit() {
   if (appkit) return appkit;
 
-  const projectId = import.meta.env.VITE_WC_PROJECT_ID as string | undefined;
+  // Use `any` to avoid TS complaining about import.meta.env
+  const projectId = (import.meta as any).env
+    ?.VITE_WC_PROJECT_ID as string | undefined;
+
   if (!projectId) {
     console.warn("VITE_WC_PROJECT_ID missing — WalletConnect modal disabled.");
     return null;
@@ -67,7 +70,10 @@ export async function ensureSepolia(): Promise<void> {
       params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
     });
   } catch {
-    await ethereum.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_PARAMS] });
+    await ethereum.request({
+      method: "wallet_addEthereumChain",
+      params: [SEPOLIA_PARAMS],
+    });
     await ethereum.request({
       method: "wallet_switchEthereumChain",
       params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],

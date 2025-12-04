@@ -21,6 +21,12 @@ import "./App.css";
 import AssistantDock from "./assistant/AssistantDock";
 import ThemeProvider from "./providers/ThemeProvider";
 
+import CreateWallet from "./routes/wallet/CreateWallet";
+import WalletSuccess from "./routes/wallet/WalletSuccess";
+
+/* mobile install gate */
+import { MobileInstallGate } from "./components/mobile/MobileInstallGate";
+
 /* ----------------------------------------- */
 /* Utilities                                 */
 /* ----------------------------------------- */
@@ -234,44 +240,49 @@ function App() {
     <BrowserRouter>
       <ThemeProvider>
         <ScrollToTop />
-        <div className="min-h-dvh bg-neutral-950 text-white">
-          <TopNav />
+        <MobileInstallGate>
+          <div className="min-h-dvh bg-neutral-950 text-white">
+            <TopNav />
 
-          <Suspense
-            fallback={
-              <div className="max-w-7xl mx-auto p-6">
-                <div className="h-6 w-48 bg-white/10 rounded animate-pulse" />
-                <div className="mt-4 h-4 w-72 bg-white/10 rounded animate-pulse" />
-              </div>
-            }
-          >
-            <Routes>
-              {/* Boot is now the landing route */}
-              <Route path="/" element={<Boot />} />
+            <Suspense
+              fallback={
+                <div className="max-w-7xl mx-auto p-6">
+                  <div className="h-6 w-48 bg-white/10 rounded animate-pulse" />
+                  <div className="mt-4 h-4 w-72 bg-white/10 rounded animate-pulse" />
+                </div>
+              }
+            >
+              <Routes>
+                {/* Boot is now the landing route */}
+                <Route path="/" element={<Boot />} />
 
-              {/* Explore moved to /home */}
-              <Route path="/home" element={<Explore />} />
+                {/* Explore moved to /home */}
+                <Route path="/home" element={<Explore />} />
 
-              <Route path="/create" element={<CreateArtwork />} />
-              <Route path="/art/:id" element={<ArtworkDetail />} />
-              {/* NEW: AR preview route */}
-              <Route path="/art/:id/ar" element={<ARPreview />} />
-              <Route path="/checkout/success" element={<CheckoutSuccess />} />
+                <Route path="/create" element={<CreateArtwork />} />
+                <Route path="/art/:id" element={<ArtworkDetail />} />
+                {/* NEW: AR preview route */}
+                <Route path="/art/:id/ar" element={<ARPreview />} />
+                <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
-              {/* Public profile routes */}
-              <Route path="/u/:handle" element={<PublicProfile />} />
-              <Route path="/profiles/:handle" element={<PublicProfile />} />
+                {/* Public profile routes */}
+                <Route path="/u/:handle" element={<PublicProfile />} />
+                <Route path="/profiles/:handle" element={<PublicProfile />} />
 
-              {/* Optional redirect for legacy links */}
-              <Route path="/profile/:handle" element={<Navigate to="/u/:handle" replace />} />
+                {/* Optional redirect for legacy links */}
+                <Route
+                  path="/profile/:handle"
+                  element={<Navigate to="/u/:handle" replace />}
+                />
 
-              {/* 404 fallback */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </Suspense>
+                {/* 404 fallback */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </Suspense>
 
-          <AssistantDock />
-        </div>
+            <AssistantDock />
+          </div>
+        </MobileInstallGate>
       </ThemeProvider>
     </BrowserRouter>
   );

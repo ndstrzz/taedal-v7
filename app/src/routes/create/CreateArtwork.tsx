@@ -12,6 +12,7 @@ import MintModal from "../../components/MintModal";
 import useMinBusy from "../../hooks/useMinBusy";
 import CropModal from "../../components/CropModal";
 import { createCollection, fetchMyCollections, slugify, type Collection } from "../../lib/collections";
+import SimilarityOverlay from "../../components/SimilarityOverlay";
 
 /* ------------------------------------------------------------------------------------ */
 
@@ -101,7 +102,7 @@ function InfoBar({ tone = "default", children }: { tone?: "default" | "warning" 
   return <div className={`text-xs rounded-lg px-3 py-2 border ${tones[tone]}`}>{children}</div>;
 }
 
-/* -------- Video Overlay -------- */
+/* -------- Pinning video overlay -------- */
 
 function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin" }) {
   if (!open) return null;
@@ -155,14 +156,18 @@ function NewCollectionModal({
       <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-md rounded-2xl border border-white/10 bg-neutral-950 p-5">
         <div className="flex items-center justify-between mb-3">
           <div className="text-lg font-semibold">New collection</div>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>Close</button>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+            Close
+          </button>
         </div>
 
         <div className="space-y-3">
           <div>
             <label className="block text-sm mb-1">Name *</label>
             <input className="input w-full" value={name} onChange={(e) => setName(e.target.value)} />
-            <div className="text-[11px] text-white/50 mt-1">Slug: <code>{slugify(name) || "—"}</code></div>
+            <div className="text-[11px] text-white/50 mt-1">
+              Slug: <code>{slugify(name) || "—"}</code>
+            </div>
           </div>
           <div>
             <label className="block text-sm mb-1">Description (optional)</label>
@@ -189,7 +194,9 @@ function NewCollectionModal({
             >
               {busy ? "Creating…" : "Create"}
             </button>
-            <button className="btn" onClick={onClose}>Cancel</button>
+            <button className="btn" onClick={onClose}>
+              Cancel
+            </button>
           </div>
         </div>
       </div>
@@ -203,11 +210,11 @@ export default function CreateArtworkWizard() {
   const nav = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
 
-  // New: pre-step
+  // pre-step
   const [artType, setArtType] = useState<ArtworkType | null>(null);
   const [step, setStep] = useState<Step>(0);
 
-  // New: collections
+  // collections
   const [collections, setCollections] = useState<Collection[]>([]);
   const [collectionId, setCollectionId] = useState<string | "">(""); // '' = no collection
   const [collModalOpen, setCollModalOpen] = useState(false);
@@ -258,13 +265,15 @@ export default function CreateArtworkWizard() {
   const [artworkId, setArtworkId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
 
+  // cover URL for external reverse-image search
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+
   const anyChecking = images.some((im) => im.checking);
   const allDupes = images.flatMap((im) => im.dupes ?? []);
   const anyDupes = allDupes.length > 0;
 
   const showDupeOverlay = useMinBusy(anyChecking, 5000);
   const showPinOverlay = useMinBusy(pinning, 5000);
-  const overlayOpen = showDupeOverlay || showPinOverlay;
 
   // auth
   useEffect(() => {
@@ -296,6 +305,7 @@ export default function CreateArtworkWizard() {
     };
   }, [images]);
 
+  // internal duplicate check (exact hash match inside Taedal)
   async function checkImageDupes(idx: number, file: File) {
     setImages((arr) => {
       const next = [...arr];
@@ -311,6 +321,7 @@ export default function CreateArtworkWizard() {
         .select("id,title,image_url,creator_id")
         .eq("image_sha256", hash)
         .limit(5);
+
       if (error) throw error;
       const dupes = (data as DuplicateHit[]) ?? [];
 
@@ -337,6 +348,7 @@ export default function CreateArtworkWizard() {
 
     setGlobalMsg(null);
     setAckOriginal(false);
+    setCoverUrl(null); // reset external URL when changing images
 
     const mapped: LocalImage[] = files.map((f) => ({
       original: f,
@@ -364,7 +376,7 @@ export default function CreateArtworkWizard() {
 
   const currentCropFile = useMemo(
     () => (cropTargetIdx == null ? null : images[cropTargetIdx]?.current) as File | null,
-    [cropTargetIdx, images]
+    [cropTargetIdx, images],
   );
 
   function setAsCover(idx: number) {
@@ -375,6 +387,7 @@ export default function CreateArtworkWizard() {
       copy.unshift(picked);
       return copy;
     });
+    setCoverUrl(null); // new cover => reset external URL
   }
 
   function removeImage(idx: number) {
@@ -384,6 +397,50 @@ export default function CreateArtworkWizard() {
       if (rm?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(rm.previewUrl);
       return copy;
     });
+    if (idx === 0) setCoverUrl(null);
+  }
+
+  // upload cover for external reverse-image check (Step 1)
+  async function ensureCoverUploadedForExternalCheck(): Promise<string | null> {
+    if (!userId || !images[0]) {
+      setGlobalMsg("Please sign in and upload at least one image first.");
+      return null;
+    }
+    if (coverUrl) return coverUrl;
+
+    try {
+      const upload = await uploadToArtworksBucket(images[0].current, userId);
+      setCoverUrl(upload.publicUrl);
+      return upload.publicUrl;
+    } catch (e: any) {
+      setGlobalMsg(e?.message ?? "Failed uploading cover for external check.");
+      return null;
+    }
+  }
+
+  async function handleExternalSearch(target: "google" | "bing" | "tineye" | "yandex") {
+    const url = await ensureCoverUploadedForExternalCheck();
+    if (!url) return;
+
+    const u = encodeURIComponent(url);
+    let href = "";
+
+    switch (target) {
+      case "google":
+        href = `https://www.google.com/searchbyimage?image_url=${u}`;
+        break;
+      case "bing":
+        href = `https://www.bing.com/images/searchbyimage?cbir=sbi&imgurl=${u}`;
+        break;
+      case "tineye":
+        href = `https://tineye.com/search?url=${u}`;
+        break;
+      case "yandex":
+        href = `https://yandex.com/images/search?rpt=imageview&url=${u}`;
+        break;
+    }
+
+    window.open(href, "_blank", "noreferrer");
   }
 
   // STEP 2 → 3
@@ -407,7 +464,9 @@ export default function CreateArtworkWizard() {
     setGlobalMsg(null);
 
     try {
+      // upload cover (again if needed for final artwork)
       const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
+      if (!coverUrl) setCoverUrl(coverUpload.publicUrl);
 
       const payload: any = {
         creator_id: userId,
@@ -448,7 +507,6 @@ export default function CreateArtworkWizard() {
 
         pin_status: "pending",
 
-        // NEW: optional collection
         collection_id: collectionId || null,
       };
 
@@ -459,7 +517,9 @@ export default function CreateArtworkWizard() {
       setStep(3);
 
       if (images.length > 1) {
-        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
+        const uploads = await Promise.all(
+          images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)),
+        );
         const records = uploads.map((up, i) => ({
           artwork_id: row.id,
           url: up.publicUrl,
@@ -514,7 +574,10 @@ export default function CreateArtworkWizard() {
         <div className="mt-6 grid sm:grid-cols-2 gap-4">
           <button
             className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
-            onClick={() => { setArtType("digital"); setStep(1); }}
+            onClick={() => {
+              setArtType("digital");
+              setStep(1);
+            }}
             aria-label="Create digital artwork"
           >
             <img src="/images/digital-icon.svg" alt="" width={160} height={160} className="h-10 w-10 mb-3" loading="eager" />
@@ -528,7 +591,10 @@ export default function CreateArtworkWizard() {
 
           <button
             className="rounded-2xl border border-white/10 bg-white/[0.04] p-5 text-left hover:border-white/30 transition"
-            onClick={() => { setArtType("physical"); setStep(1); }}
+            onClick={() => {
+              setArtType("physical");
+              setStep(1);
+            }}
             aria-label="Create physical artwork"
           >
             <img src="/images/physical-icon.svg" alt="" width={160} height={160} className="h-10 w-10 mb-3" loading="eager" />
@@ -542,7 +608,9 @@ export default function CreateArtworkWizard() {
         </div>
 
         <div className="mt-6">
-          <button className="btn" onClick={() => nav(-1 as any)}>Back</button>
+          <button className="btn" onClick={() => nav(-1 as any)}>
+            Back
+          </button>
         </div>
       </div>
     );
@@ -564,7 +632,9 @@ export default function CreateArtworkWizard() {
             <TypeChip />
           </div>
           <h1 className="text-2xl font-semibold">Create artwork</h1>
-          <div className="text-sm text-white/60">Publish immediately — items show right away. Great for evolving collections.</div>
+          <div className="text-sm text-white/60">
+            Publish immediately — items show right away. Great for evolving collections.
+          </div>
         </div>
         <Stepper step={step as 1 | 2 | 3} />
       </div>
@@ -587,26 +657,48 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            {/* Thumbs */}
+            {/* Thumbnails */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
               {images.map((im, i) => (
-                <div key={i} className={`relative rounded-xl overflow-hidden border ${i === 0 ? "border-white/30" : "border-white/10"} bg-neutral-900`}>
+                <div
+                  key={i}
+                  className={`relative rounded-xl overflow-hidden border ${
+                    i === 0 ? "border-white/30" : "border-white/10"
+                  } bg-neutral-900`}
+                >
                   <img src={im.previewUrl} className="h-40 w-full object-cover" />
                   {im.checking && (
-                    <div className="absolute left-2 top-2 text-[11px] px-1.5 py-0.5 rounded bg-white/10 border border-white/20">scanning…</div>
+                    <div className="absolute left-2 top-2 text-[11px] px-1.5 py-0.5 rounded bg-white/10 border border-white/20">
+                      scanning…
+                    </div>
                   )}
                   {im.dupes && im.dupes.length > 0 && !im.checking && (
-                    <div className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow" title="Possible duplicate" />
+                    <div
+                      className="absolute left-2 top-2 h-2.5 w-2.5 rounded-full bg-rose-400 shadow"
+                      title="Possible duplicate"
+                    />
                   )}
                   <div className="absolute inset-x-0 bottom-0 p-2 flex gap-2 bg-black/40 backdrop-blur">
-                    <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(i)}>Crop</button>
-                    {i !== 0 && <button className="btn px-2 py-1 text-xs" onClick={() => setAsCover(i)}>Set cover</button>}
-                    <button className="btn px-2 py-1 text-xs" onClick={() => removeImage(i)}>Remove</button>
+                    <button className="btn px-2 py-1 text-xs" onClick={() => setCropTargetIdx(i)}>
+                      Crop
+                    </button>
+                    {i !== 0 && (
+                      <button className="btn px-2 py-1 text-xs" onClick={() => setAsCover(i)}>
+                        Set cover
+                      </button>
+                    )}
+                    <button className="btn px-2 py-1 text-xs" onClick={() => removeImage(i)}>
+                      Remove
+                    </button>
                   </div>
                 </div>
               ))}
               {Array.from({ length: Math.max(0, MAX_IMAGES - images.length) }).map((_, idx) => (
-                <label key={`ph-${idx}`} className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] grid place-items-center h-40 cursor-pointer hover:border-white/20" title="Add images">
+                <label
+                  key={`ph-${idx}`}
+                  className="rounded-xl border border-dashed border-white/10 bg-white/[0.03] grid place-items-center h-40 cursor-pointer hover:border-white/20"
+                  title="Add images"
+                >
                   <input type="file" accept="image/*" multiple hidden onChange={onPick} />
                   <div className="text-xs text-white/60">Upload</div>
                 </label>
@@ -615,10 +707,16 @@ export default function CreateArtworkWizard() {
 
             {anyDupes && (
               <Section title="Potential duplicates">
-                <div className="text-sm mb-2">We found artworks with the same file. Please confirm you are the original creator to continue:</div>
+                <div className="text-sm mb-2">
+                  We found artworks with the same file in Taedal. Please confirm you are the original creator to
+                  continue:
+                </div>
                 <div className="grid gap-2">
                   {allDupes.map((d, idx) => (
-                    <div key={`${d.id}-${idx}`} className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]">
+                    <div
+                      key={`${d.id}-${idx}`}
+                      className="flex items-center gap-3 border border-neutral-800 rounded-lg p-2 bg-white/[0.03]"
+                    >
                       {d.image_url && <img src={d.image_url} className="h-14 w-14 object-cover rounded" />}
                       <div className="text-sm">
                         <div className="font-medium">{d.title ?? "Untitled"}</div>
@@ -628,32 +726,90 @@ export default function CreateArtworkWizard() {
                   ))}
                 </div>
                 <label className="inline-flex items-center gap-2 mt-3">
-                  <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
-                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
+                  <input
+                    type="checkbox"
+                    checked={ackOriginal}
+                    onChange={(e) => setAckOriginal(e.target.checked)}
+                  />
+                  <span className="text-sm">
+                    I am the original creator and have the rights to mint this artwork.
+                  </span>
                 </label>
               </Section>
             )}
 
             <div className="flex gap-3">
-              <button className="btn" disabled={images.length === 0 || anyChecking || (anyDupes && !ackOriginal)} onClick={() => setStep(2)}>
+              <button
+                className="btn"
+                disabled={images.length === 0 || anyChecking || (anyDupes && !ackOriginal)}
+                onClick={() => setStep(2)}
+              >
                 Continue
               </button>
-              <button className="btn" onClick={() => setStep(0)}>Change type</button>
+              <button className="btn" onClick={() => setStep(0)}>
+                Change type
+              </button>
             </div>
           </div>
 
-          {/* Right: live preview */}
-          <div className="lg:col-span-5">
+          {/* Right: live preview + external check */}
+          <div className="lg:col-span-5 space-y-3">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
                 <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
-                  {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>}
+                  {images[0] ? (
+                    <img src={images[0].previewUrl} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
+                  )}
                 </div>
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
                   <div className="text-xs text-white/60">By you • Not listed</div>
                 </div>
               </Section>
+
+              {images[0] && (
+                <Section
+                  title="External reverse-image check"
+                  desc="Open this artwork in popular reverse-image engines to see if it already exists elsewhere on the web."
+                >
+                  <div className="flex flex-wrap gap-2 text-sm">
+                    <button
+                      type="button"
+                      className="btn px-3 py-1 text-xs"
+                      onClick={() => handleExternalSearch("google")}
+                    >
+                      Google Images
+                    </button>
+                    <button
+                      type="button"
+                      className="btn px-3 py-1 text-xs"
+                      onClick={() => handleExternalSearch("bing")}
+                    >
+                      Bing Images
+                    </button>
+                    <button
+                      type="button"
+                      className="btn px-3 py-1 text-xs"
+                      onClick={() => handleExternalSearch("tineye")}
+                    >
+                      TinEye
+                    </button>
+                    <button
+                      type="button"
+                      className="btn px-3 py-1 text-xs"
+                      onClick={() => handleExternalSearch("yandex")}
+                    >
+                      Yandex Images
+                    </button>
+                  </div>
+                  <p className="text-[11px] text-white/50 mt-2">
+                    We’ll temporarily upload your cover image to Taedal storage (if not already uploaded) and open
+                    the chosen search engine in a new tab.
+                  </p>
+                </Section>
+              )}
             </div>
           </div>
         </div>
@@ -681,7 +837,7 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            {/* NEW: Collection picker */}
+            {/* Collection picker */}
             <Section title="Collection" desc="Optional — group this item under a collection you own.">
               <div className="flex items-center gap-2">
                 <select
@@ -705,30 +861,50 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            {/* Dimensions / etc. (unchanged) */}
+            {/* Dimensions / etc. */}
             <Section title="Dimensions (optional)">
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm">Width</label>
-                  <input className="input" type="number" step="0.01"
-                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("width", {
+                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                    })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Height</label>
-                  <input className="input" type="number" step="0.01"
-                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("height", {
+                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                    })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Depth</label>
-                  <input className="input" type="number" step="0.01"
-                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("depth", {
+                      setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                    })}
                   />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
-                  <select className="input" {...register("dim_unit", { setValueAs: (v) => (v === "" ? undefined : v) })}>
+                  <select
+                    className="input"
+                    {...register("dim_unit", {
+                      setValueAs: (v) => (v === "" ? undefined : v),
+                    })}
+                  >
                     <option value=""></option>
                     <option value="cm">cm</option>
                     <option value="in">in</option>
@@ -759,24 +935,40 @@ export default function CreateArtworkWizard() {
             <Section title="Royalties (optional)">
               <div>
                 <label className="block text-sm">Royalty (bps)</label>
-                <input className="input" type="number"
-                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                <input
+                  className="input"
+                  type="number"
+                  {...register("royalty_bps", {
+                    setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)),
+                  })}
                 />
                 <p className="text-xs text-white/60 mt-1">500 bps = 5%.</p>
               </div>
             </Section>
 
             <div className="flex items-center gap-3">
-              <button className="btn" type="submit">Continue</button>
-              <button type="button" className="btn" onClick={() => setStep(1)}>Back</button>
-              <button type="button" className="btn" onClick={() => setStep(0)}>Change type</button>
+              <button className="btn" type="submit">
+                Continue
+              </button>
+              <button type="button" className="btn" onClick={() => setStep(1)}>
+                Back
+              </button>
+              <button type="button" className="btn" onClick={() => setStep(0)}>
+                Change type
+              </button>
             </div>
 
             {anyDupes && (
               <InfoBar tone="warning">
                 <label className="inline-flex items-center gap-2">
-                  <input type="checkbox" checked={ackOriginal} onChange={(e) => setAckOriginal(e.target.checked)} />
-                  <span className="text-sm">I am the original creator and have the rights to mint this artwork.</span>
+                  <input
+                    type="checkbox"
+                    checked={ackOriginal}
+                    onChange={(e) => setAckOriginal(e.target.checked)}
+                  />
+                  <span className="text-sm">
+                    I am the original creator and have the rights to mint this artwork.
+                  </span>
                 </label>
               </InfoBar>
             )}
@@ -787,18 +979,29 @@ export default function CreateArtworkWizard() {
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
                 <div className="aspect-square overflow-hidden rounded-xl bg-neutral-900 border border-white/10">
-                  {images[0] ? <img src={images[0].previewUrl} className="h-full w-full object-cover" /> : <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>}
+                  {images[0] ? (
+                    <img src={images[0].previewUrl} className="h-full w-full object-cover" />
+                  ) : (
+                    <div className="grid h-full place-items-center text-neutral-500 text-sm">No image</div>
+                  )}
                 </div>
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
                   <div className="text-xs text-white/60">
-                    By you • {collectionId ? `In ${collections.find(c => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
+                    By you •{" "}
+                    {collectionId
+                      ? `In ${collections.find((c) => c.id === collectionId)?.name ?? "collection"}`
+                      : "No collection"}
                   </div>
                 </div>
                 {images.length > 1 && (
                   <div className="grid grid-cols-5 gap-2 mt-2">
                     {images.slice(1).map((im, i) => (
-                      <img key={i} src={im.previewUrl} className="h-16 w-full rounded-md object-cover border border-white/10" />
+                      <img
+                        key={i}
+                        src={im.previewUrl}
+                        className="h-16 w-full rounded-md object-cover border border-white/10"
+                      />
                     ))}
                   </div>
                 )}
@@ -825,15 +1028,25 @@ export default function CreateArtworkWizard() {
               {pinMsg && <div className="text-xs text-neutral-200 mt-2">{pinMsg}</div>}
               {pinData && (
                 <div className="text-xs space-y-1 mt-2">
-                  <div>Image CID: <code>{pinData.imageCID}</code></div>
-                  <div>Metadata CID: <code>{pinData.metadataCID}</code></div>
-                  <div>Token URI: <code>{pinData.tokenURI}</code></div>
+                  <div>
+                    Image CID: <code>{pinData.imageCID}</code>
+                  </div>
+                  <div>
+                    Metadata CID: <code>{pinData.metadataCID}</code>
+                  </div>
+                  <div>
+                    Token URI: <code>{pinData.tokenURI}</code>
+                  </div>
                 </div>
               )}
               {!pinning && artworkId && pinData?.tokenURI && (
                 <div className="flex flex-wrap gap-2 mt-3">
-                  <button className="btn" onClick={() => setShowMint(true)}>Mint now</button>
-                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>Skip (view artwork)</button>
+                  <button className="btn" onClick={() => setShowMint(true)}>
+                    Mint now
+                  </button>
+                  <button className="btn" onClick={() => nav(`/art/${artworkId}`)}>
+                    Skip (view artwork)
+                  </button>
                 </div>
               )}
             </Section>
@@ -862,7 +1075,14 @@ export default function CreateArtworkWizard() {
         />
       )}
 
-      <VideoOverlay open={overlayOpen} message={showPinOverlay ? "pin" : "scan"} />
+      {/* Similarity scanning overlay (internal hash check) */}
+      <SimilarityOverlay
+        open={showDupeOverlay}
+        message="Scanning your artwork against Taedal’s database…"
+      />
+
+      {/* Pinning overlay */}
+      <VideoOverlay open={showPinOverlay} message="pin" />
 
       {cropTargetIdx != null && currentCropFile && (
         <CropModal
@@ -875,14 +1095,24 @@ export default function CreateArtworkWizard() {
             const existing = images[idx];
             if (!existing) return setCropTargetIdx(null);
 
-            const nextFile = new File([blob], existing.original.name.replace(/\.\w+$/, "") + ".jpg", { type: "image/jpeg" });
+            const nextFile = new File(
+              [blob],
+              existing.original.name.replace(/\.\w+$/, "") + ".jpg",
+              { type: "image/jpeg" },
+            );
             const nextPreview = URL.createObjectURL(nextFile);
 
             setImages((arr) => {
               const copy = [...arr];
               const old = copy[idx];
               if (old?.previewUrl?.startsWith("blob:")) URL.revokeObjectURL(old.previewUrl);
-              copy[idx] = { ...old, current: nextFile, previewUrl: nextPreview, dupes: null, hash: null };
+              copy[idx] = {
+                ...old,
+                current: nextFile,
+                previewUrl: nextPreview,
+                dupes: null,
+                hash: null,
+              };
               return copy;
             });
 

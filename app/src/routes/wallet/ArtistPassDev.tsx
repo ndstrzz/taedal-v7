@@ -1,5 +1,3 @@
-// C:\Users\User\Downloads\taedal-v7\server\src\index.ts
-
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
@@ -13,15 +11,8 @@ const {
   SUPABASE_ANON_KEY,
   SUPABASE_SERVICE_ROLE_KEY,
   PINATA_JWT,
-  APP_URL,
-  PUBLIC_APP_URL,
+  PUBLIC_APP_URL = "https://taedal.app",
 } = process.env;
-
-// Single canonical "web origin" used for deep-links (wallet page, QR, etc.)
-const WEB_ORIGIN = (PUBLIC_APP_URL || APP_URL || "http://localhost:5173").replace(
-  /\/+$/,
-  ""
-);
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
   throw new Error("Missing required Supabase env vars");
@@ -78,8 +69,9 @@ app.post("/wallet/artist-pass", async (req, res) => {
       .maybeSingle();
 
     const handle = profile?.username || profile_id;
+    const base = (PUBLIC_APP_URL || "").replace(/\/+$/, ""); // trim trailing /
 
-    const passUrl = `${WEB_ORIGIN}/wallet/artist-pass/dev?profile=${encodeURIComponent(
+    const passUrl = `${base}/wallet/artist-pass/dev?profile=${encodeURIComponent(
       handle
     )}`;
 
@@ -91,29 +83,6 @@ app.post("/wallet/artist-pass", async (req, res) => {
   } catch (e: any) {
     console.error("[wallet/artist-pass]", e);
     res.status(500).send(e?.message || "Server error");
-  }
-});
-
-/* ---------------- NEW: create wallet (dev stub) ---------------- */
-/**
- * Dev-only wallet creator called by the frontend.
- * Frontend: POST /api/wallets -> { address: "0x..." }
- *
- * Later we will replace the random address with a real wallet provider call
- * and optionally persist to a `user_wallets` table.
- */
-app.post("/api/wallets", (req, res) => {
-  try {
-    // Just generate a fake 20-byte address for now.
-    const buf = crypto.randomBytes(20); // 20 bytes -> 40 hex chars
-    const address = "0x" + buf.toString("hex");
-
-    console.log("[/api/wallets] dev wallet created", address);
-
-    res.json({ address });
-  } catch (e: any) {
-    console.error("[/api/wallets]", e);
-    res.status(500).json({ error: e?.message || "Failed to create wallet" });
   }
 });
 
@@ -489,7 +458,8 @@ app.post("/qr/register", async (req, res) => {
       .update({ qr_secret_hash: hash, tag_status: "bound" })
       .eq("id", artwork_id);
 
-    const deepLink = `${WEB_ORIGIN}/a/${artwork_id}/qr?code=${encodeURIComponent(
+    const base = (PUBLIC_APP_URL || "").replace(/\/+$/, "");
+    const deepLink = `${base}/a/${artwork_id}/qr?code=${encodeURIComponent(
       secret
     )}`;
     res.json({ secret, deepLink });

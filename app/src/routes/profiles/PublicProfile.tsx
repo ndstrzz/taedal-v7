@@ -6,6 +6,9 @@ import { supabase } from "../../lib/supabase";
 import FollowButton from "../../components/social/FollowButton";
 import { getFollowCounts } from "../../lib/follow";
 
+/* API base (Express server) */
+const API_URL = import.meta.env.VITE_API_URL as string | undefined;
+
 /* ---------- types ---------- */
 type Artwork = { id: string; title: string | null; image_url: string | null };
 type Profile = {
@@ -24,13 +27,18 @@ type Profile = {
 function isVideoUrl(u?: string | null) {
   if (!u) return false;
   const qless = u.split("?")[0].toLowerCase();
-  return qless.endsWith(".webm") || qless.endsWith(".mp4") || qless.endsWith(".mov");
+  return (
+    qless.endsWith(".webm") ||
+    qless.endsWith(".mp4") ||
+    qless.endsWith(".mov")
+  );
 }
 
 export default function PublicProfile() {
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
-  const activeTab = (sp.get("tab") as "created" | "purchased" | "hidden") || "created";
+  const activeTab =
+    (sp.get("tab") as "created" | "purchased" | "hidden") || "created";
 
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [p, setP] = useState<Profile | null>(null);
@@ -45,6 +53,9 @@ export default function PublicProfile() {
 
   const [followers, setFollowers] = useState<number>(0);
   const [following, setFollowing] = useState<number>(0);
+
+  // wallet card
+  const [walletLoading, setWalletLoading] = useState(false);
 
   const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
 
@@ -121,7 +132,11 @@ export default function PublicProfile() {
 
   /* helpers */
   const mapArt = (rows: any[]): Artwork[] =>
-    (rows || []).map((r) => ({ id: r.id, title: r.title ?? null, image_url: r.image_url ?? null }));
+    (rows || []).map((r) => ({
+      id: r.id,
+      title: r.title ?? null,
+      image_url: r.image_url ?? null,
+    }));
 
   /* loaders (Created excludes hidden when viewing your own profile) */
   async function loadCreated(profileId: string, isMe: boolean) {
@@ -148,11 +163,17 @@ export default function PublicProfile() {
       .in("artwork_id", ids);
     if (hErr) throw hErr;
 
-    const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
+    const hiddenIds = new Set(
+      (hiddenRows ?? []).map((r: any) => r.artwork_id)
+    );
     setCreated(
       createdRows
         .filter((r) => !hiddenIds.has(r.id))
-        .map((r) => ({ id: r.id, title: r.title, image_url: r.image_url }))
+        .map((r) => ({
+          id: r.id,
+          title: r.title,
+          image_url: r.image_url,
+        }))
     );
   }
 
@@ -177,7 +198,9 @@ export default function PublicProfile() {
     const ids = rows.map((r) => r.artwork_id);
     const map = new Map(
       rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+        .map((r) =>
+          Array.isArray(r.artworks) ? r.artworks[0] : r.artworks
+        )
         .filter(Boolean)
         .map((a: any) => [a.id, a])
     );
@@ -211,9 +234,15 @@ export default function PublicProfile() {
     const rows = (data ?? []) as { artworks: any | any[] }[];
     setHidden(
       rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+        .map((r) =>
+          Array.isArray(r.artworks) ? r.artworks[0] : r.artworks
+        )
         .filter(Boolean)
-        .map((a: any) => ({ id: a.id, title: a.title, image_url: a.image_url }))
+        .map((a: any) => ({
+          id: a.id,
+          title: a.title,
+          image_url: a.image_url,
+        }))
     );
   }
 
@@ -250,15 +279,21 @@ export default function PublicProfile() {
   /* title */
   useEffect(() => {
     if (!p) return;
-    document.title = `${p.display_name?.trim() || p.username || "Profile"} — taedal`;
+    document.title = `${
+      p.display_name?.trim() || p.username || "Profile"
+    } — taedal`;
   }, [p]);
 
   /* derived */
-  const isMe = useMemo(() => Boolean(viewerId && p?.id && viewerId === p.id), [viewerId, p?.id]);
+  const isMe = useMemo(
+    () => Boolean(viewerId && p?.id && viewerId === p.id),
+    [viewerId, p?.id]
+  );
   const coverUrl = p?.cover_url || "";
   const isCoverVideo = isVideoUrl(coverUrl);
   const avatarUrl = p?.avatar_url || "/images/taedal-logo.svg";
-  const displayName = p?.display_name?.trim() || p?.username || "Profile";
+  const displayName =
+    p?.display_name?.trim() || p?.username || "Profile";
   const usernameText = p?.username ? `@${p.username}` : null;
 
   const setTab = (t: "created" | "purchased" | "hidden") =>
@@ -270,6 +305,59 @@ export default function PublicProfile() {
       },
       { replace: true }
     );
+
+  /** NEW: trigger wallet card for this profile (only if you're viewing yourself) */
+  const handleWalletCard = async () => {
+    if (!p?.id || !isMe) return;
+    if (walletLoading) return;
+
+    setWalletLoading(true);
+    setMsg(null);
+
+    try {
+      if (!API_URL) {
+        setMsg("Wallet card server URL is not configured.");
+        return;
+      }
+      const { data: session } = await supabase.auth.getSession();
+      const token = session.session?.access_token;
+      if (!token) {
+        setMsg("You’re signed out. Please sign in again and try.");
+        return;
+      }
+
+      const res = await fetch(`${API_URL}/wallet/artist-pass`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ profile_id: p.id }),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to prepare wallet card.");
+      }
+
+      const payload: any = await res.json();
+      const passUrl: string | undefined =
+        payload.passUrl || payload.url || payload.link || payload.profileUrl;
+
+      if (passUrl) {
+        window.location.href = passUrl;
+      } else {
+        setMsg(
+          "Wallet card prepared, but no URL was returned from the server."
+        );
+      }
+    } catch (err: any) {
+      console.error("[wallet-card]", err);
+      setMsg(err?.message || "Failed to prepare wallet card.");
+    } finally {
+      setWalletLoading(false);
+    }
+  };
 
   if (loadingProfile) return <div className="p-6">loading…</div>;
 
@@ -291,7 +379,11 @@ export default function PublicProfile() {
               playsInline
             />
           ) : (
-            <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
+            <img
+              src={coverUrl}
+              alt="cover"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
           )
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
@@ -317,7 +409,9 @@ export default function PublicProfile() {
             />
             <div className="pb-1">
               <h1 className="text-2xl font-bold">{displayName}</h1>
-              {usernameText && <p className="text-neutral-400">{usernameText}</p>}
+              {usernameText && (
+                <p className="text-neutral-400">{usernameText}</p>
+              )}
 
               {/* Counts (clickable, route to lists) */}
               <div className="flex items-center gap-6 text-sm text-neutral-300 mt-1">
@@ -325,13 +419,19 @@ export default function PublicProfile() {
                   to={`/u/${p?.username || p?.id}/followers`}
                   className="hover:underline"
                 >
-                  <span className="font-semibold">{followers ?? 0}</span> followers
+                  <span className="font-semibold">
+                    {followers ?? 0}
+                  </span>{" "}
+                  followers
                 </Link>
                 <Link
                   to={`/u/${p?.username || p?.id}/following`}
                   className="hover:underline"
                 >
-                  <span className="font-semibold">{following ?? 0}</span> following
+                  <span className="font-semibold">
+                    {following ?? 0}
+                  </span>{" "}
+                  following
                 </Link>
               </div>
 
@@ -342,9 +442,19 @@ export default function PublicProfile() {
           </div>
           <div className="pb-1">
             {isMe ? (
-              <Link to="/account" className="btn">
-                Edit profile
-              </Link>
+              <div className="flex gap-2">
+                <Link to="/account" className="btn">
+                  Edit profile
+                </Link>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleWalletCard}
+                  disabled={walletLoading}
+                >
+                  {walletLoading ? "Preparing card…" : "Wallet card"}
+                </button>
+              </div>
             ) : p?.id ? (
               <FollowButton profileId={p.id} />
             ) : null}
@@ -355,14 +465,23 @@ export default function PublicProfile() {
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>
+          <TabButton
+            active={activeTab === "created"}
+            onClick={() => setTab("created")}
+          >
             Created
           </TabButton>
-          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
+          <TabButton
+            active={activeTab === "purchased"}
+            onClick={() => setTab("purchased")}
+          >
             Purchased
           </TabButton>
           {isMe && (
-            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>
+            <TabButton
+              active={activeTab === "hidden"}
+              onClick={() => setTab("hidden")}
+            >
               Hidden
             </TabButton>
           )}
@@ -377,9 +496,15 @@ export default function PublicProfile() {
         ) : activeTab === "created" ? (
           <ArtworkGrid items={created} emptyText="No artworks yet." />
         ) : activeTab === "purchased" ? (
-          <ArtworkGrid items={purchased} emptyText="No purchased pieces yet." />
+          <ArtworkGrid
+            items={purchased}
+            emptyText="No purchased pieces yet."
+          />
         ) : (
-          <ArtworkGrid items={hidden} emptyText="No hidden pieces." />
+          <ArtworkGrid
+            items={hidden}
+            emptyText="No hidden pieces."
+          />
         )}
       </div>
     </div>
@@ -401,7 +526,9 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active
+          ? "border-white text-white"
+          : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -409,8 +536,15 @@ function TabButton({
   );
 }
 
-function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string }) {
-  if (!items?.length) return <div className="card text-sm text-neutral-400">{emptyText}</div>;
+function ArtworkGrid({
+  items,
+  emptyText,
+}: {
+  items: Artwork[];
+  emptyText: string;
+}) {
+  if (!items?.length)
+    return <div className="card text-sm text-neutral-400">{emptyText}</div>;
   return (
     <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
       {items.map((a) => (
@@ -430,7 +564,9 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
+            <div className="truncate font-medium group-hover:text-white">
+              {a.title || "Untitled"}
+            </div>
           </div>
         </Link>
       ))}
@@ -457,10 +593,28 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
-  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
-  if (p.youtube) items.push({ label: "YT", href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}` });
-  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
+  if (p.instagram)
+    items.push({
+      label: "IG",
+      href: `https://instagram.com/${p.instagram.replace(/^@/, "")}`,
+    });
+  if (p.x_handle)
+    items.push({
+      label: "X",
+      href: `https://x.com/${p.x_handle.replace(/^@/, "")}`,
+    });
+  if (p.youtube)
+    items.push({
+      label: "YT",
+      href: p.youtube.startsWith("http")
+        ? p.youtube
+        : `https://youtube.com/${p.youtube}`,
+    });
+  if (p.telegram)
+    items.push({
+      label: "TG",
+      href: `https://t.me/${p.telegram.replace(/^@/, "")}`,
+    });
   if (!items.length) return null;
   return (
     <div className="flex items-center gap-2">
