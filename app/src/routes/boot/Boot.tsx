@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { markBootSeen } from "../../lib/bootGate";
+import InstallPrompt from "../../components/InstallPrompt";
 
 /* ---------- env helpers ---------- */
 function getEnv(key: string): string | undefined {
@@ -75,6 +76,9 @@ export default function Boot() {
   const [warmPercent, setWarmPercent] = useState(0);
   const [allWarmed, setAllWarmed] = useState(false);
 
+  // NEW: show mobile "Add to home screen" hint first
+  const [showInstallPrompt, setShowInstallPrompt] = useState(false);
+
   /* ---- 15s minimum time ---- */
   const MIN_BOOT_MS = 15_000;
   const [elapsedMs, setElapsedMs] = useState(0);
@@ -90,6 +94,7 @@ export default function Boot() {
 
   const canStart = allWarmed && minElapsed;
 
+  // Preconnect to video origins
   useEffect(() => {
     const origins = Array.from(
       new Set(
@@ -106,6 +111,30 @@ export default function Boot() {
     );
     origins.forEach(preconnect);
   }, [targets]);
+
+  // NEW: detect mobile & standalone and decide whether to show InstallPrompt
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const ua = window.navigator.userAgent || "";
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(ua);
+
+    const isStandalone =
+      window.matchMedia?.("(display-mode: standalone)")?.matches ||
+      // iOS Safari PWA flag
+      (window.navigator as any).standalone;
+
+    let dismissed = false;
+    try {
+      dismissed = window.localStorage.getItem("taedal_install_prompt_dismissed") === "1";
+    } catch {
+      dismissed = false;
+    }
+
+    if (isMobile && !isStandalone && !dismissed) {
+      setShowInstallPrompt(true);
+    }
+  }, []);
 
   /* ---- local video (slightly zoomed out) ---- */
   useEffect(() => {
@@ -183,6 +212,20 @@ export default function Boot() {
     navigate("/home");
   };
 
+  // If we should show the mobile install hint, show that first instead of the loader
+  if (showInstallPrompt) {
+    return (
+      <InstallPrompt
+        onContinue={() => {
+          try {
+            window.localStorage.setItem("taedal_install_prompt_dismissed", "1");
+          } catch {}
+          setShowInstallPrompt(false);
+        }}
+      />
+    );
+  }
+
   return (
     <main className="fixed inset-0 z-[9999]">
       {/* Background local video (scaled smaller to “zoom out”) */}
@@ -213,7 +256,14 @@ export default function Boot() {
             viewBox={`0 0 ${SIZE} ${SIZE}`}
             className="block mx-auto drop-shadow-[0_8px_32px_rgba(0,0,0,0.55)]"
           >
-            <circle cx={SIZE / 2} cy={SIZE / 2} r={R} fill="none" stroke="rgba(255,255,255,0.16)" strokeWidth={STROKE} />
+            <circle
+              cx={SIZE / 2}
+              cy={SIZE / 2}
+              r={R}
+              fill="none"
+              stroke="rgba(255,255,255,0.16)"
+              strokeWidth={STROKE}
+            />
             <circle
               cx={SIZE / 2}
               cy={SIZE / 2}
@@ -232,7 +282,10 @@ export default function Boot() {
           {/* Text inside */}
           <div className="absolute inset-0 grid place-items-center">
             <div className="text-center leading-tight px-2">
-              <div style={{ fontSize: "clamp(10px, 1.8vw, 14px)", letterSpacing: "0.22em" }} className="uppercase text-white/85">
+              <div
+                style={{ fontSize: "clamp(10px, 1.8vw, 14px)", letterSpacing: "0.22em" }}
+                className="uppercase text-white/85"
+              >
                 unpacking our
               </div>
               <div style={{ fontSize: "clamp(22px, 3.4vw, 32px)" }} className="font-semibold">
@@ -241,6 +294,11 @@ export default function Boot() {
               {!canStart && (
                 <div className="mt-1 text-[10px] sm:text[11px] text-white/60">
                   {Math.max(0, Math.ceil((15_000 - elapsedMs) / 1000))}s remaining
+                </div>
+              )}
+              {canStart && (
+                <div className="mt-1 text-[10px] sm:text[11px] text-white/60">
+                  Resources warmed • {warmPercent}%
                 </div>
               )}
             </div>
