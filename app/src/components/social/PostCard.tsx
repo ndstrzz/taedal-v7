@@ -1,33 +1,38 @@
 import { useEffect, useState } from "react";
-import type { MiniProfile, Post, PostMedia } from "../../hooks/useFeed";
-import { useFeed } from "../../hooks/useFeed";
 import { Link } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
+import type { MiniProfile, Post, PostMedia } from "../../hooks/useFeed";
 
 type Props = {
   post: Post;
   media: PostMedia[];
   author: MiniProfile | null;
-  /** optional: parent can force-refresh the feed after deletion */
+
+  onToggleLike(postId: string, wantLike: boolean): Promise<void> | void;
+  onAddComment(postId: string, text: string): Promise<void> | void;
+
   onDeleted?: () => void;
 };
 
-export default function PostCard({ post, media, author, onDeleted }: Props) {
-  const { toggleLike, addComment } = useFeed(); // using hook methods is fine
+export default function PostCard({
+  post,
+  media,
+  author,
+  onToggleLike,
+  onAddComment,
+  onDeleted,
+}: Props) {
   const [commenting, setCommenting] = useState(false);
   const [text, setText] = useState("");
 
-  // caption folding
   const [expanded, setExpanded] = useState(false);
   const CAP_LEN = 180;
   const caption = post.caption || "";
   const isLong = caption.length > CAP_LEN;
   const shown = !isLong || expanded ? caption : caption.slice(0, CAP_LEN) + "…";
 
-  // author name
   const display = author?.display_name?.trim() || author?.username || "User";
 
-  // author-only delete
   const [uid, setUid] = useState<string | null>(null);
   const canDelete = !!uid && !!author?.id && uid === author.id;
 
@@ -42,17 +47,17 @@ export default function PostCard({ post, media, author, onDeleted }: Props) {
     if (!confirm("Delete this post? This action cannot be undone.")) return;
 
     try {
-      // Best-effort cleanup: related rows first, then the post.
       await supabase.from("post_media").delete().eq("post_id", post.id);
       await supabase.from("post_comments").delete().eq("post_id", post.id);
       await supabase.from("post_likes").delete().eq("post_id", post.id);
+
       const { error } = await supabase
         .from("posts")
         .delete()
         .match({ id: post.id, author_id: uid! });
-      if (error) throw error;
 
-      onDeleted?.(); // parent will refresh the feed
+      if (error) throw error;
+      onDeleted?.();
     } catch (e: any) {
       alert(e?.message || "Failed to delete post.");
     }
@@ -60,7 +65,6 @@ export default function PostCard({ post, media, author, onDeleted }: Props) {
 
   return (
     <article className="rounded-2xl border border-neutral-800 bg-neutral-900 overflow-hidden">
-      {/* Header */}
       <div className="p-3 flex items-center gap-3">
         <img
           src={author?.avatar_url || "/images/taedal-logo.svg"}
@@ -88,7 +92,6 @@ export default function PostCard({ post, media, author, onDeleted }: Props) {
         )}
       </div>
 
-      {/* Caption (foldable) */}
       {caption && (
         <div className="px-3 pb-2 whitespace-pre-wrap">
           {shown}
@@ -104,38 +107,34 @@ export default function PostCard({ post, media, author, onDeleted }: Props) {
         </div>
       )}
 
-      {/* Media grid */}
       {!!media.length && (
         <div className="grid grid-cols-2 gap-1 px-2 pb-2">
           {media.map((m) =>
             m.kind === "video" ? (
               <video key={m.id} src={m.url} className="w-full rounded-lg" controls playsInline />
             ) : (
-              <img key={m.id} src={m.url} className="w-full rounded-lg object-cover" loading="lazy" />
+              <img key={m.id} src={m.url} className="w-full rounded-lg object-cover" loading="lazy" alt="" />
             )
           )}
         </div>
       )}
 
-      {/* Actions */}
       <div className="px-3 py-2 flex items-center gap-3 text-sm">
         <button
           className={`px-2 py-1 rounded ${post.did_like ? "bg-neutral-700" : "bg-neutral-800 hover:bg-neutral-700"}`}
-          onClick={() => toggleLike(post.id, !post.did_like)}
-          title={post.did_like ? "Unlike" : "Like"}
+          onClick={() => onToggleLike(post.id, !post.did_like)}
         >
           ♥ {post.like_count ?? 0}
         </button>
+
         <button
           className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
           onClick={() => setCommenting((v) => !v)}
-          title="Comment"
         >
           💬 {post.comment_count ?? 0}
         </button>
       </div>
 
-      {/* Comment box */}
       {commenting && (
         <form
           className="p-3 border-t border-neutral-800 flex items-center gap-2"
@@ -143,7 +142,7 @@ export default function PostCard({ post, media, author, onDeleted }: Props) {
             e.preventDefault();
             const v = text.trim();
             if (!v) return;
-            await addComment(post.id, v);
+            await onAddComment(post.id, v);
             setText("");
             setCommenting(false);
           }}

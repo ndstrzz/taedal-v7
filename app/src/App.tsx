@@ -214,15 +214,18 @@ const ARPreview = lazy(() => import("./routes/art/ARPreview"));
 const Boot = lazy(() => import("./routes/boot/Boot"));
 
 /* ----------------------------------------- */
+/* NEW: Messages (lazy)                      */
+/* ----------------------------------------- */
+const MessagesPage = lazy(() => import("./features/messages/MessagesPage"));
+
+/* ----------------------------------------- */
 /* 404                                       */
 /* ----------------------------------------- */
 function NotFound() {
   return (
     <div className="max-w-xl mx-auto p-8">
       <h1 className="text-2xl font-semibold mb-2">Page not found</h1>
-      <p className="text-white/70">
-        The page you’re looking for doesn’t exist.
-      </p>
+      <p className="text-white/70">The page you’re looking for doesn’t exist.</p>
       <div className="mt-4">
         <Link to="/home" className="btn">
           Back home
@@ -253,29 +256,25 @@ function App() {
               }
             >
               <Routes>
-                {/* Boot is now the landing route */}
                 <Route path="/" element={<Boot />} />
-
-                {/* Explore moved to /home */}
                 <Route path="/home" element={<Explore />} />
 
                 <Route path="/create" element={<CreateArtwork />} />
                 <Route path="/art/:id" element={<ArtworkDetail />} />
-                {/* NEW: AR preview route */}
                 <Route path="/art/:id/ar" element={<ARPreview />} />
                 <Route path="/checkout/success" element={<CheckoutSuccess />} />
 
-                {/* Public profile routes */}
                 <Route path="/u/:handle" element={<PublicProfile />} />
                 <Route path="/profiles/:handle" element={<PublicProfile />} />
 
-                {/* Optional redirect for legacy links */}
+                {/* NEW: Messages */}
+                <Route path="/messages" element={<MessagesPage />} />
+
                 <Route
                   path="/profile/:handle"
                   element={<Navigate to="/u/:handle" replace />}
                 />
 
-                {/* 404 fallback */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
             </Suspense>

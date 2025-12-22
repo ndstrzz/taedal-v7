@@ -1,21 +1,20 @@
-// app/src/hooks/useRealtimeSocial.ts
 import { useEffect, useRef } from "react";
 import { supabase } from "../lib/supabase";
 
 type PgEvent = "INSERT" | "UPDATE" | "DELETE" | "*";
 
 export type RealtimeOptions = {
-  tables?: string[];          // defaults below
-  events?: PgEvent[];         // defaults to ["*"]
-  throttleMs?: number;        // default 150ms
-  pauseWhenHidden?: boolean;  // default true
+  tables?: string[];
+  events?: PgEvent[];
+  throttleMs?: number;
+  pauseWhenHidden?: boolean;
+  channelName?: string;
 };
 
-/**
- * Realtime listener for social tables (posts, media, likes, comments).
- * Uses Supabase channel API (v2) with small type assertions to satisfy TS
- * across versions that type the .on() overloads differently.
- */
+function stableKey(arr: string[]) {
+  return arr.slice().sort().join("|");
+}
+
 export function useRealtimeSocial(onChange?: () => void, opts?: RealtimeOptions) {
   const cbRef = useRef(onChange);
   cbRef.current = onChange;
@@ -24,30 +23,32 @@ export function useRealtimeSocial(onChange?: () => void, opts?: RealtimeOptions)
   const visibleRef = useRef<boolean>(true);
 
   const {
-    tables = ["posts", "post_media", "post_likes", "post_comments"],
+    tables = ["posts", "post_media", "post_likes", "post_comments", "follows"],
     events = ["*"],
     throttleMs = 150,
     pauseWhenHidden = true,
+    channelName = "realtime:social",
   } = opts || {};
+
+  const tablesKey = stableKey(tables);
+  const eventsKey = stableKey(events);
 
   useEffect(() => {
     const schedule = () => {
       if (!cbRef.current) return;
       if (pauseWhenHidden && !visibleRef.current) return;
       if (throttleRef.current != null) return;
+
       throttleRef.current = window.setTimeout(() => {
         throttleRef.current = null;
         cbRef.current?.();
       }, throttleMs);
     };
 
-    // Create one channel and attach multiple postgres_changes handlers
-    const channel = supabase.channel("realtime:social");
+    const channel = supabase.channel(channelName);
 
     for (const table of tables) {
       for (const ev of events) {
-        // TS shim: some @supabase/supabase-js versions narrow the overload
-        // to "system". We cast the event+filter to any to keep it version-agnostic.
         (channel as any).on(
           "postgres_changes" as any,
           { event: ev, schema: "public", table } as any,
@@ -56,15 +57,14 @@ export function useRealtimeSocial(onChange?: () => void, opts?: RealtimeOptions)
       }
     }
 
-    const subscription = channel.subscribe();
+    channel.subscribe();
 
     const onVis = () => {
       visibleRef.current = document.visibilityState !== "hidden";
       if (visibleRef.current) schedule();
     };
-    if (pauseWhenHidden) {
-      document.addEventListener("visibilitychange", onVis);
-    }
+
+    if (pauseWhenHidden) document.addEventListener("visibilitychange", onVis);
 
     return () => {
       if (pauseWhenHidden) document.removeEventListener("visibilitychange", onVis);
@@ -74,11 +74,8 @@ export function useRealtimeSocial(onChange?: () => void, opts?: RealtimeOptions)
       }
       try {
         supabase.removeChannel(channel);
-        (subscription as any)?.unsubscribe?.();
-      } catch {
-        /* noop */
-      }
+      } catch {}
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [throttleMs, pauseWhenHidden, JSON.stringify(tables), JSON.stringify(events)]);
+  }, [throttleMs, pauseWhenHidden, channelName, tablesKey, eventsKey]);
 }

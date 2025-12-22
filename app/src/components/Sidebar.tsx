@@ -290,6 +290,15 @@ export default function Sidebar() {
       label: "Studio",
       iconSrc: "/images/studio-icon.svg",
     },
+
+    /* NEW: Messages */
+    {
+      to: "/messages",
+      label: "Messages",
+      iconSrc: "/images/messages-icon.svg", // swap to any existing icon if needed
+      alt: "Messages",
+    },
+
     // Social is handled separately (with dropdown)
   ];
 
@@ -445,7 +454,6 @@ export default function Sidebar() {
             </div>
           </div>
         </nav>
-
 
         <div className="flex-1" />
 

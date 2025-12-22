@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+// C:\Users\User\Downloads\taedal-v7\app\src\routes\art\ArtworkDetail.tsx
+
+import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
   createOrUpdateFixedPriceListing,
@@ -19,6 +21,13 @@ import ShipmentsPanel from "../../components/shipping/ShipmentsPanel";
 import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
 import QRCode from "qrcode";
 
+// ✅ DM helpers (fixes dm_send_message_v2 signature mismatch)
+import {
+  dmGetOrCreateThread,
+  dmListFriends,
+  dmSendArtworkShare,
+} from "../../features/messages/api";
+
 /* ------------------------------ WalletModal ------------------------------ */
 
 function WalletModal({
@@ -36,11 +45,17 @@ function WalletModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
       <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-6 w-full max-w-md shadow-2xl">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-semibold">Connect wallet</h3>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+          <button
+            className="text-sm text-white/70 hover:text-white"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
@@ -79,7 +94,10 @@ function ShareQRModal({
     let alive = true;
     (async () => {
       if (!open) return;
-      const data = await QRCode.toDataURL(url, { errorCorrectionLevel: "M", scale: 6 });
+      const data = await QRCode.toDataURL(url, {
+        errorCorrectionLevel: "M",
+        scale: 6,
+      });
       if (alive) setImg(data);
     })();
     return () => {
@@ -91,11 +109,17 @@ function ShareQRModal({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
       <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-4 w-full max-w-sm">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">{title}</h3>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+          <button
+            className="text-sm text-white/70 hover:text-white"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
@@ -111,6 +135,166 @@ function ShareQRModal({
         ) : (
           <div className="text-sm text-white/70">Generating…</div>
         )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------ Share to DM Modal (friends list) ------------------------------ */
+
+type DMFriendRow = {
+  other_user_id: string;
+  other_username: string | null;
+  other_display_name: string | null;
+  other_avatar_url: string | null;
+  thread_id: string | null;
+};
+
+function ShareToDMModal({
+  open,
+  onClose,
+  artwork,
+  onSent,
+}: {
+  open: boolean;
+  onClose: () => void;
+  artwork: { id: string; title: string | null; image_url: string | null };
+  onSent?: (threadId: string) => void;
+}) {
+  const [friends, setFriends] = useState<DMFriendRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (!open) return;
+      setErr(null);
+      setBusy(true);
+      try {
+        // ✅ use helper (keeps one consistent DM API layer)
+        const data = (await dmListFriends()) as unknown as DMFriendRow[];
+        if (!alive) return;
+        setFriends((data ?? []) as DMFriendRow[]);
+      } catch (e: any) {
+        if (!alive) return;
+        setErr(e?.message ?? "Failed to load friends");
+      } finally {
+        if (alive) setBusy(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [open]);
+
+  async function sendTo(otherUserId: string) {
+    setErr(null);
+    setBusy(true);
+    try {
+      // ✅ create/get thread
+      const tid = await dmGetOrCreateThread(otherUserId);
+
+      // ✅ send artwork share (sets shared_artwork_id so it matches your SQL signature)
+      await dmSendArtworkShare(tid, artwork.id, {
+        title: artwork.title ?? "Untitled",
+        image_url: artwork.image_url,
+      });
+
+      onClose();
+      onSent?.(tid);
+    } catch (e: any) {
+      setErr(e?.message ?? "Failed to send");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+
+  return (
+    <div className="fixed inset-0 z-[80] flex items-center justify-center">
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
+      <div className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-950 p-4 shadow-2xl">
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-lg font-semibold">Send artwork</div>
+          <button
+            className="text-sm text-white/70 hover:text-white"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 flex gap-3">
+          {artwork.image_url ? (
+            <img
+              src={artwork.image_url}
+              className="h-14 w-14 rounded-lg object-cover border border-white/10"
+              alt={artwork.title ?? "Artwork"}
+            />
+          ) : (
+            <div className="h-14 w-14 rounded-lg bg-white/5 border border-white/10" />
+          )}
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-white/90 truncate">
+              {artwork.title ?? "Untitled"}
+            </div>
+            <div className="text-xs text-white/60 truncate">/art/{artwork.id}</div>
+          </div>
+        </div>
+
+        {err ? <div className="mb-2 text-sm text-red-300">{err}</div> : null}
+        {busy ? <div className="text-sm text-white/60 p-2">Loading…</div> : null}
+
+        <div className="max-h-[52vh] overflow-auto divide-y divide-white/10 rounded-xl border border-white/10">
+          {friends.length === 0 && !busy ? (
+            <div className="p-3 text-sm text-white/60">
+              No mutual-follow friends yet.
+            </div>
+          ) : (
+            friends.map((f) => {
+              const name = f.other_username ?? f.other_display_name ?? "User";
+              return (
+                <button
+                  key={f.other_user_id}
+                  className="w-full text-left p-3 hover:bg-white/5 transition flex items-center justify-between gap-3 disabled:opacity-60"
+                  onClick={() => sendTo(f.other_user_id)}
+                  disabled={busy}
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {f.other_avatar_url ? (
+                      <img
+                        src={f.other_avatar_url}
+                        className="h-9 w-9 rounded-full object-cover border border-white/10"
+                        alt={name}
+                      />
+                    ) : (
+                      <div className="h-9 w-9 rounded-full bg-white/5 border border-white/10" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="truncate text-sm text-white/90 font-medium">
+                        {name}
+                      </div>
+                      <div className="truncate text-xs text-white/60">Send via DM</div>
+                    </div>
+                  </div>
+
+                  <span className="text-xs rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-white/80">
+                    Send
+                  </span>
+                </button>
+              );
+            })
+          )}
+        </div>
+
+        <div className="mt-3 text-[11px] text-white/50">
+          Tip: after sending, we’ll open Messages on that thread.
+        </div>
       </div>
     </div>
   );
@@ -152,7 +336,13 @@ type Artwork = {
   ipfs_metadata_cid?: string | null;
   token_uri?: string | null;
   type?: "digital" | "physical" | null;
-  physical_status?: "with_creator" | "in_transit" | "with_buyer" | "in_gallery" | "unknown" | null;
+  physical_status?:
+    | "with_creator"
+    | "in_transit"
+    | "with_buyer"
+    | "in_gallery"
+    | "unknown"
+    | null;
   collection_id?: string | null;
 };
 
@@ -202,7 +392,7 @@ function Pill({
   tone = "neutral",
   className = "",
 }: {
-  children: React.ReactNode;
+  children: ReactNode;
   tone?: "neutral" | "success" | "warning";
   className?: string;
 }) {
@@ -213,13 +403,15 @@ function Pill({
       ? "bg-amber-300 text-black"
       : "bg-white/10 text-white";
   return (
-    <span className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${toneCls} ${className}`}>
+    <span
+      className={`px-2 py-0.5 rounded-full text-[11px] font-medium ${toneCls} ${className}`}
+    >
       {children}
     </span>
   );
 }
 
-function StatBox({ label, value }: { label: string; value: React.ReactNode }) {
+function StatBox({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="text-[10px] uppercase tracking-wide text-white/60">{label}</div>
@@ -234,15 +426,15 @@ function Card({
   children,
   className = "",
 }: {
-  title?: React.ReactNode;
-  right?: React.ReactNode;
-  children?: React.ReactNode;
+  title?: ReactNode;
+  right?: ReactNode;
+  children?: ReactNode;
   className?: string;
 }) {
   return (
     <div className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}>
       {(title || right) && (
-        <div className="mb-3 flex items-center justify-between">
+        <div className="mb-3 flex items-center justify-between gap-3">
           {title ? <h3 className="text-sm font-semibold">{title}</h3> : <div />}
           {right}
         </div>
@@ -329,7 +521,9 @@ async function hmacSha256Hex(secret: string, message: string) {
     ["sign"]
   );
   const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
-  return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, "0")).join("");
+  return Array.from(new Uint8Array(sig))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function DevQRModal({
@@ -350,7 +544,9 @@ function DevQRModal({
   async function build() {
     try {
       const c = await hmacSha256Hex(secret, `${tagId}|${ctr}`);
-      const u = `${baseUrl}?a=${encodeURIComponent(tagId)}&c=${encodeURIComponent(c)}&ctr=${encodeURIComponent(ctr)}`;
+      const u = `${baseUrl}?a=${encodeURIComponent(tagId)}&c=${encodeURIComponent(
+        c
+      )}&ctr=${encodeURIComponent(ctr)}`;
       setLink(u);
       const dataUrl = await QRCode.toDataURL(u, { errorCorrectionLevel: "M", scale: 6 });
       setQrDataUrl(dataUrl);
@@ -363,6 +559,7 @@ function DevQRModal({
 
   useEffect(() => {
     if (open) build();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   if (!open) return null;
@@ -373,25 +570,31 @@ function DevQRModal({
       <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-4 w-full max-w-lg">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Dev: Generate QR</h3>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>Close</button>
+          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+            Close
+          </button>
         </div>
 
         <div className="grid gap-2">
           <label className="text-xs text-white/60">Tag ID (a)</label>
-          <input className="input" value={tagId} onChange={e => setTagId(e.target.value)} />
+          <input className="input" value={tagId} onChange={(e) => setTagId(e.target.value)} />
 
           <label className="text-xs text-white/60 mt-2">Counter (ctr)</label>
-          <input className="input" value={ctr} onChange={e => setCtr(e.target.value)} />
+          <input className="input" value={ctr} onChange={(e) => setCtr(e.target.value)} />
 
           <label className="text-xs text-white/60 mt-2">Dev Secret (HMAC, testing only)</label>
-          <input className="input" value={secret} onChange={e => setSecret(e.target.value)} />
+          <input className="input" value={secret} onChange={(e) => setSecret(e.target.value)} />
 
-          <button className="btn mt-3" onClick={build}>Build QR</button>
+          <button className="btn mt-3" onClick={build}>
+            Build QR
+          </button>
 
           {qrDataUrl ? (
             <div className="mt-3 flex flex-col items-center gap-2">
               <img src={qrDataUrl} alt="QR" className="bg-white p-2 rounded-md" />
-              <a className="underline text-sm" href={qrDataUrl} download="verify-qr.png">Download PNG</a>
+              <a className="underline text-sm" href={qrDataUrl} download="verify-qr.png">
+                Download PNG
+              </a>
               <div className="text-xs break-all text-white/70">{link}</div>
             </div>
           ) : (
@@ -407,6 +610,8 @@ function DevQRModal({
 
 export default function ArtworkDetail() {
   const { id } = useParams();
+  const nav = useNavigate();
+
   const [viewerId, setViewerId] = useState<string | null>(null);
 
   const [art, setArt] = useState<Artwork | null>(null);
@@ -477,6 +682,9 @@ export default function ArtworkDetail() {
 
   /* Share QR (for all artworks) */
   const [showShareQR, setShowShareQR] = useState(false);
+
+  /* Share to DM */
+  const [showShareDM, setShowShareDM] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -626,8 +834,7 @@ export default function ArtworkDetail() {
       .select("owner_id, quantity, updated_at")
       .eq("artwork_id", artworkId);
 
-    const rows =
-      (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
+    const rows = (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
     const ids = Array.from(new Set(rows.map((r) => r.owner_id))).filter(Boolean);
     if (ids.length === 0) {
       setOwners([]);
@@ -898,10 +1105,13 @@ export default function ArtworkDetail() {
     }
   }
 
-  const isAuction =
-    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
-  const creatorHandle = creator?.username ? `/u/${creator.username}` : creator ? `/u/${creator.id}` : "#";
+  const creatorHandle = creator?.username
+    ? `/u/${creator.username}`
+    : creator
+    ? `/u/${creator.id}`
+    : "#";
   const ownerHandle = owner?.username ? `/u/${owner.username}` : owner ? `/u/${owner.id}` : null;
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
@@ -946,9 +1156,7 @@ export default function ArtworkDetail() {
       const ctr = sp.get("ctr");
 
       if (!a || !c || !ctr) {
-        setMsg(
-          "No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=1 to the URL or scan a tag."
-        );
+        setMsg("No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=1 to the URL or scan a tag.");
         return;
       }
 
@@ -983,9 +1191,7 @@ export default function ArtworkDetail() {
       const recs: any[] = ev.message?.records || [];
       const td = new TextDecoder();
       for (const r of recs) {
-        if (r.recordType === "url" && r.data) {
-          return (r as any).data || null;
-        }
+        if (r.recordType === "url" && r.data) return (r as any).data || null;
         if (r.recordType === "text" && r.data) {
           const s = td.decode(r.data);
           if (/^https?:\/\//i.test(s)) return s;
@@ -1132,21 +1338,23 @@ export default function ArtworkDetail() {
         </div>
 
         {/* Right */}
-        <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
+        <div className="lg:col-span-5 space-y-4 sticky top-6 self-start max-h-[calc(100vh-1.5rem)] overflow-auto pr-1">
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
           {/* Header */}
-          <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start justify-between gap-4">
             <div className="min-w-0">
               <h1 className="text-3xl font-semibold leading-tight truncate">
                 {art.title || "Untitled"}
               </h1>
+
               <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                 {creator?.avatar_url ? (
                   <img src={creator.avatar_url} className="h-5 w-5 rounded-full object-cover" />
                 ) : (
                   <div className="h-5 w-5 rounded-full bg-white/10" />
                 )}
+
                 <span className="text-white/80">
                   {creator ? (
                     <Link
@@ -1159,7 +1367,9 @@ export default function ArtworkDetail() {
                     "—"
                   )}
                 </span>
+
                 <span className="text-white/40">•</span>
+
                 <span className="text-white/80">
                   Owned by{" "}
                   {owner ? (
@@ -1183,7 +1393,8 @@ export default function ArtworkDetail() {
               </div>
             </div>
 
-            <div className="flex items-center gap-1 shrink-0">
+            {/* Actions (alignment improved: consistent button sizing + wrap) */}
+            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
               {isOwner && (
                 <>
                   <button
@@ -1193,6 +1404,7 @@ export default function ArtworkDetail() {
                   >
                     ✏️ Edit
                   </button>
+
                   <button
                     className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
                     onClick={() => toggleHidden(!myHidden)}
@@ -1204,7 +1416,17 @@ export default function ArtworkDetail() {
                 </>
               )}
 
-              {/* NEW: AR preview button (safe, additive) */}
+              {/* NEW: Send to DM */}
+              {viewerId ? (
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="Send to DM"
+                  onClick={() => setShowShareDM(true)}
+                >
+                  ✉️ Send
+                </button>
+              ) : null}
+
               <Link
                 to={`/art/${id}/ar`}
                 className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
@@ -1213,9 +1435,8 @@ export default function ArtworkDetail() {
                 🧱 AR Wall-Fit
               </Link>
 
-              {/* NEW: universal Share QR button */}
               <button
-                className="rounded-lg p-2 hover:bg-white/10"
+                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
                 title="Share QR"
                 onClick={() => setShowShareQR(true)}
               >
@@ -1223,18 +1444,26 @@ export default function ArtworkDetail() {
               </button>
 
               <button
-                className="rounded-lg p-2 hover:bg-white/10"
+                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
                 title="Copy link"
-                onClick={() => {
-                  navigator.clipboard?.writeText(window.location.href);
-                }}
+                onClick={() => navigator.clipboard?.writeText(window.location.href)}
               >
                 ⧉
               </button>
-              <button className="rounded-lg p-2 hover:bg-white/10" title="Favorite">
+
+              <button
+                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                title="Favorite"
+              >
                 <HeartIcon />
               </button>
-              <button className="rounded-lg p-2 hover:bg-white/10" title="More">⋯</button>
+
+              <button
+                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                title="More"
+              >
+                ⋯
+              </button>
             </div>
           </div>
 
@@ -1278,7 +1507,8 @@ export default function ArtworkDetail() {
                       </div>
                       {(activeListing as any).reserve_price && (
                         <div className="text-[11px] text-white/60 mt-1">
-                          Reserve: {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)}
+                          Reserve:{" "}
+                          {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)}
                           {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
                         </div>
                       )}
@@ -1358,11 +1588,12 @@ export default function ArtworkDetail() {
                 )}
 
                 {isAuction && (
-                  <div className="text[12px] text-white/60 mt-2">
+                  <div className="text-[12px] text-white/60 mt-2">
                     Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
                     {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
                   </div>
                 )}
+
                 {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
               </>
             ) : (
@@ -1470,7 +1701,6 @@ export default function ArtworkDetail() {
                       canEdit={!!viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)}
                     />
 
-                    {/* Physical verification card */}
                     <Card
                       title={
                         <div className="flex items-center gap-2">
@@ -1480,7 +1710,8 @@ export default function ArtworkDetail() {
                       }
                     >
                       <div className="text-sm text-white/80">
-                        Tap the NFC tag (Chrome on Android) or scan the QR printed on the certificate/frame to verify authenticity and view provenance.
+                        Tap the NFC tag (Chrome on Android) or scan the QR printed on the certificate/frame to verify
+                        authenticity and view provenance.
                       </div>
                       <div className="mt-3 flex gap-2 flex-wrap">
                         <button
@@ -1494,7 +1725,6 @@ export default function ArtworkDetail() {
                         <button className="btn" onClick={verifyFromQR} disabled={verifyBusy}>
                           {verifyBusy ? "Verifying…" : "Verify from QR/Link"}
                         </button>
-                        {/* Dev QR helper */}
                         <button
                           className="btn bg-white/0 border border-white/20 hover:bg-white/10"
                           onClick={() => setShowDevQR(true)}
@@ -1521,8 +1751,12 @@ export default function ArtworkDetail() {
                   }
                   right={
                     <div className="flex gap-1">
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">▦</button>
-                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">☰</button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="Grid">
+                        ▦
+                      </button>
+                      <button className="px-2 py-1 rounded-lg hover:bg-white/10" title="List">
+                        ☰
+                      </button>
                     </div>
                   }
                 >
@@ -1566,7 +1800,6 @@ export default function ArtworkDetail() {
                       </>
                     )}
 
-                    {/* Collection quick row */}
                     <div className="h-px bg-white/10" />
                     <div>
                       <div className="font-medium">Collection</div>
@@ -1584,7 +1817,6 @@ export default function ArtworkDetail() {
                       </div>
                     </div>
 
-                    {/* More from this collection */}
                     <div className="h-px bg-white/10" />
                     <div>
                       <div className="font-medium">More from this collection</div>
@@ -1680,7 +1912,8 @@ export default function ArtworkDetail() {
                     {sales.map((s) => (
                       <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
                         <div className="text-sm">
-                          Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on {new Date(s.sold_at).toLocaleString()}
+                          Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on{" "}
+                          {new Date(s.sold_at).toLocaleString()}
                         </div>
                         <div className="text-xs text-white/70">
                           From{" "}
@@ -1691,7 +1924,9 @@ export default function ArtworkDetail() {
                             >
                               {s.seller.display_name || s.seller.username || "Seller"}
                             </Link>
-                          ) : "—"}{" "}
+                          ) : (
+                            "—"
+                          )}{" "}
                           to{" "}
                           {s.buyer ? (
                             <Link
@@ -1700,8 +1935,15 @@ export default function ArtworkDetail() {
                             >
                               {s.buyer.display_name || s.buyer.username || "Buyer"}
                             </Link>
-                          ) : "—"}
-                          {s.tx_hash ? <> • tx: <code className="break-all">{s.tx_hash}</code></> : null}
+                          ) : (
+                            "—"
+                          )}
+                          {s.tx_hash ? (
+                            <>
+                              {" "}
+                              • tx: <code className="break-all">{s.tx_hash}</code>
+                            </>
+                          ) : null}
                         </div>
                       </li>
                     ))}
@@ -1712,8 +1954,14 @@ export default function ArtworkDetail() {
           </div>
 
           <div className="flex gap-2 mt-4">
-            <Link to="/" className="btn">Back</Link>
-            {creator && <Link to={creatorHandle} className="btn">View creator</Link>}
+            <Link to="/" className="btn">
+              Back
+            </Link>
+            {creator && (
+              <Link to={creatorHandle} className="btn">
+                View creator
+              </Link>
+            )}
           </div>
         </div>
       </div>
@@ -1725,11 +1973,17 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
-      {/* Share QR – available for ALL artworks */}
       <ShareQRModal
         open={showShareQR}
         onClose={() => setShowShareQR(false)}
         url={`${location.origin}/art/${id}`}
+      />
+
+      <ShareToDMModal
+        open={showShareDM}
+        onClose={() => setShowShareDM(false)}
+        artwork={{ id: art.id, title: art.title, image_url: art.image_url }}
+        onSent={(threadId) => nav(`/messages?t=${encodeURIComponent(threadId)}`)}
       />
 
       {art && (
@@ -1746,13 +2000,10 @@ export default function ArtworkDetail() {
           open={sellerOpen}
           onClose={() => setSellerOpen(false)}
           artworkId={art.id}
-          onListingUpdated={async () =>
-            setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)
-          }
+          onListingUpdated={async () => setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)}
         />
       )}
 
-      {/* Dev QR modal (testing NFC/verify) */}
       <DevQRModal
         open={showDevQR}
         onClose={() => setShowDevQR(false)}
@@ -1823,9 +2074,7 @@ function OwnerListPanel({
         </button>
       </div>
       {msg && <div className="text-xs text-neutral-200 mt-2">{msg}</div>}
-      <div className="text-[11px] text-white/60 mt-1">
-        (Creates/updates a fixed-price listing visible on Explore.)
-      </div>
+      <div className="text-[11px] text-white/60 mt-1">(Creates/updates a fixed-price listing visible on Explore.)</div>
     </Card>
   );
 }

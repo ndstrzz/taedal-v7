@@ -54,6 +54,9 @@ import FollowListPage from "./routes/profiles/FollowListPage";
 /* Streak HUD */
 import StreakHUD from "./components/streaks/StreakHUD";
 
+/* Messages */
+import MessagesPage from "./features/messages/MessagesPage";
+
 import "@google/model-viewer";
 
 /* Assistant */
@@ -141,7 +144,6 @@ function AppLayout() {
       <div className="pl-14">
         <Outlet />
       </div>
-      {/* Streaks HUD floats in the corner across pages */}
       <StreakHUD />
     </>
   );
@@ -166,11 +168,17 @@ const router = createBrowserRouter([
         children: [{ index: true, element: <Explore /> }],
       },
 
-      // Discover route
       {
         path: "/discover",
         element: <AppLayout />,
         children: [{ index: true, element: <DiscoverPage /> }],
+      },
+
+      /* ✅ Messages (NO RequireAuth here; page handles sign-in state) */
+      {
+        path: "/messages",
+        element: <AppLayout />,
+        children: [{ index: true, element: <MessagesPage /> }],
       },
 
       // Social routes
@@ -178,8 +186,8 @@ const router = createBrowserRouter([
         path: "/social",
         element: <AppLayout />,
         children: [
-          { index: true, element: <SocialFeed /> }, // /social
-          { path: "feed", element: <SocialFeed /> }, // /social/feed
+          { index: true, element: <SocialFeed /> },
+          { path: "feed", element: <SocialFeed /> },
           {
             path: "post",
             element: (
@@ -187,7 +195,7 @@ const router = createBrowserRouter([
                 <SocialPost />
               </RequireAuth>
             ),
-          }, // /social/post
+          },
         ],
       },
 
@@ -311,8 +319,8 @@ const router = createBrowserRouter([
         element: <AppLayout />,
         children: [
           { index: true, element: <PublicProfile /> },
-          { path: "followers", element: <FollowListPage /> }, // followers
-          { path: "following", element: <FollowListPage /> }, // following
+          { path: "followers", element: <FollowListPage /> },
+          { path: "following", element: <FollowListPage /> },
         ],
       },
       {
@@ -326,7 +334,7 @@ const router = createBrowserRouter([
         children: [{ index: true, element: <ARPreview /> }],
       },
 
-      // NEW: wallet create + success routes (auth-protected)
+      // Wallet
       {
         path: "/wallet/create",
         element: <AppLayout />,
@@ -355,8 +363,6 @@ const router = createBrowserRouter([
           },
         ],
       },
-
-      // NEW: wallet artist-pass dev route (unchanged)
       {
         path: "/wallet/artist-pass/dev",
         element: <AppLayout />,

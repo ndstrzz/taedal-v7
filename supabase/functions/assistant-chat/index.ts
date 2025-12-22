@@ -1,7 +1,5 @@
-// supabase/functions/assistant-chat/index.ts
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
-/** CORS */
 function corsHeaders(origin: string | null) {
   return {
     "Access-Control-Allow-Origin": origin ?? "*",
@@ -11,9 +9,20 @@ function corsHeaders(origin: string | null) {
   };
 }
 
-type ChatResponse = {
-  reply: string;
-  suggestions: string[];
+type Msg = {
+  role: "system" | "user" | "assistant";
+  content?: string;
+  text?: string;
+};
+
+type Body = {
+  // your current frontend payload
+  message?: string;
+  image_b64?: string;
+  image_mime?: string;
+
+  // support older/alternate payloads too
+  messages?: Msg[];
 };
 
 function safeJsonParse<T>(s: string): T {
@@ -27,8 +36,21 @@ function safeJsonParse<T>(s: string): T {
   }
 }
 
+function messagesToText(messages: Msg[]) {
+  return messages
+    .map((m) => {
+      const t = (m.content ?? m.text ?? "").trim();
+      if (!t) return "";
+      const who = m.role === "assistant" ? "Assistant" : m.role === "system" ? "System" : "User";
+      return `${who}: ${t}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 Deno.serve(async (req) => {
   const origin = req.headers.get("origin");
+
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders(origin) });
   }
@@ -45,47 +67,57 @@ Deno.serve(async (req) => {
     const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") || "gemini-2.5-flash";
 
     if (!GEMINI_API_KEY) {
-      throw new Error(
-        "Missing GEMINI_API_KEY secret in Supabase Edge Functions → Secrets."
-      );
+      throw new Error("Missing GEMINI_API_KEY secret in Supabase Edge Functions → Secrets.");
     }
 
-    const body = await req.json().catch(() => ({}));
-    const message = (body?.message as string | undefined)?.trim();
-    const imageBase64 = body?.image_base64 as string | undefined; // raw base64 (no data:)
-    const mimeType = (body?.mime_type as string | undefined) || "image/jpeg";
+    const body = (await req.json().catch(() => ({}))) as Body;
 
-    if (!message) throw new Error("Missing message in request body.");
+    // Accept either `messages[]` or `message`
+    const hasMessages = Array.isArray(body.messages) && body.messages.length > 0;
+    const textFromMessages = hasMessages ? messagesToText(body.messages!) : "";
+    const userText = (body.message || "").trim();
 
+    const finalText = (textFromMessages || userText).trim();
+    if (!finalText) {
+      throw new Error("Missing message in request. Provide `message` or `messages[]`.");
+    }
+
+    const image_b64 = typeof body.image_b64 === "string" && body.image_b64.length > 0 ? body.image_b64 : undefined;
+    const image_mime =
+      (typeof body.image_mime === "string" && body.image_mime) || "image/jpeg";
+
+    // Schema to force clean output
     const responseSchema = {
       type: "OBJECT",
       properties: {
         reply: { type: "STRING" },
-        suggestions: { type: "ARRAY", items: { type: "STRING" } },
       },
-      required: ["reply", "suggestions"],
+      required: ["reply"],
     };
 
-    const systemPrompt = `
-You are "쿠로" — the Taedal Assistant inside an art provenance platform.
+    const system = `
+You are 쿠로 (Kuro), the Taedal assistant inside an art provenance platform.
 
-You help users:
-- analyze an uploaded image (style, composition, issues)
-- suggest improvements (concrete, actionable)
-- give a *speculative* value/range if asked (NOT financial advice)
+You help with:
+- image critique / style analysis
+- composition, lighting, color, values, edge control
+- improvement tips (actionable, numbered)
+- rough pricing advice ONLY if the user asks (include disclaimer)
 
-Rules:
-- Output MUST be valid JSON matching the provided schema.
-- Keep tone friendly, concise, helpful.
-- If user asks “how much is this worth”, give a conservative range + explain assumptions briefly.
-- End with 2-4 short next-step suggestions.
+Output rules:
+- Reply in concise Markdown.
+- If an image is provided: describe what you see briefly, then give critique + improvements.
+- If no image is provided: answer based on the user's text only.
+- Keep it practical and specific.
 `.trim();
+
+    const prompt = `${system}\n\nUser request:\n${finalText}`;
 
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
-    const parts: any[] = [{ text: `${systemPrompt}\n\nUser: ${message}` }];
-    if (imageBase64) {
-      parts.push({ inlineData: { mimeType, data: imageBase64 } });
+    const parts: any[] = [{ text: prompt }];
+    if (image_b64) {
+      parts.push({ inlineData: { mimeType: image_mime, data: image_b64 } });
     }
 
     const gemRes = await fetch(url, {
@@ -99,7 +131,8 @@ Rules:
         generationConfig: {
           responseMimeType: "application/json",
           responseSchema,
-          temperature: 0.4,
+          temperature: 0.35,
+          maxOutputTokens: 900,
         },
       }),
     });
@@ -111,13 +144,13 @@ Rules:
     }
 
     const text = gemJson?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text || typeof text !== "string") {
-      throw new Error("Model did not return text content.");
-    }
+    if (!text || typeof text !== "string") throw new Error("Model did not return text content.");
 
-    const parsed = safeJsonParse<ChatResponse>(text);
+    const parsed = safeJsonParse<{ reply: string }>(text);
+    const reply = (parsed.reply || "").trim();
+    if (!reply) throw new Error("Empty reply from model.");
 
-    return new Response(JSON.stringify({ ok: true, result: parsed }), {
+    return new Response(JSON.stringify({ ok: true, reply }), {
       status: 200,
       headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
     });

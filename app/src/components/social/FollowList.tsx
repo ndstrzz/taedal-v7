@@ -1,6 +1,5 @@
-// app/src/components/social/FollowList.tsx
 import { Link } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toggleFollow } from "../../lib/follow";
 import type { FollowListRow } from "../../hooks/useFollowList";
 
@@ -16,10 +15,13 @@ type Props = {
 export default function FollowList({ title, open, onClose, rows, loading, error }: Props) {
   const [filter, setFilter] = useState<"all" | "mutuals">("all");
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [local, setLocal] = useState<FollowListRow[]>(rows);
+
+  useEffect(() => setLocal(rows), [rows]);
 
   const filtered = useMemo(
-    () => (filter === "all" ? rows : rows.filter((r) => r.mutual === true)),
-    [rows, filter]
+    () => (filter === "all" ? local : local.filter((r) => r.mutual === true)),
+    [local, filter]
   );
 
   if (!open) return null;
@@ -33,7 +35,6 @@ export default function FollowList({ title, open, onClose, rows, loading, error 
           <button className="h-8 w-8 grid place-items-center rounded hover:bg-white/10" onClick={onClose}>×</button>
         </div>
 
-        {/* Filter chips */}
         <div className="px-4 py-2 border-b border-neutral-800 flex items-center gap-2">
           <Chip active={filter === "all"} onClick={() => setFilter("all")}>All</Chip>
           <Chip active={filter === "mutuals"} onClick={() => setFilter("mutuals")}>Mutuals</Chip>
@@ -64,16 +65,21 @@ export default function FollowList({ title, open, onClose, rows, loading, error 
                     {r.mutual && <span className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] bg-white/10">Mutual</span>}
                   </div>
                 </div>
-                {/* Follow / Unfollow inline */}
+
                 <button
                   disabled={busyId === r.id}
                   onClick={async () => {
                     setBusyId(r.id);
                     try {
                       const next = await toggleFollow(r.id);
-                      // Local flip for UX (don’t refetch the whole list)
-                      r.i_follow = next;
-                      r.mutual = next && r.follows_me ? true : (!next && r.follows_me ? false : r.mutual);
+                      setLocal((prev) =>
+                        prev.map((x) => {
+                          if (x.id !== r.id) return x;
+                          const i_follow = next;
+                          const mutual = i_follow && x.follows_me;
+                          return { ...x, i_follow, mutual };
+                        })
+                      );
                     } finally {
                       setBusyId(null);
                     }
