@@ -41,14 +41,14 @@ export type TerminationTerms = {
 
 export type DisputesTerms = {
   mode: "courts" | "arbitration";
-  law: string;      // e.g., "Singapore"
-  venue?: string;   // court venue
+  law: string; // e.g., "Singapore"
+  venue?: string; // court venue
   arb_rules?: string; // e.g., "SIAC", "AAA", "ICC"
-  seat?: string;      // arbitration seat
+  seat?: string; // arbitration seat
 };
 
 export type OnchainBlock = {
-  chain?: string;               // "Ethereum" | "Sepolia" | ...
+  chain?: string; // "Ethereum" | "Sepolia" | ...
   contract_address?: string;
   token_id?: string;
   pay_gas_party?: "owner" | "licensee";
@@ -169,7 +169,7 @@ export const LICENSE_TEMPLATES = [
         "Hate, violence or illegal content",
         "Political advertising",
         "AI training or model ingestion",
-        "Watermark removal"
+        "Watermark removal",
       ],
       deliverables: "Use on social/web creatives.",
       usage_notes: "Link back to creator.",
@@ -177,8 +177,8 @@ export const LICENSE_TEMPLATES = [
       payment_terms: { due_days: 14, method: "bank" },
       tax: { responsible_party: "licensee" },
       sublicense: false,
-      derivative_edits: ["resize", "crop"]
-    } as LicenseTerms
+      derivative_edits: ["resize", "crop"],
+    } as LicenseTerms,
   },
   {
     id: "paid-ads",
@@ -192,30 +192,75 @@ export const LICENSE_TEMPLATES = [
       fee: { amount: 2500, currency: "USD" },
       payment_terms: { due_days: 30, method: "bank" },
       tax: { responsible_party: "licensee" },
-      preapproval_required: true
-    } as LicenseTerms
-  }
+      preapproval_required: true,
+    } as LicenseTerms,
+  },
 ];
 
 /* ----------------------------- Utilities ---------------------------- */
 
+function isPlainObject(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
+}
+
+/**
+ * Deep merge, but only for plain objects.
+ * - Arrays are replaced (not merged)
+ * - Primitives replace
+ * - Nested objects merge (prevents wiping subfields)
+ */
 export function mergeTerms<T extends object>(base: T, patch?: Partial<T> | null): T {
   if (!patch) return base;
-  const out: any = { ...base };
-  for (const k of Object.keys(patch)) out[k] = (patch as any)[k];
-  return out as T;
+
+  const mergeRec = (a: any, b: any) => {
+    if (!isPlainObject(a) || !isPlainObject(b)) return b;
+    const out: any = { ...a };
+    for (const k of Object.keys(b)) {
+      const bv = b[k];
+      const av = a[k];
+      if (isPlainObject(av) && isPlainObject(bv)) out[k] = mergeRec(av, bv);
+      else out[k] = bv;
+    }
+    return out;
+  };
+
+  return mergeRec(base, patch) as T;
 }
 
 export type TermDiff = { key: keyof LicenseTerms; before: any; after: any };
 export function diffTerms(a: LicenseTerms, b: LicenseTerms): TermDiff[] {
   const keys: (keyof LicenseTerms)[] = [
-    "purpose","term_months","territory","media","exclusivity","start_date",
-    "deliverables","credit_required","usage_notes","fee","sublicense","derivative_edits",
-    "effective_date","credit_line","payment_terms","tax","invoicing",
-    "brand_guidelines_url","preapproval_required","approval_sla_days",
-    "prohibited_uses","usage_restrictions","delivery_specs",
-    "confidentiality_term_months","liability_cap","termination","disputes","injunctive_relief",
-    "onchain","royalties","metadata"
+    "purpose",
+    "term_months",
+    "territory",
+    "media",
+    "exclusivity",
+    "start_date",
+    "deliverables",
+    "credit_required",
+    "usage_notes",
+    "fee",
+    "sublicense",
+    "derivative_edits",
+    "effective_date",
+    "credit_line",
+    "payment_terms",
+    "tax",
+    "invoicing",
+    "brand_guidelines_url",
+    "preapproval_required",
+    "approval_sla_days",
+    "prohibited_uses",
+    "usage_restrictions",
+    "delivery_specs",
+    "confidentiality_term_months",
+    "liability_cap",
+    "termination",
+    "disputes",
+    "injunctive_relief",
+    "onchain",
+    "royalties",
+    "metadata",
   ];
   const diffs: TermDiff[] = [];
   for (const k of keys) {
@@ -295,15 +340,21 @@ export async function getRequestWithThread(requestId: string) {
   return { request: req!, messages: (msgs ?? []) as LicenseThreadMsg[] };
 }
 
-export async function postLicenseMessage(requestId: string, body: string, patch?: Partial<LicenseTerms> | null) {
+export async function postLicenseMessage(
+  requestId: string,
+  body: string,
+  patch?: Partial<LicenseTerms> | null
+) {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
+
   const { data, error } = await supabase
     .from("license_threads")
     .insert({ request_id: requestId, author_id: uid, body, patch: patch ?? null })
     .select("*")
     .single<LicenseThreadMsg>();
+
   if (error) throw error;
   return data!;
 }
@@ -315,14 +366,17 @@ export async function acceptPatch(requestId: string, patch: Partial<LicenseTerms
     .eq("id", requestId)
     .single<{ requested: LicenseTerms; status: LicenseRequest["status"] }>();
   if (e1) throw e1;
+
   const next = mergeTerms(cur!.requested, patch);
   const nextStatus = cur!.status === "open" ? "negotiating" : cur!.status;
+
   const { data, error } = await supabase
     .from("license_requests")
     .update({ requested: next as any, status: nextStatus })
     .eq("id", requestId)
     .select("*")
     .single<LicenseRequest>();
+
   if (error) throw error;
   return data!;
 }
@@ -341,16 +395,26 @@ export async function acceptOffer(requestId: string) {
     .eq("id", requestId)
     .select("*")
     .single<LicenseRequest>();
+
   if (error) throw error;
   return data!;
 }
 
 export async function updateLicenseRequest(
   requestId: string,
-  patch: Partial<Pick<LicenseRequest,
-    "status" | "accepted_terms" | "requested" |
-    "executed_pdf_url" | "executed_pdf_sha256" |
-    "signed_at" | "signer_name" | "signer_title">>
+  patch: Partial<
+    Pick<
+      LicenseRequest,
+      | "status"
+      | "accepted_terms"
+      | "requested"
+      | "executed_pdf_url"
+      | "executed_pdf_sha256"
+      | "signed_at"
+      | "signer_name"
+      | "signer_title"
+    >
+  >
 ) {
   const { data, error } = await supabase
     .from("license_requests")
@@ -374,7 +438,12 @@ export async function listApprovals(requestId: string): Promise<LicenseApproval[
   return (data ?? []) as LicenseApproval[];
 }
 
-export async function upsertApproval(requestId: string, stage: LicenseApproval["stage"], decision: LicenseApproval["decision"], note?: string) {
+export async function upsertApproval(
+  requestId: string,
+  stage: LicenseApproval["stage"],
+  decision: LicenseApproval["decision"],
+  note?: string
+) {
   const { data: session } = await supabase.auth.getSession();
   const uid = session.session?.user?.id;
   if (!uid) throw new Error("Not signed in");
@@ -428,8 +497,13 @@ export async function generateContractPdf(requestId: string) {
 
 /* ----------------------------- Attachments ----------------------------- */
 
-export async function uploadExecutedPdf(requestId: string, file: File, signer: { name: string; title?: string }) {
+export async function uploadExecutedPdf(
+  requestId: string,
+  file: File,
+  signer: { name: string; title?: string }
+) {
   if (file.type !== "application/pdf") throw new Error("Please upload a PDF.");
+
   const hash = await sha256(file);
   const path = `requests/${requestId}/executed-${Date.now()}.pdf`;
 
@@ -439,7 +513,11 @@ export async function uploadExecutedPdf(requestId: string, file: File, signer: {
   });
   if (e1) throw e1;
 
-  const { data: pub } = await supabase.storage.from("contracts").createSignedUrl(path, 60 * 60 * 24 * 7);
+  // Signed URL (30 days) - avoids expiring too fast
+  const { data: pub, error: e2 } = await supabase.storage
+    .from("contracts")
+    .createSignedUrl(path, 60 * 60 * 24 * 30);
+  if (e2) throw e2;
 
   const updated = await updateLicenseRequest(requestId, {
     executed_pdf_url: pub?.signedUrl ?? null,
@@ -458,10 +536,16 @@ export async function uploadAttachment(requestId: string, file: File, kind?: str
     upsert: true,
   });
   if (e1) throw e1;
-  const { data } = await supabase.from("license_attachments").insert({
-    request_id: requestId,
-    path: key,
-    kind: kind ?? null,
-  }).select("*");
+
+  const { data, error: e2 } = await supabase
+    .from("license_attachments")
+    .insert({
+      request_id: requestId,
+      path: key,
+      kind: kind ?? null,
+    })
+    .select("*");
+  if (e2) throw e2;
+
   return data;
 }

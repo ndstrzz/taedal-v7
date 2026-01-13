@@ -346,7 +346,12 @@ type Artwork = {
   collection_id?: string | null;
 };
 
-type ArtworkFile = { id: string; url: string; kind: string | null; position: number | null };
+type ArtworkFile = {
+  id: string;
+  url: string;
+  kind: string | null;
+  position: number | null;
+};
 
 type Profile = {
   id: string;
@@ -414,7 +419,9 @@ function Pill({
 function StatBox({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-white/60">{label}</div>
+      <div className="text-[10px] uppercase tracking-wide text-white/60">
+        {label}
+      </div>
       <div className="text-sm font-medium">{value}</div>
     </div>
   );
@@ -432,7 +439,9 @@ function Card({
   className?: string;
 }) {
   return (
-    <div className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}>
+    <div
+      className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}
+    >
       {(title || right) && (
         <div className="mb-3 flex items-center justify-between gap-3">
           {title ? <h3 className="text-sm font-semibold">{title}</h3> : <div />}
@@ -446,7 +455,13 @@ function Card({
 
 /* ------------------------------ Countdown ------------------------------ */
 
-function Countdown({ endAt, onElapsed }: { endAt: string; onElapsed?: () => void }) {
+function Countdown({
+  endAt,
+  onElapsed,
+}: {
+  endAt: string;
+  onElapsed?: () => void;
+}) {
   const [now, setNow] = useState(() => Date.now());
   const end = useMemo(() => new Date(endAt).getTime(), [endAt]);
 
@@ -468,7 +483,9 @@ function Countdown({ endAt, onElapsed }: { endAt: string; onElapsed?: () => void
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
-      <div className="text-sm font-semibold tabular-nums">{v.toString().padStart(2, "0")}</div>
+      <div className="text-sm font-semibold tabular-nums">
+        {v.toString().padStart(2, "0")}
+      </div>
       <div className="text-[10px] text-white/70">{label}</div>
     </div>
   );
@@ -503,7 +520,10 @@ function fmtCurrency(n: number | null | undefined, code?: string | null) {
   const c = (code ?? "USD").toUpperCase();
   if (c === "ETH") return `${Number(n).toString()} ETH`;
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency: c }).format(Number(n));
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: c,
+    }).format(Number(n));
   } catch {
     return `${Number(n)} ${c}`;
   }
@@ -544,11 +564,14 @@ function DevQRModal({
   async function build() {
     try {
       const c = await hmacSha256Hex(secret, `${tagId}|${ctr}`);
-      const u = `${baseUrl}?a=${encodeURIComponent(tagId)}&c=${encodeURIComponent(
-        c
-      )}&ctr=${encodeURIComponent(ctr)}`;
+      const u = `${baseUrl}?a=${encodeURIComponent(
+        tagId
+      )}&c=${encodeURIComponent(c)}&ctr=${encodeURIComponent(ctr)}`;
       setLink(u);
-      const dataUrl = await QRCode.toDataURL(u, { errorCorrectionLevel: "M", scale: 6 });
+      const dataUrl = await QRCode.toDataURL(u, {
+        errorCorrectionLevel: "M",
+        scale: 6,
+      });
       setQrDataUrl(dataUrl);
     } catch (e) {
       console.error(e);
@@ -566,24 +589,44 @@ function DevQRModal({
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        onClick={onClose}
+      />
       <div className="relative bg-neutral-950 border border-white/10 rounded-2xl p-4 w-full max-w-lg">
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-lg font-semibold">Dev: Generate QR</h3>
-          <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
+          <button
+            className="text-sm text-white/70 hover:text-white"
+            onClick={onClose}
+          >
             Close
           </button>
         </div>
 
         <div className="grid gap-2">
           <label className="text-xs text-white/60">Tag ID (a)</label>
-          <input className="input" value={tagId} onChange={(e) => setTagId(e.target.value)} />
+          <input
+            className="input"
+            value={tagId}
+            onChange={(e) => setTagId(e.target.value)}
+          />
 
           <label className="text-xs text-white/60 mt-2">Counter (ctr)</label>
-          <input className="input" value={ctr} onChange={(e) => setCtr(e.target.value)} />
+          <input
+            className="input"
+            value={ctr}
+            onChange={(e) => setCtr(e.target.value)}
+          />
 
-          <label className="text-xs text-white/60 mt-2">Dev Secret (HMAC, testing only)</label>
-          <input className="input" value={secret} onChange={(e) => setSecret(e.target.value)} />
+          <label className="text-xs text-white/60 mt-2">
+            Dev Secret (HMAC, testing only)
+          </label>
+          <input
+            className="input"
+            value={secret}
+            onChange={(e) => setSecret(e.target.value)}
+          />
 
           <button className="btn mt-3" onClick={build}>
             Build QR
@@ -592,7 +635,11 @@ function DevQRModal({
           {qrDataUrl ? (
             <div className="mt-3 flex flex-col items-center gap-2">
               <img src={qrDataUrl} alt="QR" className="bg-white p-2 rounded-md" />
-              <a className="underline text-sm" href={qrDataUrl} download="verify-qr.png">
+              <a
+                className="underline text-sm"
+                href={qrDataUrl}
+                download="verify-qr.png"
+              >
                 Download PNG
               </a>
               <div className="text-xs break-all text-white/70">{link}</div>
@@ -636,7 +683,9 @@ export default function ArtworkDetail() {
   const MIN_INC_BPS = 500;
   const [topBid, setTopBid] = useState<Bid | null>(null);
 
-  const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(null);
+  const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(
+    null
+  );
 
   const [bidInput, setBidInput] = useState<string>("");
   const [bidMsg, setBidMsg] = useState<string | null>(null);
@@ -647,12 +696,13 @@ export default function ArtworkDetail() {
 
   const [tab, setTab] = useState<"details" | "orders" | "activity">("details");
 
-  const [owners, setOwners] = useState<{ profile: Profile; quantity: number; updated_at: string }[]>(
-    []
-  );
-  const [sales, setSales] = useState<(SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]>(
-    []
-  );
+  const [owners, setOwners] = useState<
+    { profile: Profile; quantity: number; updated_at: string }[]
+  >([]);
+
+  const [sales, setSales] = useState<
+    (SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]
+  >([]);
 
   const [pinLoading, setPinLoading] = useState(false);
   const [pinErr, setPinErr] = useState<string | null>(null);
@@ -695,7 +745,8 @@ export default function ArtworkDetail() {
 
   useEffect(() => {
     // Feature detection for Web NFC (Chrome Android, secure context)
-    const ok = typeof (window as any).NDEFReader !== "undefined" && window.isSecureContext;
+    const ok =
+      typeof (window as any).NDEFReader !== "undefined" && window.isSecureContext;
     setNfcSupported(ok);
   }, []);
 
@@ -792,7 +843,10 @@ export default function ArtworkDetail() {
         }
         // ---------------------------------------------
 
-        await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
+        await Promise.all([
+          loadOwners((data as Artwork).id),
+          loadSales((data as Artwork).id),
+        ]);
         await loadTopOfferSafe((data as Artwork).id);
 
         if (l && (l as any).type === "auction") {
@@ -834,7 +888,11 @@ export default function ArtworkDetail() {
       .select("owner_id, quantity, updated_at")
       .eq("artwork_id", artworkId);
 
-    const rows = (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
+    const rows = (data ?? []) as {
+      owner_id: string;
+      quantity: number;
+      updated_at: string;
+    }[];
     const ids = Array.from(new Set(rows.map((r) => r.owner_id))).filter(Boolean);
     if (ids.length === 0) {
       setOwners([]);
@@ -1029,7 +1087,9 @@ export default function ArtworkDetail() {
       const ethereum = (window as any).ethereum;
       if (!ethereum) throw new Error("MetaMask not found. Please install it.");
 
-      const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts" });
+      const accounts: string[] = await ethereum.request({
+        method: "eth_requestAccounts",
+      });
       const from = accounts?.[0];
       if (!from) throw new Error("No account authorized in MetaMask.");
 
@@ -1041,7 +1101,10 @@ export default function ArtworkDetail() {
             params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
           });
         } catch {
-          await ethereum.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_PARAMS] });
+          await ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [SEPOLIA_PARAMS],
+          });
         }
         chainId = await ethereum.request({ method: "eth_chainId" });
         if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
@@ -1105,7 +1168,8 @@ export default function ArtworkDetail() {
     }
   }
 
-  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+  const isAuction =
+    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
 
   const creatorHandle = creator?.username
     ? `/u/${creator.username}`
@@ -1127,7 +1191,9 @@ export default function ArtworkDetail() {
 
   const galleryThumbs = useMemo(
     () =>
-      ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
+      ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as {
+        url?: string;
+      }[])
         .filter((f) => !!f?.url)
         .slice(0, 10),
     [art?.image_url, files]
@@ -1156,7 +1222,9 @@ export default function ArtworkDetail() {
       const ctr = sp.get("ctr");
 
       if (!a || !c || !ctr) {
-        setMsg("No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=1 to the URL or scan a tag.");
+        setMsg(
+          "No QR parameters found. Append ?a=TAG_ID&c=SIG&ctr=1 to the URL or scan a tag."
+        );
         return;
       }
 
@@ -1175,7 +1243,9 @@ export default function ArtworkDetail() {
             : state === "mismatch"
             ? "Tag / artwork mismatch ❌"
             : "Invalid ❌";
-        setMsg(`${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`);
+        setMsg(
+          `${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`
+        );
       } else {
         setMsg("Verification failed ❌");
       }
@@ -1251,7 +1321,9 @@ export default function ArtworkDetail() {
                 : state === "mismatch"
                 ? "Tag / artwork mismatch ❌"
                 : "Invalid ❌";
-            setMsg(`${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`);
+            setMsg(
+              `${badge}${data?.owner_handle ? ` • Current owner ${data.owner_handle}` : ""}`
+            );
           } else {
             setMsg("Verification failed ❌");
           }
@@ -1302,394 +1374,401 @@ export default function ArtworkDetail() {
 
   return (
     <>
-      {/* ✅ Container stays the same */}
-      <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12 items-start">
-        {/* Left */}
-        <div className="lg:col-span-7 space-y-3">
-          <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
-            {mainUrl ? (
-              <img
-                src={mainUrl}
-                alt={art.title ?? "Artwork"}
-                className="w-full h-full object-contain bg-neutral-950"
-                onError={() => setMainUrl(art.image_url || null)}
-              />
-            ) : (
-              <div className="aspect-square grid place-items-center text-neutral-400">No image</div>
+      {/* ✅ CHANGED: split page into 2 sections so the sticky right panel
+          stops at the end of the top section and NEVER overlaps the Details area */}
+      <div className="max-w-7xl mx-auto p-6 space-y-8">
+        {/* Top: Image + Right panel */}
+        <div className="grid gap-8 lg:grid-cols-12">
+          {/* Left */}
+          <div className="lg:col-span-7 space-y-3">
+            <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
+              {mainUrl ? (
+                <img
+                  src={mainUrl}
+                  alt={art.title ?? "Artwork"}
+                  className="w-full h-full object-contain bg-neutral-950"
+                  onError={() => setMainUrl(art.image_url || null)}
+                />
+              ) : (
+                <div className="aspect-square grid place-items-center text-neutral-400">
+                  No image
+                </div>
+              )}
+            </div>
+
+            {galleryThumbs.length > 0 && (
+              <div className="grid grid-cols-5 gap-2">
+                {galleryThumbs.map((f, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setMainUrl(f.url || null)}
+                    className={`aspect-square overflow-hidden rounded-xl border transition ${
+                      mainUrl === f.url
+                        ? "border-white/50"
+                        : "border-white/10 hover:border-white/30"
+                    } bg-neutral-900`}
+                  >
+                    {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
+                    {/* @ts-ignore — url is guaranteed by filter */}
+                    <img src={f.url} className="h-full w-full object-cover" />
+                  </button>
+                ))}
+              </div>
             )}
           </div>
 
-          {galleryThumbs.length > 0 && (
-            <div className="grid grid-cols-5 gap-2">
-              {galleryThumbs.map((f, i) => (
-                <button
-                  key={i}
-                  onClick={() => setMainUrl(f.url || null)}
-                  className={`aspect-square overflow-hidden rounded-xl border transition ${
-                    mainUrl === f.url ? "border-white/50" : "border-white/10 hover:border-white/30"
-                  } bg-neutral-900`}
-                >
-                  {/* eslint-disable-next-line @typescript-eslint/ban-ts-comment */}
-                  {/* @ts-ignore — url is guaranteed by filter */}
-                  <img src={f.url} className="h-full w-full object-cover" />
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+          {/* Right */}
+          <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
+            {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
-        {/* Right (sticky sidebar) */}
-        <div
-          className="
-            lg:col-span-5
-            lg:sticky lg:top-6
-            self-start
-            lg:max-h-[calc(100vh-1.5rem)]
-            lg:overflow-auto
-            pr-1 space-y-4
-          "
-        >
-          {msg && <p className="text-xs text-amber-300">{msg}</p>}
+            {/* Header */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <h1 className="text-3xl font-semibold leading-tight truncate">
+                  {art.title || "Untitled"}
+                </h1>
 
-          {/* Header */}
-          <div className="flex items-start justify-between gap-4">
-            <div className="min-w-0">
-              <h1 className="text-3xl font-semibold leading-tight truncate">
-                {art.title || "Untitled"}
-              </h1>
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+                  {creator?.avatar_url ? (
+                    <img
+                      src={creator.avatar_url}
+                      className="h-5 w-5 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className="h-5 w-5 rounded-full bg-white/10" />
+                  )}
 
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-                {creator?.avatar_url ? (
-                  <img src={creator.avatar_url} className="h-5 w-5 rounded-full object-cover" />
-                ) : (
-                  <div className="h-5 w-5 rounded-full bg-white/10" />
-                )}
+                  <span className="text-white/80">
+                    {creator ? (
+                      <Link
+                        to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
+                        className="underline"
+                      >
+                        {creator.display_name || creator.username || "Creator"}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </span>
 
-                <span className="text-white/80">
-                  {creator ? (
-                    <Link
-                      to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
-                      className="underline"
+                  <span className="text-white/40">•</span>
+
+                  <span className="text-white/80">
+                    Owned by{" "}
+                    {owner ? (
+                      <Link to={ownerHandle ?? "#"} className="underline">
+                        {owner.display_name || owner.username || "Collector"}
+                      </Link>
+                    ) : (
+                      "—"
+                    )}
+                  </span>
+                </div>
+
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Pill>ERC721</Pill>
+                  <Pill>ETHEREUM</Pill>
+                  {art.type === "physical" ? (
+                    <PhysicalBadge status={art.physical_status || "with_creator"} />
+                  ) : (
+                    <Pill>TOKEN</Pill>
+                  )}
+                </div>
+              </div>
+
+              {/* Actions */}
+              <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
+                {isOwner && (
+                  <>
+                    <button
+                      className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                      title="Seller tools"
+                      onClick={() => setSellerOpen(true)}
                     >
-                      {creator.display_name || creator.username || "Creator"}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </span>
+                      ✏️ Edit
+                    </button>
 
-                <span className="text-white/40">•</span>
-
-                <span className="text-white/80">
-                  Owned by{" "}
-                  {owner ? (
-                    <Link to={ownerHandle ?? "#"} className="underline">
-                      {owner.display_name || owner.username || "Collector"}
-                    </Link>
-                  ) : (
-                    "—"
-                  )}
-                </span>
-              </div>
-
-              <div className="mt-2 flex flex-wrap gap-2">
-                <Pill>ERC721</Pill>
-                <Pill>ETHEREUM</Pill>
-                {art.type === "physical" ? (
-                  <PhysicalBadge status={art.physical_status || "with_creator"} />
-                ) : (
-                  <Pill>TOKEN</Pill>
+                    <button
+                      className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                      onClick={() => toggleHidden(!myHidden)}
+                      disabled={hideBusy || myHidden === null}
+                      title="Hide from your public profile"
+                    >
+                      {hideBusy ? "…" : myHidden ? "Unhide" : "Hide"}
+                    </button>
+                  </>
                 )}
-              </div>
-            </div>
 
-            {/* Actions */}
-            <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
-              {isOwner && (
-                <>
+                {viewerId ? (
                   <button
                     className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                    title="Seller tools"
-                    onClick={() => setSellerOpen(true)}
+                    title="Send to DM"
+                    onClick={() => setShowShareDM(true)}
                   >
-                    ✏️ Edit
+                    ✉️ Send
                   </button>
+                ) : null}
 
-                  <button
-                    className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                    onClick={() => toggleHidden(!myHidden)}
-                    disabled={hideBusy || myHidden === null}
-                    title="Hide from your public profile"
-                  >
-                    {hideBusy ? "…" : myHidden ? "Unhide" : "Hide"}
-                  </button>
-                </>
-              )}
+                <Link
+                  to={`/art/${id}/ar`}
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="Preview on your wall (AR)"
+                >
+                  🧱 AR Wall-Fit
+                </Link>
 
-              {viewerId ? (
                 <button
                   className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                  title="Send to DM"
-                  onClick={() => setShowShareDM(true)}
+                  title="Share QR"
+                  onClick={() => setShowShareQR(true)}
                 >
-                  ✉️ Send
+                  ▣
                 </button>
-              ) : null}
 
-              <Link
-                to={`/art/${id}/ar`}
-                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                title="Preview on your wall (AR)"
-              >
-                🧱 AR Wall-Fit
-              </Link>
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="Copy link"
+                  onClick={() => navigator.clipboard?.writeText(window.location.href)}
+                >
+                  ⧉
+                </button>
 
-              <button
-                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                title="Share QR"
-                onClick={() => setShowShareQR(true)}
-              >
-                ▣
-              </button>
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="Favorite"
+                >
+                  <HeartIcon />
+                </button>
 
-              <button
-                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                title="Copy link"
-                onClick={() => navigator.clipboard?.writeText(window.location.href)}
-              >
-                ⧉
-              </button>
-
-              <button
-                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                title="Favorite"
-              >
-                <HeartIcon />
-              </button>
-
-              <button
-                className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                title="More"
-              >
-                ⋯
-              </button>
+                <button
+                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
+                  title="More"
+                >
+                  ⋯
+                </button>
+              </div>
             </div>
-          </div>
 
-          {/* Stats */}
-          <Card>
-            <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
-              <StatBox
-                label="Top offer"
-                value={
-                  displayedTopOffer
-                    ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency)
-                    : "—"
-                }
-              />
-              <StatBox
-                label="Original price"
-                value={
-                  sales.length
-                    ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency)
-                    : "—"
-                }
-              />
-              <StatBox label="Rarity" value={"—"} />
-              <StatBox
-                label="Last sale"
-                value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"}
-              />
-            </div>
-          </Card>
+            {/* Stats */}
+            <Card>
+              <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
+                <StatBox
+                  label="Top offer"
+                  value={
+                    displayedTopOffer
+                      ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency)
+                      : "—"
+                  }
+                />
+                <StatBox
+                  label="Original price"
+                  value={
+                    sales.length
+                      ? fmtCurrency(
+                          sales[sales.length - 1].price,
+                          sales[sales.length - 1].currency
+                        )
+                      : "—"
+                  }
+                />
+                <StatBox label="Rarity" value={"—"} />
+                <StatBox
+                  label="Last sale"
+                  value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"}
+                />
+              </div>
+            </Card>
 
-          {/* Listing / Buy */}
-          <Card title="Listing" right={isAuction ? <Pill tone="warning">AUCTION</Pill> : null}>
-            {activeListing ? (
-              <>
-                <div className="flex items-start justify-between gap-3">
-                  {isAuction ? (
-                    <div className="text-sm">
-                      <div className="text-white/60">Highest bid</div>
-                      <div className="text-2xl font-semibold mt-0.5">
-                        {topBid ? fmtCurrency(topBid.amount, activeListing.sale_currency) : "—"}
-                      </div>
-                      {(activeListing as any).reserve_price && (
-                        <div className="text-[11px] text-white/60 mt-1">
-                          Reserve:{" "}
-                          {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)}
-                          {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
+            {/* Listing / Buy */}
+            <Card title="Listing" right={isAuction ? <Pill tone="warning">AUCTION</Pill> : null}>
+              {activeListing ? (
+                <>
+                  <div className="flex items-start justify-between gap-3">
+                    {isAuction ? (
+                      <div className="text-sm">
+                        <div className="text-white/60">Highest bid</div>
+                        <div className="text-2xl font-semibold mt-0.5">
+                          {topBid ? fmtCurrency(topBid.amount, activeListing.sale_currency) : "—"}
                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-1">
-                      <div className="text-3xl font-semibold">
-                        {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
+                        {(activeListing as any).reserve_price && (
+                          <div className="text-[11px] text-white/60 mt-1">
+                            Reserve:{" "}
+                            {fmtCurrency(
+                              (activeListing as any).reserve_price,
+                              activeListing.sale_currency
+                            )}
+                            {!topBid || topBid.amount < (activeListing as any).reserve_price
+                              ? " (not met)"
+                              : ""}
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
+                    ) : (
+                      <div className="space-y-1">
+                        <div className="text-3xl font-semibold">
+                          {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
+                        </div>
+                      </div>
+                    )}
 
-                  {isAuction && (activeListing as any).end_at ? (
-                    <Countdown
-                      endAt={(activeListing as any).end_at as string}
-                      onElapsed={async () => {
-                        try {
-                          await endAuction(activeListing!.id);
-                        } catch {}
-                        const l = await fetchActiveListingForArtwork(art.id);
-                        setActiveListing(l as any);
-                      }}
-                    />
-                  ) : null}
-                </div>
+                    {isAuction && (activeListing as any).end_at ? (
+                      <Countdown
+                        endAt={(activeListing as any).end_at as string}
+                        onElapsed={async () => {
+                          try {
+                            await endAuction(activeListing!.id);
+                          } catch {}
+                          const l = await fetchActiveListingForArtwork(art.id);
+                          setActiveListing(l as any);
+                        }}
+                      />
+                    ) : null}
+                  </div>
 
-                <div className="mt-3 flex gap-2">
-                  {isAuction ? (
-                    viewerId && !isSeller ? (
+                  <div className="mt-3 flex gap-2">
+                    {isAuction ? (
+                      viewerId && !isSeller ? (
+                        <>
+                          <input
+                            className="input flex-1"
+                            type="number"
+                            min={minNextBid || 0}
+                            step="0.00000001"
+                            placeholder={minNextBid ? `≥ ${minNextBid}` : "Your bid"}
+                            value={bidInput}
+                            onChange={(e) => setBidInput(e.target.value)}
+                          />
+                          <button className="btn flex-1" onClick={onPlaceBid} disabled={bidBusy}>
+                            {bidBusy ? "Bidding…" : "Place bid"}
+                          </button>
+                        </>
+                      ) : (
+                        <div className="text-sm text-white/70">
+                          {isSeller ? "Sellers can’t bid on their own auction." : "Sign in to bid."}
+                        </div>
+                      )
+                    ) : (
                       <>
-                        <input
-                          className="input flex-1"
-                          type="number"
-                          min={minNextBid || 0}
-                          step="0.00000001"
-                          placeholder={minNextBid ? `≥ ${minNextBid}` : "Your bid"}
-                          value={bidInput}
-                          onChange={(e) => setBidInput(e.target.value)}
-                        />
-                        <button className="btn flex-1" onClick={onPlaceBid} disabled={bidBusy}>
-                          {bidBusy ? "Bidding…" : "Place bid"}
+                        {canBuy && (
+                          <button className="btn flex-1" onClick={onBuy}>
+                            Buy now
+                          </button>
+                        )}
+                        <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">
+                          Make offer
                         </button>
                       </>
-                    ) : (
-                      <div className="text-sm text-white/70">
-                        {isSeller ? "Sellers can’t bid on their own auction." : "Sign in to bid."}
-                      </div>
-                    )
-                  ) : (
-                    <>
-                      {canBuy && (
-                        <button className="btn flex-1" onClick={onBuy}>
-                          Buy now
-                        </button>
-                      )}
-                      <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">
-                        Make offer
+                    )}
+                  </div>
+
+                  {canRequestLicense && (
+                    <div className="mt-3">
+                      <button className="btn w-full" onClick={() => setShowLicense(true)}>
+                        Request license
                       </button>
-                    </>
+                    </div>
+                  )}
+
+                  {isOwner && (
+                    <div className="mt-3">
+                      <button className="btn w-full" onClick={() => setSellerOpen(true)}>
+                        {activeListing ? "Edit listing" : "List this artwork"}
+                      </button>
+                    </div>
+                  )}
+
+                  {isAuction && (
+                    <div className="text-[12px] text-white/60 mt-2">
+                      Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
+                      {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
+                    </div>
+                  )}
+
+                  {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-white/70">Not currently listed.</p>
+
+                  {canRequestLicense && (
+                    <div className="mt-3">
+                      <button className="btn w-full" onClick={() => setShowLicense(true)}>
+                        Request license
+                      </button>
+                    </div>
+                  )}
+
+                  {isOwner && (
+                    <div className="mt-3">
+                      <button className="btn w-full" onClick={() => setSellerOpen(true)}>
+                        List this artwork
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </Card>
+
+            {/* IPFS */}
+            <Card title="IPFS">
+              {art.token_uri ? (
+                <div className="text-xs space-y-1">
+                  <div>
+                    <Pill tone="success">Pinned</Pill>
+                  </div>
+                  {art.ipfs_image_cid && (
+                    <div>
+                      Image CID: <code>{art.ipfs_image_cid}</code>
+                    </div>
+                  )}
+                  {art.ipfs_metadata_cid && (
+                    <div>
+                      Metadata CID: <code>{art.ipfs_metadata_cid}</code>{" "}
+                      <a
+                        className="underline"
+                        href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open metadata
+                      </a>
+                    </div>
+                  )}
+                  <div>
+                    Token URI: <code>{art.token_uri}</code>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <button
+                    className="btn"
+                    onClick={handlePin}
+                    disabled={
+                      pinLoading ||
+                      !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
+                    }
+                    title={
+                      viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
+                        ? ""
+                        : "Only the creator/owner can pin"
+                    }
+                  >
+                    {pinLoading ? "Pinning…" : "Pin to IPFS"}
+                  </button>
+                  {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
+                  {pinData && (
+                    <span className="text-xs text-neutral-300">
+                      ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
+                    </span>
                   )}
                 </div>
-
-                {canRequestLicense && (
-                  <div className="mt-3">
-                    <button className="btn w-full" onClick={() => setShowLicense(true)}>
-                      Request license
-                    </button>
-                  </div>
-                )}
-
-                {isOwner && (
-                  <div className="mt-3">
-                    <button className="btn w-full" onClick={() => setSellerOpen(true)}>
-                      {activeListing ? "Edit listing" : "List this artwork"}
-                    </button>
-                  </div>
-                )}
-
-                {isAuction && (
-                  <div className="text-[12px] text-white/60 mt-2">
-                    Min next bid: {minNextBid || "—"} {activeListing.sale_currency}
-                    {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
-                  </div>
-                )}
-
-                {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
-              </>
-            ) : (
-              <>
-                <p className="text-sm text-white/70">Not currently listed.</p>
-
-                {canRequestLicense && (
-                  <div className="mt-3">
-                    <button className="btn w-full" onClick={() => setShowLicense(true)}>
-                      Request license
-                    </button>
-                  </div>
-                )}
-
-                {isOwner && (
-                  <div className="mt-3">
-                    <button className="btn w-full" onClick={() => setSellerOpen(true)}>
-                      List this artwork
-                    </button>
-                  </div>
-                )}
-              </>
-            )}
-          </Card>
-
-          {/* IPFS */}
-          <Card title="IPFS">
-            {art.token_uri ? (
-              <div className="text-xs space-y-1">
-                <div>
-                  <Pill tone="success">Pinned</Pill>
-                </div>
-                {art.ipfs_image_cid && (
-                  <div>
-                    Image CID: <code>{art.ipfs_image_cid}</code>
-                  </div>
-                )}
-                {art.ipfs_metadata_cid && (
-                  <div>
-                    Metadata CID: <code>{art.ipfs_metadata_cid}</code>{" "}
-                    <a
-                      className="underline"
-                      href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Open metadata
-                    </a>
-                  </div>
-                )}
-                <div>
-                  Token URI: <code>{art.token_uri}</code>
-                </div>
-              </div>
-            ) : (
-              <div className="flex items-center gap-3">
-                <button
-                  className="btn"
-                  onClick={handlePin}
-                  disabled={
-                    pinLoading || !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
-                  }
-                  title={
-                    viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
-                      ? ""
-                      : "Only the creator/owner can pin"
-                  }
-                >
-                  {pinLoading ? "Pinning…" : "Pin to IPFS"}
-                </button>
-                {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
-                {pinData && (
-                  <span className="text-xs text-neutral-300">
-                    ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
-                  </span>
-                )}
-              </div>
-            )}
-          </Card>
+              )}
+            </Card>
+          </div>
         </div>
 
-        {/* ✅ Tabs area
-            Key fix:
-            - On desktop: only span left 7 columns (so it never goes behind the sticky sidebar)
-            - On mobile: still full width
-        */}
-        <div className="col-span-12 lg:col-span-7 lg:col-start-1">
+        {/* Tabs area (full width, no sticky overlap now) */}
+        <div>
           <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
             <div className="flex gap-4 px-4 pt-3 border-b border-white/10">
               {(["details", "orders", "activity"] as const).map((t) => (
@@ -1697,7 +1776,9 @@ export default function ArtworkDetail() {
                   key={t}
                   onClick={() => setTab(t)}
                   className={`px-2 pb-3 text-sm border-b-2 ${
-                    tab === t ? "border-white text-white" : "border-transparent text-white/70 hover:text-white"
+                    tab === t
+                      ? "border-white text-white"
+                      : "border-transparent text-white/70 hover:text-white"
                   }`}
                 >
                   {t === "details" ? "Details" : t === "orders" ? "Orders" : "Activity"}
@@ -1723,8 +1804,8 @@ export default function ArtworkDetail() {
                       }
                     >
                       <div className="text-sm text-white/80">
-                        Tap the NFC tag (Chrome on Android) or scan the QR printed on the certificate/frame to verify
-                        authenticity and view provenance.
+                        Tap the NFC tag (Chrome on Android) or scan the QR printed on the
+                        certificate/frame to verify authenticity and view provenance.
                       </div>
                       <div className="mt-3 flex gap-2 flex-wrap">
                         <button
@@ -1797,7 +1878,10 @@ export default function ArtworkDetail() {
                         <div>
                           <div className="font-medium flex items-center gap-2">
                             {creator.avatar_url ? (
-                              <img src={creator.avatar_url} className="h-6 w-6 rounded-full object-cover" />
+                              <img
+                                src={creator.avatar_url}
+                                className="h-6 w-6 rounded-full object-cover"
+                              />
                             ) : (
                               <div className="h-6 w-6 rounded-full bg-white/10" />
                             )}
@@ -1825,7 +1909,9 @@ export default function ArtworkDetail() {
                             {collection.name || collection.slug || "Untitled collection"}
                           </Link>
                         ) : (
-                          <span className="text-white/60">This artwork is not part of a collection.</span>
+                          <span className="text-white/60">
+                            This artwork is not part of a collection.
+                          </span>
                         )}
                       </div>
                     </div>
@@ -2013,7 +2099,9 @@ export default function ArtworkDetail() {
           open={sellerOpen}
           onClose={() => setSellerOpen(false)}
           artworkId={art.id}
-          onListingUpdated={async () => setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)}
+          onListingUpdated={async () =>
+            setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)
+          }
         />
       )}
 
@@ -2078,7 +2166,11 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+        <select
+          className="input w-28"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+        >
           <option value="ETH">ETH</option>
           <option value="USD">USD</option>
         </select>
@@ -2087,7 +2179,9 @@ function OwnerListPanel({
         </button>
       </div>
       {msg && <div className="text-xs text-neutral-200 mt-2">{msg}</div>}
-      <div className="text-[11px] text-white/60 mt-1">(Creates/updates a fixed-price listing visible on Explore.)</div>
+      <div className="text-[11px] text-white/60 mt-1">
+        (Creates/updates a fixed-price listing visible on Explore.)
+      </div>
     </Card>
   );
 }
@@ -2154,7 +2248,9 @@ function SellerConsole({
 
         {tab === "details" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-            <div className="text-sm text-white/70">Update artwork metadata (title/description, tags, etc.).</div>
+            <div className="text-sm text-white/70">
+              Update artwork metadata (title/description, tags, etc.).
+            </div>
             <div className="flex gap-2">
               <a href={`/art/${artworkId}/edit`} className="btn">
                 Go to edit page
