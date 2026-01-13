@@ -23,6 +23,7 @@ export async function fetchTopBid(listingId: string): Promise<Bid | null> {
     .select("id, listing_id, bidder_id, amount, created_at")
     .eq("listing_id", listingId)
     .order("amount", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle<Bid>();
 
