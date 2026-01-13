@@ -1302,7 +1302,8 @@ export default function ArtworkDetail() {
 
   return (
     <>
-      <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12">
+      {/* ✅ Container stays the same */}
+      <div className="max-w-7xl mx-auto p-6 grid gap-8 lg:grid-cols-12 items-start">
         {/* Left */}
         <div className="lg:col-span-7 space-y-3">
           <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-neutral-950">
@@ -1337,8 +1338,17 @@ export default function ArtworkDetail() {
           )}
         </div>
 
-        {/* Right */}
-        <div className="lg:col-span-5 space-y-4 sticky top-6 self-start max-h-[calc(100vh-1.5rem)] overflow-auto pr-1">
+        {/* Right (sticky sidebar) */}
+        <div
+          className="
+            lg:col-span-5
+            lg:sticky lg:top-6
+            self-start
+            lg:max-h-[calc(100vh-1.5rem)]
+            lg:overflow-auto
+            pr-1 space-y-4
+          "
+        >
           {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
           {/* Header */}
@@ -1393,7 +1403,7 @@ export default function ArtworkDetail() {
               </div>
             </div>
 
-            {/* Actions (alignment improved: consistent button sizing + wrap) */}
+            {/* Actions */}
             <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
               {isOwner && (
                 <>
@@ -1416,7 +1426,6 @@ export default function ArtworkDetail() {
                 </>
               )}
 
-              {/* NEW: Send to DM */}
               {viewerId ? (
                 <button
                   className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
@@ -1675,8 +1684,12 @@ export default function ArtworkDetail() {
           </Card>
         </div>
 
-        {/* Tabs area */}
-        <div className="lg:col-span-12">
+        {/* ✅ Tabs area
+            Key fix:
+            - On desktop: only span left 7 columns (so it never goes behind the sticky sidebar)
+            - On mobile: still full width
+        */}
+        <div className="col-span-12 lg:col-span-7 lg:col-start-1">
           <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
             <div className="flex gap-4 px-4 pt-3 border-b border-white/10">
               {(["details", "orders", "activity"] as const).map((t) => (

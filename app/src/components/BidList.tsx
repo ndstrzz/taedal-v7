@@ -1,5 +1,6 @@
 // app/src/components/BidList.tsx
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { supabase } from "../lib/supabase";
 import { type Bid, subscribeBids } from "../lib/bids";
 
@@ -10,7 +11,13 @@ type Profile = {
   avatar_url: string | null;
 };
 
-export default function BidList({ listingId }: { listingId: string }) {
+export default function BidList({
+  listingId,
+  saleCurrency = "ETH",
+}: {
+  listingId: string;
+  saleCurrency?: string;
+}) {
   const [bids, setBids] = useState<Bid[]>([]);
   const [profiles, setProfiles] = useState<Map<string, Profile>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -20,33 +27,42 @@ export default function BidList({ listingId }: { listingId: string }) {
     let alive = true;
     (async () => {
       try {
+        setLoading(true);
         const { data, error } = await supabase
           .from("bids")
           .select("id, listing_id, bidder_id, amount, created_at")
           .eq("listing_id", listingId)
           .order("amount", { ascending: false })
           .limit(50);
+
         if (error) throw error;
         if (!alive) return;
-        setBids(data ?? []);
+
+        const rows = (data ?? []) as Bid[];
+        setBids(rows);
 
         // fetch involved bidder profiles
-        const ids = Array.from(new Set((data ?? []).map(b => b.bidder_id)));
+        const ids = Array.from(new Set(rows.map((b) => b.bidder_id))).filter(Boolean);
         if (ids.length) {
           const { data: profs } = await supabase
             .from("profiles")
             .select("id, username, display_name, avatar_url")
             .in("id", ids);
+
           const map = new Map<string, Profile>();
           (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
           if (alive) setProfiles(map);
         }
       } catch {
+        // keep silent for now
       } finally {
         if (alive) setLoading(false);
       }
     })();
-    return () => { alive = false; };
+
+    return () => {
+      alive = false;
+    };
   }, [listingId]);
 
   // realtime subscribe (top up / new inserts)
@@ -59,10 +75,15 @@ export default function BidList({ listingId }: { listingId: string }) {
         return next;
       });
     });
-    return () => { try { off(); } catch {} };
+    return () => {
+      try {
+        off();
+      } catch {}
+    };
   }, [listingId]);
 
-  const rows = useMemo(() => bids.sort((a,z)=>z.amount-a.amount), [bids]);
+  // ✅ do NOT mutate state (sort a copy)
+  const rows = useMemo(() => [...bids].sort((a, z) => z.amount - a.amount), [bids]);
 
   if (loading) return <div className="text-sm text-neutral-400">Loading bids…</div>;
   if (rows.length === 0) return <div className="text-sm text-neutral-400">No bids yet.</div>;
@@ -71,13 +92,14 @@ export default function BidList({ listingId }: { listingId: string }) {
     <ul className="space-y-2">
       {rows.map((b) => {
         const p = profiles.get(b.bidder_id);
-        const who =
-          p?.display_name || p?.username || (p ? p.id.slice(0,6) : "Bidder");
-        const href = p
-          ? p.username ? `/u/${p.username}` : `/u/${p.id}`
-          : "#";
+        const who = p?.display_name || p?.username || (p ? p.id.slice(0, 6) : "Bidder");
+        const to = p ? (p.username ? `/u/${p.username}` : `/u/${p.id}`) : "#";
+
         return (
-          <li key={b.id} className="p-3 rounded-lg bg-white/5 border border-white/10 flex items-center gap-3">
+          <li
+            key={b.id}
+            className="p-3 rounded-lg bg-white/5 border border-white/10 flex items-center gap-3"
+          >
             {p?.avatar_url ? (
               <img src={p.avatar_url} className="h-8 w-8 rounded-full object-cover" />
             ) : (
@@ -85,11 +107,19 @@ export default function BidList({ listingId }: { listingId: string }) {
             )}
             <div className="flex-1">
               <div className="text-sm">
-                <span className="font-medium">{b.amount}</span> <span className="text-white/70">ETH</span>
+                <span className="font-medium">{b.amount}</span>{" "}
+                <span className="text-white/70">{saleCurrency}</span>
               </div>
               <div className="text-xs text-white/70">
-                by <a className="underline" href={href}>{who}</a> •{" "}
-                {new Date(b.created_at).toLocaleString()}
+                by{" "}
+                {p ? (
+                  <Link className="underline" to={to}>
+                    {who}
+                  </Link>
+                ) : (
+                  <span>{who}</span>
+                )}{" "}
+                • {new Date(b.created_at).toLocaleString()}
               </div>
             </div>
           </li>
