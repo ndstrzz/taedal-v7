@@ -1238,7 +1238,7 @@ export default function ArtworkDetail() {
         }
       }
 
-      const priceEth = Number(activeListing.fixed_price || 0);
+      const priceEth = Number((activeListing as any).fixed_price || 0);
       if (!isFinite(priceEth) || priceEth <= 0) {
         throw new Error("Invalid price for listing.");
       }
@@ -1275,22 +1275,71 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Auction payment flow (winner only) */
+  /* ------------------------------ Auction derived truth (LIVE) ------------------------------ */
+
+  const isAuction =
+    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+
+  const auctionEndedByTime = useMemo(() => {
+    if (!isAuction) return false;
+    const endAt = (activeListing as any)?.end_at as string;
+    return Date.now() >= new Date(endAt).getTime();
+  }, [isAuction, (activeListing as any)?.end_at]);
+
+  const listingStatus = (activeListing as any)?.status ?? null;
+  const auctionClosed =
+    isAuction &&
+    (listingStatus === "ended" ||
+      listingStatus === "closed" ||
+      listingStatus === "paid" ||
+      auctionEndedByTime);
+
+  const auctionPaid = isAuction && listingStatus === "paid";
+
+  // ✅ IMPORTANT: derive reserveMet + winner from LIVE data (topBid + listing reserve)
+  const liveReserveMet = useMemo(() => {
+    if (!isAuction) return false;
+    const reserve = ((activeListing as any)?.reserve_price ?? null) as number | null;
+    if (!topBid) return false;
+    return reserve == null ? true : topBid.amount >= reserve;
+  }, [isAuction, topBid, (activeListing as any)?.reserve_price]);
+
+  const liveWinnerId = useMemo(() => {
+    return topBid?.bidder_id ?? null;
+  }, [topBid]);
+
+  const isWinnerLive = useMemo(() => {
+    return !!viewerId && !!liveWinnerId && viewerId === liveWinnerId;
+  }, [viewerId, liveWinnerId]);
+
+  const paymentPending = isAuction && auctionClosed && liveReserveMet && !auctionPaid;
+
+  /** ✅ Auction payment flow (winner only) — FIXED: recompute from DB, do not rely on auctionOutcome */
   async function payForAuctionNow() {
     if (!activeListing || (activeListing as any).type !== "auction") return;
-    if (!auctionOutcome?.reserveMet || !auctionOutcome?.winner?.id) return;
-    if (!viewerId || viewerId !== auctionOutcome.winner.id) return;
-
-    const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
-    const amount = Number(auctionOutcome.amount ?? 0);
-    if (!isFinite(amount) || amount <= 0) return;
+    if (!viewerId) return;
 
     setMsg(null);
+    setPayBusy(true);
 
-    // ETH: use MetaMask, send to seller wallet
-    if (currency === "ETH") {
-      setPayBusy(true);
-      try {
+    try {
+      // Recompute truth from DB
+      const tb = await fetchTopBid(activeListing.id);
+      if (!tb) throw new Error("No bids found for this auction.");
+
+      const reserve = ((activeListing as any)?.reserve_price ?? null) as number | null;
+      const reserveMet = reserve == null ? true : tb.amount >= reserve;
+      if (!reserveMet) throw new Error("Reserve not met — no payment required.");
+
+      if (!tb.bidder_id) throw new Error("Winner not found.");
+      if (tb.bidder_id !== viewerId) throw new Error("Only the winning bidder can pay.");
+
+      const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
+      const amount = Number(tb.amount ?? 0);
+      if (!isFinite(amount) || amount <= 0) throw new Error("Invalid winning amount.");
+
+      // ETH: MetaMask transfer
+      if (currency === "ETH") {
         const ethereum = (window as any).ethereum;
         if (!ethereum) throw new Error("MetaMask not found. Please install it.");
 
@@ -1328,7 +1377,6 @@ export default function ArtworkDetail() {
           params: [{ from, to, value }],
         });
 
-        // Try record + mark paid (requires Edge Function)
         try {
           await supabase.functions.invoke("record-auction-eth-payment", {
             body: {
@@ -1350,40 +1398,54 @@ export default function ArtworkDetail() {
           const l = await fetchActiveListingForArtwork(art!.id);
           if (l) setActiveListing(l as any);
         } catch {}
-      } catch (e: any) {
-        setMsg(e?.message ?? "Payment failed");
-      } finally {
-        setPayBusy(false);
+        return;
       }
-      return;
-    }
 
-    // Fiat/Stripe: Edge Function creates checkout session
-    setPayBusy(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("create-auction-checkout", {
-        body: {
-          listing_id: activeListing.id,
-          success_url: `${location.origin}/checkout/success`,
-          cancel_url: location.href,
-        },
-      });
-      if (error) throw error;
-      if (!data?.url) throw new Error("Checkout URL not returned");
-      window.location.href = data.url;
+      // Fiat/Stripe:
+      // Try create-auction-checkout (if you have it), otherwise fallback to create-checkout
+      const body = {
+        listing_id: activeListing.id,
+        success_url: `${location.origin}/checkout/success`,
+        cancel_url: location.href,
+      };
+
+      let url: string | null = null;
+
+      try {
+        const r1 = await supabase.functions.invoke("create-auction-checkout", { body });
+        if (!r1.error && r1.data?.url) url = r1.data.url;
+      } catch {}
+
+      if (!url) {
+        const r2 = await supabase.functions.invoke("create-checkout", {
+          body: {
+            ...body,
+            // optional hint for backend (safe even if ignored)
+            mode: "auction",
+          },
+        });
+        if (r2.error) throw r2.error;
+        if (!r2.data?.url) throw new Error("Checkout URL not returned");
+        url = r2.data.url;
+      }
+
+      window.location.href = url!;
     } catch (e: any) {
-      setMsg(e?.message ?? "Payment setup failed (missing create-auction-checkout?)");
+      setMsg(e?.message ?? "Payment setup failed");
     } finally {
       setPayBusy(false);
     }
   }
 
-  /** ✅ Contact winner (seller) */
+  /** ✅ Contact winner (seller) — FIXED: use liveWinnerId if modal not opened */
   async function contactWinner() {
-    if (!auctionOutcome?.winner?.id) return;
+    const winnerId = liveWinnerId || auctionOutcome?.winner?.id || null;
+    if (!winnerId) {
+      setMsg("Winner not found yet.");
+      return;
+    }
     try {
-      const tid = await dmGetOrCreateThread(auctionOutcome.winner.id);
-      // send the artwork card as the “context” message
+      const tid = await dmGetOrCreateThread(winnerId);
       if (art) {
         await dmSendArtworkShare(tid, art.id, {
           title: art.title ?? "Untitled",
@@ -1396,25 +1458,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  const isAuction =
-    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
-
-  const auctionEndedByTime = useMemo(() => {
-    if (!isAuction) return false;
-    const endAt = (activeListing as any)?.end_at as string;
-    return Date.now() >= new Date(endAt).getTime();
-  }, [isAuction, (activeListing as any)?.end_at]);
-
-  const listingStatus = (activeListing as any)?.status ?? null;
-  const auctionClosed =
-    isAuction &&
-    (listingStatus === "ended" ||
-      listingStatus === "closed" ||
-      listingStatus === "paid" ||
-      auctionEndedByTime);
-
-  const auctionPaid = isAuction && listingStatus === "paid";
-
   async function onPlaceBid() {
     if (!activeListing) return;
     setBidBusy(true);
@@ -1424,6 +1467,12 @@ export default function ArtworkDetail() {
 
       const amt = Number(bidInput || 0);
       if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
+
+      // ✅ extra strict guard: must be higher than current top bid (even if MIN_INC_BPS=0)
+      const currentTop = topBid?.amount ?? 0;
+      if (currentTop > 0 && amt <= currentTop) {
+        throw new Error(`Bid must be higher than the current top bid (${currentTop}).`);
+      }
 
       // local guard (DB should also enforce!)
       const reserve = (activeListing as any)?.reserve_price ?? 0;
@@ -1497,12 +1546,11 @@ export default function ArtworkDetail() {
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
   const isSeller = !!activeListing && viewerId === (activeListing as any).seller_id;
 
-  const isWinner =
-    !!viewerId && !!auctionOutcome?.winner?.id && viewerId === auctionOutcome.winner.id;
+  // ✅ winner derived live (not outcome state)
+  const isWinner = isWinnerLive;
 
-  const reserveMet = !!auctionOutcome?.reserveMet;
-
-  const paymentPending = isAuction && auctionClosed && reserveMet && !auctionPaid;
+  // ✅ reserve derived live (not outcome state)
+  const reserveMet = liveReserveMet;
 
   const canBuy = !!activeListing && !!viewerId && !isSeller;
   const canBid = !!viewerId && !isSeller && isAuction && !auctionClosed && listingStatus === "active";
@@ -1797,7 +1845,7 @@ export default function ArtworkDetail() {
                     ) : (
                       <div className="space-y-1">
                         <div className="text-3xl font-semibold">
-                          {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
+                          {fmtCurrency((activeListing as any).fixed_price ?? null, activeListing.sale_currency)}
                         </div>
                       </div>
                     )}
