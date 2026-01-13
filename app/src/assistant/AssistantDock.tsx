@@ -1,3 +1,4 @@
+// app/src/routes/assistant/AssistantDock.tsx
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { classifyIntent } from "./intent";
@@ -35,8 +36,6 @@ const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
 /* ---------------- env/url resolution ---------------- */
 function getEnv(key: string): string | undefined {
   try {
-    // Vite injects import.meta.env at build time for app bundles.
-    // If this file is bundled outside Vite, import.meta.env may not exist.
     // @ts-ignore
     return (import.meta as any)?.env?.[key];
   } catch {
@@ -45,7 +44,6 @@ function getEnv(key: string): string | undefined {
 }
 
 function getCfg(key: string): string | undefined {
-  // supports window.__CONFIG__ pattern too
   const w = globalThis as any;
   const cfg = w?.window?.__CONFIG__ || w?.__CONFIG__;
   if (cfg && typeof cfg === "object") return cfg[key];
@@ -158,11 +156,14 @@ function priceCoach(params: {
   const socialFactor = 0.9 + Math.min(1.6, Math.log10(Math.max(10, params.followers)) / 2);
   const anchor = params.pastAvg && params.pastAvg > 0 ? params.pastAvg : 120;
   const one = params.scarcity === "1/1";
+
   let suggested = anchor * sizeFactor * timeFactor * socialFactor * (one ? 1.35 : 0.95);
   suggested = Math.round(suggested / 5) * 5;
+
   const editions = one ? 1 : params.sizeIn === "L" ? 20 : params.sizeIn === "M" ? 35 : 50;
   const editionPrice = one ? suggested : Math.max(15, Math.round((suggested * 0.35) / 5) * 5);
   const reserve = one ? Math.max(50, Math.round((suggested * 0.6) / 5) * 5) : undefined;
+
   return {
     suggested,
     editions,
@@ -183,7 +184,7 @@ type ChatMsg = {
   id: string;
   role: "user" | "assistant";
   text: string;
-  imageUrl?: string; // local preview URL
+  imageUrl?: string;
   ts: number;
 };
 
@@ -202,12 +203,25 @@ async function fileToBase64(file: File): Promise<string> {
   return btoa(binary);
 }
 
-/* ---------------- Supabase client fallback ---------------- */
-// If your app already exposes the supabase client on window.supabase,
-// we should prefer using that (no env parsing needed here).
 function getWindowSupabase(): any | null {
   const w = globalThis as any;
   return w?.window?.supabase || w?.supabase || null;
+}
+
+/* ---------- safe mini-markdown renderer: supports **bold** only ---------- */
+function renderBold(text: string) {
+  const parts: React.ReactNode[] = [];
+  const re = /\*\*(.+?)\*\*/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    parts.push(<b key={`${m.index}-${m[1]}`}>{m[1]}</b>);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return parts;
 }
 
 export default function AssistantDock() {
@@ -241,7 +255,7 @@ export default function AssistantDock() {
   useEffect(() => localStorage.setItem(OPEN_KEY, JSON.stringify(open)), [open]);
   useEffect(() => localStorage.setItem(POS_KEY, JSON.stringify(pos)), [pos]);
 
-  // lock page scroll when open (so scroll wheel scrolls chat, not page)
+  // lock page scroll when open
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
@@ -292,11 +306,9 @@ export default function AssistantDock() {
     [pos]
   );
 
-  // tools
   type ToolTab = "shortcuts" | "ai" | "mood" | "critique" | "pricing";
   const [tool, setTool] = useState<ToolTab>("ai");
 
-  // command input (shortcuts)
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("");
 
@@ -344,17 +356,17 @@ export default function AssistantDock() {
     setTimeout(() => setStatus(""), 900);
   }
 
-  // moodboard state
+  // moodboard
   const [moodPrompt, setMoodPrompt] = useState("batman sunny sea");
   const [moodImgs, setMoodImgs] = useState<string[]>([]);
   const moodPalette = useMemo(() => pickPalette(moodPrompt), [moodPrompt]);
 
-  // critique state
+  // critique
   const [critGoal, setCritGoal] = useState("print drop");
   const [critStyle, setCritStyle] = useState("digital painting");
   const [critNotes, setCritNotes] = useState<string[]>([]);
 
-  // pricing state
+  // pricing
   const [sizeIn, setSizeIn] = useState<"S" | "M" | "L">("M");
   const [minutes, setMinutes] = useState<number>(120);
   const [followers, setFollowers] = useState<number>(2500);
@@ -362,7 +374,7 @@ export default function AssistantDock() {
   const [scarcity, setScarcity] = useState<"1/1" | "editions">("1/1");
   const [pricing, setPricing] = useState<ReturnType<typeof priceCoach> | null>(null);
 
-  // AI chat state
+  // AI chat
   const [chat, setChat] = useState<ChatMsg[]>(() => [
     {
       id: uid(),
@@ -380,7 +392,6 @@ export default function AssistantDock() {
 
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    // auto-scroll to bottom on new messages
     const el = chatScrollRef.current;
     if (!el) return;
     el.scrollTop = el.scrollHeight;
@@ -439,7 +450,6 @@ export default function AssistantDock() {
         image_mime,
       };
 
-      // ✅ Preferred path: use your app’s existing Supabase client on window.supabase
       const wsb = getWindowSupabase();
       if (wsb?.functions?.invoke) {
         const { data, error } = await wsb.functions.invoke("assistant-chat", { body });
@@ -461,13 +471,14 @@ export default function AssistantDock() {
         return;
       }
 
-      // Fallback path: call Edge Function directly using anon key (never service role in browser)
       const SUPABASE_URL = getSupabaseUrl();
       const SUPABASE_ANON = getSupabaseAnonKey();
       if (!SUPABASE_URL || !SUPABASE_ANON) {
         const flags = envDebugFlags();
         throw new Error(
-          `Missing Supabase URL/anon key. Expected in app/.env:\n- VITE_SUPABASE_URL\n- VITE_SUPABASE_ANON_KEY\n\nFound flags: ${JSON.stringify(flags)}\n\nIf you just edited .env, restart the dev server.`
+          `Missing Supabase URL/anon key. Expected in app/.env:\n- VITE_SUPABASE_URL\n- VITE_SUPABASE_ANON_KEY\n\nFound flags: ${JSON.stringify(
+            flags
+          )}\n\nIf you just edited .env, restart the dev server.`
         );
       }
 
@@ -518,7 +529,6 @@ export default function AssistantDock() {
     }
   }
 
-  // videos
   const bubbleVideoSrc = [
     { src: "/images/chatbot.webm", type: "video/webm" },
     { src: "/images/chatbot.mp4", type: "video/mp4" },
@@ -537,7 +547,6 @@ export default function AssistantDock() {
 
   if (!root) return null;
 
-  // shared styles
   const pillBtn: React.CSSProperties = {
     padding: "10px 14px",
     borderRadius: 999,
@@ -651,7 +660,7 @@ export default function AssistantDock() {
               boxShadow: "0 30px 90px rgba(0,0,0,.65)",
               display: "grid",
               gridTemplateRows: "56px 1fr",
-              minHeight: 0, // ✅ allow internal scroll
+              minHeight: 0,
             }}
           >
             {/* Top bar */}
@@ -698,7 +707,7 @@ export default function AssistantDock() {
               style={{
                 display: "grid",
                 gridTemplateColumns: "42% 58%",
-                minHeight: 0, // ✅ important
+                minHeight: 0,
               }}
             >
               {/* LEFT: Kuro video */}
@@ -751,24 +760,9 @@ export default function AssistantDock() {
               </div>
 
               {/* RIGHT: tabs + content */}
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateRows: "60px 1fr",
-                  minHeight: 0, // ✅ important
-                }}
-              >
+              <div style={{ display: "grid", gridTemplateRows: "60px 1fr", minHeight: 0 }}>
                 {/* Tabs row */}
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 10,
-                    padding: "0 14px",
-                    borderBottom: "1px solid rgba(255,255,255,.10)",
-                    minHeight: 0,
-                  }}
-                >
+                <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 14px", borderBottom: "1px solid rgba(255,255,255,.10)" }}>
                   <button style={tabBtn(tool === "shortcuts")} onClick={() => setTool("shortcuts")}>
                     Shortcuts
                   </button>
@@ -787,28 +781,22 @@ export default function AssistantDock() {
                 </div>
 
                 {/* Content area */}
-                <div
-                  style={{
-                    padding: 14,
-                    minHeight: 0, // ✅ important
-                    overflow: "hidden", // keep scrolling inside tool panels
-                  }}
-                >
+                <div style={{ padding: 14, minHeight: 0, overflow: "hidden" }}>
                   {/* SHORTCUTS */}
                   {tool === "shortcuts" && (
                     <div style={{ ...cardStyle, padding: 14, height: "100%", minHeight: 0, overflowY: "auto" }}>
                       <div style={{ fontWeight: 800, fontSize: 16, marginBottom: 10 }}>Quick actions</div>
                       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                        <button className="assistant-action" style={pillBtn} onClick={() => runAction({ type: "TOGGLE_THEME", mode: "light" })}>
+                        <button style={pillBtn} onClick={() => runAction({ type: "TOGGLE_THEME", mode: "light" })}>
                           Light theme
                         </button>
-                        <button className="assistant-action" style={pillBtn} onClick={() => runAction({ type: "TOGGLE_THEME", mode: "dark" })}>
+                        <button style={pillBtn} onClick={() => runAction({ type: "TOGGLE_THEME", mode: "dark" })}>
                           Dark theme
                         </button>
-                        <button className="assistant-action" style={pillBtn} onClick={() => handleRun("go to account")}>
+                        <button style={pillBtn} onClick={() => handleRun("go to account")}>
                           Go to Account
                         </button>
-                        <button className="assistant-action" style={pillBtn} onClick={() => handleRun("tour")}>
+                        <button style={pillBtn} onClick={() => handleRun("tour")}>
                           Start tour
                         </button>
                       </div>
@@ -836,22 +824,13 @@ export default function AssistantDock() {
 
                   {/* AI CHAT */}
                   {tool === "ai" && (
-                    <div
-                      style={{
-                        height: "100%",
-                        minHeight: 0, // ✅ important
-                        display: "grid",
-                        gridTemplateRows: "1fr auto",
-                        gap: 10,
-                      }}
-                    >
-                      {/* Message list (SCROLLS) */}
+                    <div style={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "1fr auto", gap: 10 }}>
                       <div
                         ref={chatScrollRef}
                         style={{
                           ...cardStyle,
                           padding: 14,
-                          minHeight: 0, // ✅ enables overflow scroll in grid
+                          minHeight: 0,
                           height: "100%",
                           overflowY: "auto",
                           overscrollBehavior: "contain",
@@ -860,14 +839,7 @@ export default function AssistantDock() {
                         }}
                       >
                         {chat.map((m) => (
-                          <div
-                            key={m.id}
-                            style={{
-                              display: "flex",
-                              justifyContent: m.role === "user" ? "flex-end" : "flex-start",
-                              marginBottom: 10,
-                            }}
-                          >
+                          <div key={m.id} style={{ display: "flex", justifyContent: m.role === "user" ? "flex-end" : "flex-start", marginBottom: 10 }}>
                             <div
                               style={{
                                 maxWidth: "78%",
@@ -881,24 +853,17 @@ export default function AssistantDock() {
                               }}
                             >
                               {m.imageUrl && (
-                                <div
-                                  style={{
-                                    borderRadius: 12,
-                                    overflow: "hidden",
-                                    border: "1px solid rgba(255,255,255,.14)",
-                                    marginBottom: 10,
-                                  }}
-                                >
+                                <div style={{ borderRadius: 12, overflow: "hidden", border: "1px solid rgba(255,255,255,.14)", marginBottom: 10 }}>
                                   <img src={m.imageUrl} alt="attachment" style={{ width: "100%", height: 220, objectFit: "cover", display: "block" }} />
                                 </div>
                               )}
-                              <div dangerouslySetInnerHTML={{ __html: m.text.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>") }} />
+
+                              <div>{renderBold(m.text)}</div>
                             </div>
                           </div>
                         ))}
                       </div>
 
-                      {/* Composer */}
                       <div style={{ ...cardStyle, padding: 12 }}>
                         {chatErr && <div style={{ color: "#ff8a8a", fontSize: 12, marginBottom: 8 }}>{chatErr}</div>}
 
@@ -917,15 +882,7 @@ export default function AssistantDock() {
                           >
                             <img src={pickedPreview} alt="picked" style={{ width: 56, height: 56, objectFit: "cover", borderRadius: 10 }} />
                             <div style={{ flex: 1, minWidth: 0 }}>
-                              <div
-                                style={{
-                                  fontSize: 12,
-                                  color: "rgba(255,255,255,.75)",
-                                  overflow: "hidden",
-                                  textOverflow: "ellipsis",
-                                  whiteSpace: "nowrap",
-                                }}
-                              >
+                              <div style={{ fontSize: 12, color: "rgba(255,255,255,.75)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                                 {pickedFile?.name || "image"}
                               </div>
                               <div style={{ fontSize: 11, color: "rgba(255,255,255,.55)" }}>Attached — will be sent with your next message</div>
@@ -965,7 +922,6 @@ export default function AssistantDock() {
                             disabled={chatBusy}
                           />
 
-                          {/* attach */}
                           <label
                             style={{
                               width: 46,
@@ -995,15 +951,7 @@ export default function AssistantDock() {
                             />
                           </label>
 
-                          <button
-                            onClick={() => sendAiChat()}
-                            disabled={chatBusy}
-                            style={{
-                              ...pillBtn,
-                              padding: "12px 18px",
-                              opacity: chatBusy ? 0.6 : 1,
-                            }}
-                          >
+                          <button onClick={() => sendAiChat()} disabled={chatBusy} style={{ ...pillBtn, padding: "12px 18px", opacity: chatBusy ? 0.6 : 1 }}>
                             {chatBusy ? "Sending…" : "Send"}
                           </button>
                         </div>
@@ -1024,20 +972,11 @@ export default function AssistantDock() {
                           e.preventDefault();
                           const list = moodboardSources(moodPrompt, 10);
                           setMoodImgs(list);
-                          track("assistant_command", {
-                            tool: "moodboard",
-                            prompt: moodPrompt,
-                            variants: expandKeywords(moodPrompt),
-                          });
+                          track("assistant_command", { tool: "moodboard", prompt: moodPrompt, variants: expandKeywords(moodPrompt) });
                         }}
                       >
                         <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: 10 }}>
-                          <input
-                            value={moodPrompt}
-                            onChange={(e) => setMoodPrompt(e.target.value)}
-                            placeholder='e.g. "pastel cafe at dawn", "cyberpunk rainy city"'
-                            style={inputStyle}
-                          />
+                          <input value={moodPrompt} onChange={(e) => setMoodPrompt(e.target.value)} placeholder='e.g. "pastel cafe at dawn", "cyberpunk rainy city"' style={inputStyle} />
                           <button style={{ ...pillBtn, padding: "12px 16px" }} type="submit">
                             Make
                           </button>
@@ -1049,17 +988,7 @@ export default function AssistantDock() {
                           <div style={{ marginTop: 12, marginBottom: 8, fontSize: 12, color: "rgba(255,255,255,.65)" }}>Palette suggestion</div>
                           <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
                             {moodPalette.map((c, i) => (
-                              <div
-                                key={i}
-                                style={{
-                                  width: 30,
-                                  height: 18,
-                                  borderRadius: 8,
-                                  background: c,
-                                  border: "1px solid rgba(0,0,0,.3)",
-                                }}
-                                title={c}
-                              />
+                              <div key={i} style={{ width: 30, height: 18, borderRadius: 8, background: c, border: "1px solid rgba(0,0,0,.3)" }} title={c} />
                             ))}
                           </div>
 
@@ -1117,7 +1046,7 @@ export default function AssistantDock() {
                         <ul style={{ marginTop: 12, paddingLeft: 18, display: "grid", gap: 10 }}>
                           {critNotes.map((n, i) => (
                             <li key={i} style={{ lineHeight: 1.4 }}>
-                              <span dangerouslySetInnerHTML={{ __html: n.replace(/\*\*(.*?)\*\*/g, "<b>$1</b>") }} />
+                              {renderBold(n)}
                             </li>
                           ))}
                         </ul>

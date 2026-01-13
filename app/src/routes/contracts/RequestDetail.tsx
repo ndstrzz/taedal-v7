@@ -3,27 +3,70 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
-  getRequestWithThread, postLicenseMessage, acceptPatch, acceptOffer,
-  type LicenseRequest, type LicenseThreadMsg, type LicenseTerms,
-  stringifyTerritory, formatMoney, generateContractPdf, uploadExecutedPdf, uploadAttachment
+  getRequestWithThread,
+  postLicenseMessage,
+  acceptPatch,
+  acceptOffer,
+  type LicenseRequest,
+  type LicenseThreadMsg,
+  type LicenseTerms,
+  stringifyTerritory,
+  formatMoney,
+  generateContractPdf,
+  uploadExecutedPdf,
+  uploadAttachment,
 } from "../../lib/licensing";
 
-type Profile = { id: string; display_name: string | null; username: string | null; avatar_url: string | null };
+type Profile = {
+  id: string;
+  display_name: string | null;
+  username: string | null;
+  avatar_url: string | null;
+};
 type Artwork = { id: string; title: string | null; image_url: string | null };
 
-const nameOf = (p?: Profile | null) => p?.display_name || p?.username || (p?.id ? p.id.slice(0, 6) : "—");
+const nameOf = (p?: Profile | null) =>
+  p?.display_name || p?.username || (p?.id ? p.id.slice(0, 6) : "—");
 
-function Avatar({ url, name, size = 28 }: { url?: string | null; name: string; size?: number }) {
+function Avatar({
+  url,
+  name,
+  size = 28,
+}: {
+  url?: string | null;
+  name: string;
+  size?: number;
+}) {
   return url ? (
-    <img src={url} alt={name} title={name} className="rounded-full object-cover ring-1 ring-white/10" style={{ width: size, height: size }} />
+    <img
+      src={url}
+      alt={name}
+      title={name}
+      className="rounded-full object-cover ring-1 ring-white/10"
+      style={{ width: size, height: size }}
+    />
   ) : (
-    <div title={name} className="grid place-items-center bg-white/10 ring-1 ring-white/10"
-      style={{ width: size, height: size, borderRadius: size / 2, fontSize: Math.max(10, size / 3) }}>
+    <div
+      title={name}
+      className="grid place-items-center bg-white/10 ring-1 ring-white/10"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        fontSize: Math.max(10, size / 3),
+      }}
+    >
       {(name[0] || "•").toUpperCase()}
     </div>
   );
 }
-const FieldRow = ({ label, children }: { label: string; children: React.ReactNode }) => (
+const FieldRow = ({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) => (
   <div className="flex items-start gap-2 text-sm">
     <div className="text-white/60 w-28 shrink-0">{label}</div>
     <div className="flex-1">{children}</div>
@@ -79,7 +122,19 @@ function throttle<T extends (...a: any[]) => void>(fn: T, ms: number) {
 
 /* ---------- long-token soft wrapping (every 30 chars) ---------- */
 function softWrapLongTokens(s: string, chunk = 30): string {
-  return s.replace(/\S{30,}/g, (w) => w.replace(new RegExp(`.{${chunk}}`, "g"), "$&\u200B"));
+  return s.replace(/\S{30,}/g, (w) =>
+    w.replace(new RegExp(`.{${chunk}}`, "g"), "$&\u200B")
+  );
+}
+
+function upsertMsg(list: LicenseThreadMsg[], next: LicenseThreadMsg) {
+  const i = list.findIndex((m) => m.id === next.id);
+  if (i >= 0) {
+    const copy = list.slice();
+    copy[i] = next;
+    return copy;
+  }
+  return [...list, next];
 }
 
 export default function RequestDetail() {
@@ -103,14 +158,22 @@ export default function RequestDetail() {
 
   // Typing & seen
   const [typingBy, setTypingBy] = useState<Record<string, number>>({});
-  const [seenBy, setSeenBy] = useState<Record<string, { msgId: string; ts: number }>>({});
+  const [seenBy, setSeenBy] = useState<Record<string, { msgId: string; ts: number }>>(
+    {}
+  );
   const messagesWrapRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  const iAmOwner = useMemo(() => me && req && req.owner_id === me, [me, req]);
-  const profileOf = (uid: string | undefined) => (uid === requester?.id ? requester : uid === owner?.id ? owner : null);
+  // Keep a single realtime channel ref for typing/seen broadcasts
+  const rtChanRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
 
-  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs.length]);
+  const iAmOwner = useMemo(() => me && req && req.owner_id === me, [me, req]);
+  const profileOf = (uid: string | undefined) =>
+    uid === requester?.id ? requester : uid === owner?.id ? owner : null;
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [msgs.length]);
 
   useEffect(() => {
     let alive = true;
@@ -127,9 +190,21 @@ export default function RequestDetail() {
         setMsgs(messages);
 
         const [a, rq, ow] = await Promise.all([
-          supabase.from("artworks").select("id,title,image_url").eq("id", request.artwork_id).maybeSingle(),
-          supabase.from("profiles").select("id,display_name,username,avatar_url").eq("id", request.requester_id).maybeSingle(),
-          supabase.from("profiles").select("id,display_name,username,avatar_url").eq("id", request.owner_id).maybeSingle(),
+          supabase
+            .from("artworks")
+            .select("id,title,image_url")
+            .eq("id", request.artwork_id)
+            .maybeSingle(),
+          supabase
+            .from("profiles")
+            .select("id,display_name,username,avatar_url")
+            .eq("id", request.requester_id)
+            .maybeSingle(),
+          supabase
+            .from("profiles")
+            .select("id,display_name,username,avatar_url")
+            .eq("id", request.owner_id)
+            .maybeSingle(),
         ]);
         if (!alive) return;
         setArt(a.data as any);
@@ -141,36 +216,51 @@ export default function RequestDetail() {
         setLoading(false);
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [id]);
 
-  // Realtime: new messages
+  // Realtime: new messages (dedupe by id)
   useEffect(() => {
     if (!id) return;
     const channel = supabase
       .channel(`lr-${id}`)
-      .on("postgres_changes",
-        { event: "INSERT", schema: "public", table: "license_threads", filter: `request_id=eq.${id}` },
-        (payload) => setMsgs((cur) => [...cur, payload.new as unknown as LicenseThreadMsg])
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "license_threads",
+          filter: `request_id=eq.${id}`,
+        },
+        (payload) => {
+          const next = payload.new as unknown as LicenseThreadMsg;
+          setMsgs((cur) => upsertMsg(cur, next));
+        }
       )
       .subscribe();
-    return () => { supabase.removeChannel(channel); };
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [id]);
 
-  // Realtime: typing + seen presence/broadcast
+  // Realtime: typing + seen presence/broadcast (single subscribed channel)
   useEffect(() => {
     if (!id) return;
-    let unsubbed = false;
-    let chan: ReturnType<typeof supabase.channel> | null = null;
+
+    let alive = true;
 
     (async () => {
       const { data: sess } = await supabase.auth.getSession();
       const uid = sess.session?.user?.id;
       if (!uid) return;
 
-      chan = supabase.channel(`lr-${id}-rt`, {
+      const chan = supabase.channel(`lr-${id}-rt`, {
         config: { broadcast: { self: false }, presence: { key: uid } },
       });
+      rtChanRef.current = chan;
 
       chan.on("broadcast", { event: "typing" }, (payload: any) => {
         const from = payload?.payload?.user_id;
@@ -184,20 +274,26 @@ export default function RequestDetail() {
         const msgId = payload?.payload?.msg_id;
         const ts = payload?.payload?.ts;
         if (!from || from === uid || !msgId) return;
-        setSeenBy((cur) => ({ ...cur, [from]: { msgId, ts: Number(ts) || Date.now() } }));
+        setSeenBy((cur) => ({
+          ...cur,
+          [from]: { msgId, ts: Number(ts) || Date.now() },
+        }));
       });
 
-      const status = await chan.subscribe((s) => {
+      await chan.subscribe((s) => {
+        if (!alive) return;
         if (s === "SUBSCRIBED") {
-          chan?.track({ user_id: uid, ts: Date.now() });
+          chan.track({ user_id: uid, ts: Date.now() }).catch(() => {});
         }
       });
-      if (unsubbed) supabase.removeChannel(chan);
     })();
 
     return () => {
-      unsubbed = true;
-      if (chan) supabase.removeChannel(chan);
+      alive = false;
+      if (rtChanRef.current) {
+        supabase.removeChannel(rtChanRef.current);
+        rtChanRef.current = null;
+      }
     };
   }, [id]);
 
@@ -214,24 +310,35 @@ export default function RequestDetail() {
     return () => clearInterval(t);
   }, []);
 
-  // emit typing (throttled)
-  const sendTyping = useMemo(() => throttle(async () => {
-    const { data: sess } = await supabase.auth.getSession();
-    const uid = sess.session?.user?.id;
-    if (!uid || !id) return;
-    await supabase.channel(`lr-${id}-rt`).send({
-      type: "broadcast",
-      event: "typing",
-      payload: { user_id: uid, at: Date.now() },
-    });
-  }, 1200), [id]);
+  // emit typing (throttled) — uses subscribed channel
+  const sendTyping = useMemo(
+    () =>
+      throttle(async () => {
+        const chan = rtChanRef.current;
+        if (!chan || !id) return;
 
-  // seen helper
+        const { data: sess } = await supabase.auth.getSession();
+        const uid = sess.session?.user?.id;
+        if (!uid) return;
+
+        await chan.send({
+          type: "broadcast",
+          event: "typing",
+          payload: { user_id: uid, at: Date.now() },
+        });
+      }, 1200),
+    [id]
+  );
+
+  // seen helper — uses subscribed channel
   async function sendSeenIfNeeded() {
-    if (!id || !me || msgs.length === 0) return;
+    const chan = rtChanRef.current;
+    if (!chan || !id || !me || msgs.length === 0) return;
+
     const last = msgs[msgs.length - 1];
     if (last.author_id === me) return;
-    await supabase.channel(`lr-${id}-rt`).send({
+
+    await chan.send({
       type: "broadcast",
       event: "seen",
       payload: { user_id: me, msg_id: last.id, ts: Date.now() },
@@ -242,22 +349,26 @@ export default function RequestDetail() {
   useEffect(() => {
     const el = messagesWrapRef.current;
     if (!el) return;
+
     const onScroll = () => {
       if (el.scrollHeight - el.scrollTop - el.clientHeight < 8) {
         sendSeenIfNeeded();
       }
     };
+
     el.addEventListener("scroll", onScroll);
     onScroll();
     return () => el.removeEventListener("scroll", onScroll);
-  }, [msgs.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [msgs.length, me, id]);
 
   async function send(body: string, patch?: Partial<LicenseTerms> | null) {
     if (!body.trim() && !patch) return;
     setBusy(true);
     try {
       const m = await postLicenseMessage(id!, body.trim(), patch ?? null);
-      setMsgs((list) => [...list, m]);
+      // optimistic upsert (realtime will also deliver, so dedupe matters)
+      setMsgs((list) => upsertMsg(list, m));
       setInput("");
     } catch (e: any) {
       setMsg(e?.message || "Failed to post message.");
@@ -299,7 +410,9 @@ export default function RequestDetail() {
       setMsg(null);
       setBusy(true);
       const signer_name = iAmOwner ? nameOf(owner) : nameOf(requester);
-      const { updated, sha256 } = await uploadExecutedPdf(req.id, file, { name: signer_name || "" });
+      const { updated, sha256 } = await uploadExecutedPdf(req.id, file, {
+        name: signer_name || "",
+      });
       setReq(updated);
       await postLicenseMessage(req.id, `Uploaded executed PDF (sha256: ${sha256}).`, null);
       setMsg("Executed PDF uploaded ✔️");
@@ -360,7 +473,11 @@ export default function RequestDetail() {
       setMsg(e?.message || "Document generation failed");
       try {
         w.document.open();
-        w.document.write(`<pre style="padding:24px;color:#fff;background:#1a1a1a">Error: ${String(e?.message || e)}</pre>`);
+        w.document.write(
+          `<pre style="padding:24px;color:#fff;background:#1a1a1a">Error: ${String(
+            e?.message || e
+          )}</pre>`
+        );
         w.document.close();
       } catch {}
     } finally {
@@ -403,12 +520,17 @@ export default function RequestDetail() {
   /* ------------------------------ UI ------------------------------ */
   return (
     <div className="fixed inset-0 z-[60]">
-      <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" onClick={() => nav("/contracts")} />
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={() => nav("/contracts")}
+      />
       <div className="absolute inset-0 m-auto max-w-[1100px] w-[96vw] max-h-[92vh] rounded-2xl border border-white/15 bg-neutral-950 shadow-2xl overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10 bg-white/[0.03]">
           <div className="h-10 w-10 rounded-lg overflow-hidden bg-neutral-900">
-            {art?.image_url ? <img src={art.image_url} className="h-full w-full object-cover" /> : null}
+            {art?.image_url ? (
+              <img src={art.image_url} className="h-full w-full object-cover" />
+            ) : null}
           </div>
           <div className="min-w-0">
             <div className="font-semibold truncate">{art?.title || "Untitled"}</div>
@@ -422,7 +544,12 @@ export default function RequestDetail() {
             <span className="text-white/40">↔</span>
             <Avatar url={owner?.avatar_url} name={nameOf(owner)} />
             <span className="text-sm">{nameOf(owner)}</span>
-            <button className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10" onClick={() => nav("/contracts")}>✕</button>
+            <button
+              className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10"
+              onClick={() => nav("/contracts")}
+            >
+              ✕
+            </button>
           </div>
         </div>
 
@@ -472,20 +599,35 @@ export default function RequestDetail() {
               )}
               {typeof working.credit_required === "boolean" && (
                 <FieldRow label="Attribution">
-                  {working.credit_required ? `yes${(working as any).credit_line ? ` — ${(working as any).credit_line}` : ""}` : "no"}
+                  {working.credit_required
+                    ? `yes${
+                        (working as any).credit_line ? ` — ${(working as any).credit_line}` : ""
+                      }`
+                    : "no"}
                 </FieldRow>
               )}
 
-              <div className="text-[12px] text-white/60">Status: <span className="capitalize">{req.status}</span></div>
+              <div className="text-[12px] text-white/60">
+                Status: <span className="capitalize">{req.status}</span>
+              </div>
 
               <div className="mt-2 grid grid-cols-2 gap-2">
-                <button className="btn" onClick={onGeneratePdf} disabled={busy}>Generate PDF</button>
+                <button className="btn" onClick={onGeneratePdf} disabled={busy}>
+                  Generate PDF
+                </button>
                 <label className="btn bg-white/0 border border-white/20 hover:bg-white/10 cursor-pointer text-center">
-                  <input type="file" accept="application/pdf" className="hidden" onChange={onUploadExecuted} />
+                  <input
+                    type="file"
+                    accept="application/pdf"
+                    className="hidden"
+                    onChange={onUploadExecuted}
+                  />
                   Upload signed PDF
                 </label>
                 {req.status !== "accepted" && iAmOwner && (
-                  <button className="btn col-span-2" onClick={onAcceptOffer} disabled={busy}>Accept Offer</button>
+                  <button className="btn col-span-2" onClick={onAcceptOffer} disabled={busy}>
+                    Accept Offer
+                  </button>
                 )}
               </div>
 
@@ -500,9 +642,18 @@ export default function RequestDetail() {
                       </a>
                     </div>
                   )}
-                  {req.executed_pdf_sha256 && <div>SHA-256: <code className="break-all">{req.executed_pdf_sha256}</code></div>}
+                  {req.executed_pdf_sha256 && (
+                    <div>
+                      SHA-256: <code className="break-all">{req.executed_pdf_sha256}</code>
+                    </div>
+                  )}
                   {req.signed_at && <div>Signed at: {new Date(req.signed_at).toLocaleString()}</div>}
-                  {req.signer_name && <div>Signer: {req.signer_name}{req.signer_title ? `, ${req.signer_title}` : ""}</div>}
+                  {req.signer_name && (
+                    <div>
+                      Signer: {req.signer_name}
+                      {req.signer_title ? `, ${req.signer_title}` : ""}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -518,7 +669,9 @@ export default function RequestDetail() {
               <AttachmentList requestId={req.id} />
             </div>
 
-            <Link to="/contracts" className="btn w-full">Back to contracts</Link>
+            <Link to="/contracts" className="btn w-full">
+              Back to contracts
+            </Link>
           </div>
 
           {/* RIGHT: Thread */}
@@ -548,7 +701,10 @@ export default function RequestDetail() {
                 className="flex-1 input min-h-[44px]"
                 placeholder="Type your message… (Enter to send, Shift+Enter for newline)"
                 value={input}
-                onChange={(e) => { setInput(e.target.value); sendTyping(); }}
+                onChange={(e) => {
+                  setInput(e.target.value);
+                  sendTyping();
+                }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -556,12 +712,12 @@ export default function RequestDetail() {
                   }
                 }}
               />
-              <button className="btn shrink-0" onClick={() => send(input)} title="Send">➤</button>
+              <button className="btn shrink-0" onClick={() => send(input)} title="Send">
+                ➤
+              </button>
             </div>
 
-            {someoneSeenMyLast && (
-              <div className="px-3 pb-2 text-[11px] text-white/50">Seen</div>
-            )}
+            {someoneSeenMyLast && <div className="px-3 pb-2 text-[11px] text-white/50">Seen</div>}
           </div>
         </div>
       </div>
@@ -588,15 +744,16 @@ export default function RequestDetail() {
 
 /* ------------------------------ ChatPane ------------------------------ */
 
-function ChatPane({
-  me, msgs, req, profileOf, onAcceptPatch, chatEndRef, seenBy
-}: any) {
+function ChatPane({ me, msgs, req, profileOf, onAcceptPatch, chatEndRef, seenBy }: any) {
   const sameAuthorRecent = (a: any, b: any, mins = 6) =>
-    !!a && !!b && a.author_id === b.author_id &&
-    Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) < mins * 60 * 1000;
+    !!a &&
+    !!b &&
+    a.author_id === b.author_id &&
+    Math.abs(new Date(b.created_at).getTime() - new Date(a.created_at).getTime()) <
+      mins * 60 * 1000;
 
   const hasSeen = (msgId: string) => {
-    return Object.entries(seenBy || {}).some(([uid, s]: any) => s?.msgId === msgId);
+    return Object.entries(seenBy || {}).some(([, s]: any) => s?.msgId === msgId);
   };
 
   return (
@@ -608,61 +765,79 @@ function ChatPane({
         const author = profileOf(m.author_id);
         const working = req.requested;
 
-        const diffs = m.patch ? ((): any[] => {
-          const out: any[] = [];
-          const keys = Object.keys(m.patch!);
-          for (const k of keys) out.push({ key: k, before: (working as any)[k], after: (m.patch as any)[k] });
-          return out;
-        })() : [];
+        const diffs = m.patch
+          ? (() => {
+              const out: any[] = [];
+              const keys = Object.keys(m.patch!);
+              for (const k of keys)
+                out.push({ key: k, before: (working as any)[k], after: (m.patch as any)[k] });
+              return out;
+            })()
+          : [];
 
         const bodyText = m.body ? softWrapLongTokens(m.body, 30) : "";
 
         return (
-          <div key={m.id}
-            className={`mb-2 ${mine ? "pl-12" : "pr-12"}` /* keep gutters symmetric */}
-          >
+          <div key={m.id} className={`mb-2 ${mine ? "pl-12" : "pr-12"}`}>
             <div className={`flex ${mine ? "justify-end" : "justify-start"} items-end gap-2`}>
-              {/* avatar column: shown only for first in group, otherwise a spacer to keep left edge aligned */}
-              {showHead
-                ? <Avatar url={author?.avatar_url} name={author ? (author.display_name || author.username || author.id) : "User"} size={32} />
-                : <div style={{ width: 32, height: 32 }} />}
-              {/* bubble + timestamp column */}
+              {showHead ? (
+                <Avatar
+                  url={author?.avatar_url}
+                  name={author ? author.display_name || author.username || author.id : "User"}
+                  size={32}
+                />
+              ) : (
+                <div style={{ width: 32, height: 32 }} />
+              )}
+
               <div className={`max-w-[72%] ${mine ? "items-end" : "items-start"} flex flex-col`}>
-                {/* bubble */}
-                <div className={`rounded-2xl px-3 py-2 leading-snug break-words ${mine ? "bg-indigo-500 text-black" : "bg-white/10 text-white"}`}>
+                <div
+                  className={`rounded-2xl px-3 py-2 leading-snug break-words ${
+                    mine ? "bg-indigo-500 text-black" : "bg-white/10 text-white"
+                  }`}
+                >
                   {!mine && showHead && (
                     <div className="text-[11px] text-white/70 mb-0.5">
-                      {author ? (author.display_name || author.username || author.id) : "User"}
+                      {author ? author.display_name || author.username || author.id : "User"}
                     </div>
                   )}
-                  {m.body && (
-                    <div className="whitespace-pre-wrap text-sm">
-                      {bodyText}
-                    </div>
-                  )}
+
+                  {m.body && <div className="whitespace-pre-wrap text-sm">{bodyText}</div>}
 
                   {m.patch && (
                     <div className={`rounded-lg mt-2 ${mine ? "bg-black/10 text-black" : "bg-white/5"} p-2 text-xs`}>
                       <ul className="space-y-1">
-                        {diffs.map((d, idx) => (
+                        {diffs.map((d: any, idx: number) => (
                           <li key={idx} className="break-words">
                             <span className="text-white/60">{String(d.key)}:</span>{" "}
                             <span className="line-through opacity-70 mr-1">{formatVal(d.before)}</span>
-                            <span>→ <b>{formatVal(d.after)}</b></span>
+                            <span>
+                              → <b>{formatVal(d.after)}</b>
+                            </span>
                           </li>
                         ))}
                       </ul>
                       <div className="mt-2">
-                        <button className={`px-2 py-1 rounded-md text-xs ${mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"}`} onClick={() => onAcceptPatch(m.patch!)}>
+                        <button
+                          className={`px-2 py-1 rounded-md text-xs ${
+                            mine ? "bg-black/20" : "bg-white/10 hover:bg-white/20"
+                          }`}
+                          onClick={() => onAcceptPatch(m.patch!)}
+                        >
                           Accept change
                         </button>
                       </div>
                     </div>
                   )}
                 </div>
-                {/* timestamp aligned to bubble edge */}
+
                 <div className={`mt-1 text-[10px] ${mine ? "text-right text-white/60" : "text-left text-white/50"}`}>
-                  {new Date(m.created_at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit", month: "short", day: "numeric" })}
+                  {new Date(m.created_at).toLocaleString(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    month: "short",
+                    day: "numeric",
+                  })}
                   {mine && i === msgs.length - 1 && hasSeen(m.id) && <span className="ml-2">• Seen</span>}
                 </div>
               </div>
@@ -692,7 +867,10 @@ function EditTermsModal({
     setForm((f) => ({ ...f, [k]: v }));
   }
   const parseList = (s: string) =>
-    s.split(",").map((x) => x.trim()).filter(Boolean);
+    s
+      .split(",")
+      .map((x) => x.trim())
+      .filter(Boolean);
 
   const [feeAmount, setFeeAmount] = useState<string>(
     initial.fee?.amount != null ? String(initial.fee.amount) : ""
@@ -702,24 +880,23 @@ function EditTermsModal({
   const delivRef = useRef<HTMLTextAreaElement>(null);
   const notesRef = useRef<HTMLTextAreaElement>(null);
 
-const handleBulletEnter = (
-  ref: React.RefObject<HTMLTextAreaElement | null>,
-  key: "deliverables" | "usage_notes"
-) => (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-  if (e.key !== "Enter" || !ref.current) return;
-  const sel = ref.current.selectionStart;
-  const res = continueBullet(ref.current.value, sel);
-  if (res) {
-    e.preventDefault();
-    const next = res.text;
-    setForm((f) => ({ ...f, [key]: next } as any));
-    queueMicrotask(() => {
-      if (!ref.current) return;
-      const pos = sel + res.deltaCaret;
-      ref.current.selectionStart = ref.current.selectionEnd = pos;
-    });
-  }
-};
+  const handleBulletEnter =
+    (ref: React.RefObject<HTMLTextAreaElement | null>, key: "deliverables" | "usage_notes") =>
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key !== "Enter" || !ref.current) return;
+      const sel = ref.current.selectionStart;
+      const res = continueBullet(ref.current.value, sel);
+      if (res) {
+        e.preventDefault();
+        const next = res.text;
+        setForm((f) => ({ ...f, [key]: next } as any));
+        queueMicrotask(() => {
+          if (!ref.current) return;
+          const pos = sel + res.deltaCaret;
+          ref.current.selectionStart = ref.current.selectionEnd = pos;
+        });
+      }
+    };
 
   return (
     <div className="fixed inset-0 z-[70]">
@@ -727,17 +904,15 @@ const handleBulletEnter = (
       <div className="absolute inset-0 m-auto max-w-[720px] w-[94vw] max-height-[88vh] overflow-auto rounded-2xl border border-white/15 bg-neutral-950 p-4">
         <div className="flex items-center justify-between mb-2">
           <div className="text-lg font-semibold">Propose edits</div>
-          <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10">✕</button>
+          <button onClick={onClose} className="h-8 w-8 grid place-items-center rounded-lg hover:bg-white/10">
+            ✕
+          </button>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <label className="text-sm">
             <div className="text-white/60 mb-1">Purpose</div>
-            <input
-              className="input w-full"
-              value={form.purpose || ""}
-              onChange={(e) => set("purpose", e.target.value)}
-            />
+            <input className="input w-full" value={form.purpose || ""} onChange={(e) => set("purpose", e.target.value)} />
           </label>
 
           <label className="text-sm">
@@ -754,11 +929,7 @@ const handleBulletEnter = (
             <div className="text-white/60 mb-1">Territory (comma-separated for multiple)</div>
             <input
               className="input w-full"
-              value={
-                Array.isArray(form.territory)
-                  ? form.territory.join(", ")
-                  : (form.territory ?? "")
-              }
+              value={Array.isArray(form.territory) ? form.territory.join(", ") : form.territory ?? ""}
               onChange={(e) => {
                 const raw = e.target.value;
                 set("territory", raw.includes(",") ? (parseList(raw) as any) : (raw as any));
@@ -768,20 +939,12 @@ const handleBulletEnter = (
 
           <label className="text-sm md:col-span-2">
             <div className="text-white/60 mb-1">Media (comma-separated)</div>
-            <input
-              className="input w-full"
-              value={(form.media || []).join(", ")}
-              onChange={(e) => set("media", parseList(e.target.value) as any)}
-            />
+            <input className="input w-full" value={(form.media || []).join(", ")} onChange={(e) => set("media", parseList(e.target.value) as any)} />
           </label>
 
           <label className="text-sm">
             <div className="text-white/60 mb-1">Exclusivity</div>
-            <select
-              className="input w-full"
-              value={form.exclusivity || "non-exclusive"}
-              onChange={(e) => set("exclusivity", e.target.value as any)}
-            >
+            <select className="input w-full" value={form.exclusivity || "non-exclusive"} onChange={(e) => set("exclusivity", e.target.value as any)}>
               <option value="exclusive">exclusive</option>
               <option value="non-exclusive">non-exclusive</option>
               <option value="category-exclusive">category-exclusive</option>
@@ -791,40 +954,23 @@ const handleBulletEnter = (
           <div className="text-sm grid grid-cols-[1fr_auto] gap-2">
             <label>
               <div className="text-white/60 mb-1">Fee amount</div>
-              <input
-                className="input w-full"
-                inputMode="decimal"
-                value={feeAmount}
-                onChange={(e) => setFeeAmount(e.target.value)}
-              />
+              <input className="input w-full" inputMode="decimal" value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} />
             </label>
             <label>
               <div className="text-white/60 mb-1">Currency</div>
-              <input
-                className="input w-24"
-                value={feeCurrency}
-                onChange={(e) => setFeeCurrency(e.target.value.toUpperCase())}
-              />
+              <input className="input w-24" value={feeCurrency} onChange={(e) => setFeeCurrency(e.target.value.toUpperCase())} />
             </label>
           </div>
 
           <label className="text-sm md:col-span-2 flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={!!form.credit_required}
-              onChange={(e) => set("credit_required", e.target.checked as any)}
-            />
+            <input type="checkbox" checked={!!form.credit_required} onChange={(e) => set("credit_required", e.target.checked as any)} />
             <span>Attribution required</span>
           </label>
 
           {form.credit_required && (
             <label className="text-sm md:col-span-2">
               <div className="text-white/60 mb-1">Credit line</div>
-              <input
-                className="input w-full"
-                value={(form as any).credit_line || ""}
-                onChange={(e) => set("credit_line" as any, e.target.value as any)}
-              />
+              <input className="input w-full" value={(form as any).credit_line || ""} onChange={(e) => set("credit_line" as any, e.target.value as any)} />
             </label>
           )}
 
@@ -865,9 +1011,7 @@ const handleBulletEnter = (
               const patch: Partial<LicenseTerms> = { ...form };
               if (feeAmount || feeCurrency) {
                 const amt = Number(feeAmount);
-                patch.fee = isFinite(amt) && amt > 0
-                  ? { amount: amt, currency: feeCurrency || "USD" }
-                  : undefined;
+                patch.fee = isFinite(amt) && amt > 0 ? { amount: amt, currency: feeCurrency || "USD" } : undefined;
               }
               onSubmit(patch);
             }}
@@ -886,11 +1030,17 @@ function AttachmentList({ requestId }: { requestId: string }) {
   const [rows, setRows] = useState<any[]>([]);
   useEffect(() => {
     (async () => {
-      const { data } = await supabase.from("license_attachments").select("*").eq("request_id", requestId).order("created_at", { ascending: false });
+      const { data } = await supabase
+        .from("license_attachments")
+        .select("*")
+        .eq("request_id", requestId)
+        .order("created_at", { ascending: false });
       setRows(data ?? []);
     })();
   }, [requestId]);
+
   if (rows.length === 0) return <div className="text-xs text-white/60">No attachments yet.</div>;
+
   return (
     <ul className="space-y-2 text-sm">
       {rows.map((r) => (
@@ -898,8 +1048,9 @@ function AttachmentList({ requestId }: { requestId: string }) {
           <div className="truncate">{r.path.split("/").pop()}</div>
           <a
             className="underline text-xs"
-            href={(supabase.storage.from("license_attachments").getPublicUrl(r.path).data.publicUrl)}
-            target="_blank" rel="noreferrer"
+            href={supabase.storage.from("license_attachments").getPublicUrl(r.path).data.publicUrl}
+            target="_blank"
+            rel="noreferrer"
           >
             Open
           </a>
