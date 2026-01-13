@@ -40,7 +40,8 @@
     "react-router-dom": "^7.9.4",
     "three": "^0.172.0",
     "three-stdlib": "^2.36.0",
-    "zod": "^4.1.12"
+    "zod": "^4.1.12",
+    "gsap": "^3.12.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",
