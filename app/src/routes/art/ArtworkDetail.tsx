@@ -20,7 +20,7 @@ import {
 import RequestLicenseModal from "../../components/RequestLicenseModal";
 import PhysicalBadge from "../../components/art/PhysicalBadge";
 import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
-import QRCode from "qrcode";
+
 
 /** ✅ DM helpers */
 import {
@@ -125,7 +125,6 @@ function ShareQRModal({
           </button>
         </div>
 
-        <div className="text-xs text-white/70 break-all mb-2">{url}</div>
         {img ? (
           <div className="flex flex-col items-center gap-2">
             <img src={img} alt="Artwork QR" className="bg-white p-2 rounded-md" />

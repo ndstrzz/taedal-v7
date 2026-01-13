@@ -1,3 +1,4 @@
+// C:\Users\User\Downloads\taedal-v7\app\src\lib\listings.ts
 import { supabase } from "./supabase";
 
 export type Listing = {
@@ -5,7 +6,14 @@ export type Listing = {
   artwork_id: string;
   seller_id: string;
   type: "fixed_price" | "auction" | "coming_soon";
-  status: "draft" | "active" | "paused" | "ended" | "canceled";
+  status:
+    | "draft"
+    | "active"
+    | "paused"
+    | "ended"
+    | "canceled"
+    | "closed"
+    | "paid";
   sale_currency: string | null;
   fixed_price: number | null;
   quantity?: number | null;
@@ -79,10 +87,9 @@ export async function fetchActiveListings(limit = 24): Promise<JoinedListing[]> 
     .from("listings")
     .select(
       `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at, seller_wallet,
-      artworks!inner (
-        id, title, image_url, creator_id, status
-      )
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
+      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet,
+      artworks!inner ( id, title, image_url, creator_id, status )
     `
     )
     .eq("status", "active")
@@ -101,7 +108,8 @@ export async function fetchActiveListingForArtwork(
     .from("listings")
     .select(
       `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
+      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
     `
     )
     .eq("artwork_id", artworkId)
@@ -109,6 +117,49 @@ export async function fetchActiveListingForArtwork(
     .maybeSingle<Listing>();
 
   // PGRST116 = no rows
+  if (error && (error as any).code !== "PGRST116") throw error;
+  return data ?? null;
+}
+
+/** Fetch any listing by id (ended/closed/paid included). */
+export async function fetchListingById(
+  listingId: string
+): Promise<Listing | null> {
+  const { data, error } = await supabase
+    .from("listings")
+    .select(
+      `
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
+      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
+    `
+    )
+    .eq("id", listingId)
+    .maybeSingle<Listing>();
+
+  if (error && (error as any).code !== "PGRST116") throw error;
+  return data ?? null;
+}
+
+/**
+ * Fetch the latest listing for an artwork (any status).
+ * Useful for showing ended auctions when no active listing exists.
+ */
+export async function fetchLatestListingForArtwork(
+  artworkId: string
+): Promise<Listing | null> {
+  const { data, error } = await supabase
+    .from("listings")
+    .select(
+      `
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
+      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
+    `
+    )
+    .eq("artwork_id", artworkId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle<Listing>();
+
   if (error && (error as any).code !== "PGRST116") throw error;
   return data ?? null;
 }
