@@ -509,9 +509,7 @@ function Pill({
 function StatBox({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-white/60">
-        {label}
-      </div>
+      <div className="text-[10px] uppercase tracking-wide text-white/60">{label}</div>
       <div className="text-sm font-medium">{value}</div>
     </div>
   );
@@ -529,9 +527,7 @@ function Card({
   className?: string;
 }) {
   return (
-    <div
-      className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}
-    >
+    <div className={`rounded-2xl border border-white/10 bg-white/[0.04] p-4 ${className}`}>
       {(title || right) && (
         <div className="mb-3 flex items-center justify-between gap-3">
           {title ? <h3 className="text-sm font-semibold">{title}</h3> : <div />}
@@ -545,13 +541,7 @@ function Card({
 
 /* ------------------------------ Countdown ------------------------------ */
 
-function Countdown({
-  endAt,
-  onElapsed,
-}: {
-  endAt: string;
-  onElapsed?: () => void;
-}) {
+function Countdown({ endAt, onElapsed }: { endAt: string; onElapsed?: () => void }) {
   const [now, setNow] = useState(() => Date.now());
   const end = useMemo(() => new Date(endAt).getTime(), [endAt]);
 
@@ -573,9 +563,7 @@ function Countdown({
 
   const Box = ({ v, label }: { v: number; label: string }) => (
     <div className="px-2 py-1 rounded-md bg-white/10 border border-white/10 text-center">
-      <div className="text-sm font-semibold tabular-nums">
-        {v.toString().padStart(2, "0")}
-      </div>
+      <div className="text-sm font-semibold tabular-nums">{v.toString().padStart(2, "0")}</div>
       <div className="text-[10px] text-white/70">{label}</div>
     </div>
   );
@@ -619,6 +607,64 @@ function fmtCurrency(n: number | null | undefined, code?: string | null) {
   }
 }
 
+/**
+ * ✅ Try to post a plain-text DM message.
+ * We don't know your exact messages API export, so we attempt a few common patterns.
+ * If none exist, we fail silently (art card still sends).
+ */
+async function postTextDM(threadId: string, text: string) {
+  const apiMod: any = await import("../../features/messages/api").catch(() => ({} as any));
+  const fn =
+    apiMod?.dmSendMessage ||
+    apiMod?.dmSendText ||
+    apiMod?.dmSendMessageText ||
+    apiMod?.dmPostMessage ||
+    apiMod?.postMessage ||
+    null;
+
+  if (typeof fn === "function") {
+    return await fn(threadId, text);
+  }
+
+  // Optional fallback: if your DB schema supports inserting into a `messages` table.
+  // This is safe to try; if table doesn't exist / RLS blocks, it will just throw and we swallow.
+  try {
+    await supabase.from("messages").insert({
+      thread_id: threadId,
+      body: text,
+      kind: "text",
+    } as any);
+  } catch {
+    // swallow: no-op, we still sent the artwork card
+  }
+}
+
+function buildWinnerCongratsMessage(args: {
+  artworkTitle: string;
+  amount: number | null;
+  currency: string;
+}) {
+  const title = args.artworkTitle || "this artwork";
+  const price =
+    args.amount != null && isFinite(Number(args.amount))
+      ? `${args.amount} ${args.currency}`
+      : `the winning amount (${args.currency})`;
+
+  // Keep it short, clear, and action-oriented.
+  return [
+    `🎉 Congratulations! You’re the winning bidder for “${title}”.`,
+    ``,
+    `Final price: ${price}`,
+    ``,
+    `Please complete your purchase to secure the artwork.`,
+    `You can pay using:`,
+    `• Stripe (card / bank)`,
+    `• MetaMask (crypto)`,
+    ``,
+    `Open the artwork page and tap “Pay now” to choose your payment method.`,
+  ].join("\n");
+}
+
 /* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -652,15 +698,13 @@ export default function ArtworkDetail() {
   const [topBid, setTopBid] = useState<Bid | null>(null);
 
   /** ✅ Bid history */
-  const [bidHistory, setBidHistory] = useState<
-    (BidHistoryRow & { bidder?: Profile | null })[]
-  >([]);
+  const [bidHistory, setBidHistory] = useState<(BidHistoryRow & { bidder?: Profile | null })[]>(
+    []
+  );
   const [bidHistoryBusy, setBidHistoryBusy] = useState(false);
   const [bidHistoryHasMore, setBidHistoryHasMore] = useState(false);
 
-  const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(
-    null
-  );
+  const [topOffer, setTopOffer] = useState<{ amount: number; currency: string } | null>(null);
 
   const [bidInput, setBidInput] = useState<string>("");
   const [bidMsg, setBidMsg] = useState<string | null>(null);
@@ -671,13 +715,13 @@ export default function ArtworkDetail() {
 
   const [tab, setTab] = useState<"details" | "orders" | "activity">("details");
 
-  const [owners, setOwners] = useState<
-    { profile: Profile; quantity: number; updated_at: string }[]
-  >([]);
+  const [owners, setOwners] = useState<{ profile: Profile; quantity: number; updated_at: string }[]>(
+    []
+  );
 
-  const [sales, setSales] = useState<
-    (SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]
-  >([]);
+  const [sales, setSales] = useState<(SaleRow & { buyer?: Profile | null; seller?: Profile | null })[]>(
+    []
+  );
 
   const [pinLoading, setPinLoading] = useState(false);
   const [pinErr, setPinErr] = useState<string | null>(null);
@@ -800,7 +844,6 @@ export default function ArtworkDetail() {
 
       setBidHistoryHasMore(rows.length === limit);
     } catch (e: any) {
-      // don’t hard-fail the page
       console.warn("loadBidHistory failed:", e?.message ?? e);
     } finally {
       setBidHistoryBusy(false);
@@ -911,10 +954,7 @@ export default function ArtworkDetail() {
           setMoreFrom([]);
         }
 
-        await Promise.all([
-          loadOwners((data as Artwork).id),
-          loadSales((data as Artwork).id),
-        ]);
+        await Promise.all([loadOwners((data as Artwork).id), loadSales((data as Artwork).id)]);
         await loadTopOfferSafe((data as Artwork).id);
 
         if (l && (l as any).type === "auction") {
@@ -1007,25 +1047,15 @@ export default function ArtworkDetail() {
   }, [activeListing?.id]);
 
   async function loadOwners(artworkId: string) {
-    const { data } = await supabase
-      .from("ownerships")
-      .select("owner_id, quantity, updated_at")
-      .eq("artwork_id", artworkId);
+    const { data } = await supabase.from("ownerships").select("owner_id, quantity, updated_at").eq("artwork_id", artworkId);
 
-    const rows = (data ?? []) as {
-      owner_id: string;
-      quantity: number;
-      updated_at: string;
-    }[];
+    const rows = (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
     const ids = Array.from(new Set(rows.map((r) => r.owner_id))).filter(Boolean);
     if (ids.length === 0) {
       setOwners([]);
       return;
     }
-    const { data: profs } = await supabase
-      .from("profiles")
-      .select("id,username,display_name,avatar_url")
-      .in("id", ids);
+    const { data: profs } = await supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", ids);
 
     const map = new Map<string, Profile>();
     (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
@@ -1048,15 +1078,10 @@ export default function ArtworkDetail() {
       .order("sold_at", { ascending: false });
 
     const rows = (data ?? []) as SaleRow[];
-    const ids = Array.from(
-      new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))
-    ) as string[];
+    const ids = Array.from(new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))) as string[];
     let map = new Map<string, Profile>();
     if (ids.length > 0) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id,username,display_name,avatar_url")
-        .in("id", ids);
+      const { data: profs } = await supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", ids);
       (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
     }
     setSales(
@@ -1099,9 +1124,7 @@ export default function ArtworkDetail() {
     setPinErr(null);
     setPinData(null);
     try {
-      const { data, error } = await supabase.functions.invoke("pin-artwork", {
-        body: { artwork_id: art.id },
-      });
+      const { data, error } = await supabase.functions.invoke("pin-artwork", { body: { artwork_id: art.id } });
       if (error) throw error;
       setPinData(data as PinResp);
 
@@ -1136,12 +1159,7 @@ export default function ArtworkDetail() {
 
   async function ensureOwnershipRow() {
     if (!viewerId || !art?.id) return;
-    const { data } = await supabase
-      .from("ownerships")
-      .select("owner_id")
-      .eq("artwork_id", art.id)
-      .eq("owner_id", viewerId)
-      .maybeSingle();
+    const { data } = await supabase.from("ownerships").select("owner_id").eq("artwork_id", art.id).eq("owner_id", viewerId).maybeSingle();
 
     if (!data) {
       await supabase.from("ownerships").upsert({
@@ -1213,35 +1231,23 @@ export default function ArtworkDetail() {
       const ethereum = (window as any).ethereum;
       if (!ethereum) throw new Error("MetaMask not found. Please install it.");
 
-      const accounts: string[] = await ethereum.request({
-        method: "eth_requestAccounts",
-      });
+      const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts" });
       const from = accounts?.[0];
       if (!from) throw new Error("No account authorized in MetaMask.");
 
       let chainId = await ethereum.request({ method: "eth_chainId" });
       if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
         try {
-          await ethereum.request({
-            method: "wallet_switchEthereumChain",
-            params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
-          });
+          await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }] });
         } catch {
-          await ethereum.request({
-            method: "wallet_addEthereumChain",
-            params: [SEPOLIA_PARAMS],
-          });
+          await ethereum.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_PARAMS] });
         }
         chainId = await ethereum.request({ method: "eth_chainId" });
-        if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
-          throw new Error("Please switch MetaMask to Sepolia.");
-        }
+        if (chainId !== SEPOLIA_CHAIN_ID_HEX) throw new Error("Please switch MetaMask to Sepolia.");
       }
 
-      const priceEth = Number((activeListing as any).fixed_price || 0);
-      if (!isFinite(priceEth) || priceEth <= 0) {
-        throw new Error("Invalid price for listing.");
-      }
+      const priceEth = Number(activeListing.fixed_price || 0);
+      if (!isFinite(priceEth) || priceEth <= 0) throw new Error("Invalid price for listing.");
 
       const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
       if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
@@ -1275,97 +1281,37 @@ export default function ArtworkDetail() {
     }
   }
 
-  /* ------------------------------ Auction derived truth (LIVE) ------------------------------ */
-
-  const isAuction =
-    (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
-
-  const auctionEndedByTime = useMemo(() => {
-    if (!isAuction) return false;
-    const endAt = (activeListing as any)?.end_at as string;
-    return Date.now() >= new Date(endAt).getTime();
-  }, [isAuction, (activeListing as any)?.end_at]);
-
-  const listingStatus = (activeListing as any)?.status ?? null;
-  const auctionClosed =
-    isAuction &&
-    (listingStatus === "ended" ||
-      listingStatus === "closed" ||
-      listingStatus === "paid" ||
-      auctionEndedByTime);
-
-  const auctionPaid = isAuction && listingStatus === "paid";
-
-  // ✅ IMPORTANT: derive reserveMet + winner from LIVE data (topBid + listing reserve)
-  const liveReserveMet = useMemo(() => {
-    if (!isAuction) return false;
-    const reserve = ((activeListing as any)?.reserve_price ?? null) as number | null;
-    if (!topBid) return false;
-    return reserve == null ? true : topBid.amount >= reserve;
-  }, [isAuction, topBid, (activeListing as any)?.reserve_price]);
-
-  const liveWinnerId = useMemo(() => {
-    return topBid?.bidder_id ?? null;
-  }, [topBid]);
-
-  const isWinnerLive = useMemo(() => {
-    return !!viewerId && !!liveWinnerId && viewerId === liveWinnerId;
-  }, [viewerId, liveWinnerId]);
-
-  const paymentPending = isAuction && auctionClosed && liveReserveMet && !auctionPaid;
-
-  /** ✅ Auction payment flow (winner only) — FIXED: recompute from DB, do not rely on auctionOutcome */
+  /** ✅ Auction payment flow (winner only) */
   async function payForAuctionNow() {
     if (!activeListing || (activeListing as any).type !== "auction") return;
-    if (!viewerId) return;
+    if (!auctionOutcome?.reserveMet || !auctionOutcome?.winner?.id) return;
+    if (!viewerId || viewerId !== auctionOutcome.winner.id) return;
+
+    const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
+    const amount = Number(auctionOutcome.amount ?? 0);
+    if (!isFinite(amount) || amount <= 0) return;
 
     setMsg(null);
-    setPayBusy(true);
 
-    try {
-      // Recompute truth from DB
-      const tb = await fetchTopBid(activeListing.id);
-      if (!tb) throw new Error("No bids found for this auction.");
-
-      const reserve = ((activeListing as any)?.reserve_price ?? null) as number | null;
-      const reserveMet = reserve == null ? true : tb.amount >= reserve;
-      if (!reserveMet) throw new Error("Reserve not met — no payment required.");
-
-      if (!tb.bidder_id) throw new Error("Winner not found.");
-      if (tb.bidder_id !== viewerId) throw new Error("Only the winning bidder can pay.");
-
-      const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
-      const amount = Number(tb.amount ?? 0);
-      if (!isFinite(amount) || amount <= 0) throw new Error("Invalid winning amount.");
-
-      // ETH: MetaMask transfer
-      if (currency === "ETH") {
+    if (currency === "ETH") {
+      setPayBusy(true);
+      try {
         const ethereum = (window as any).ethereum;
         if (!ethereum) throw new Error("MetaMask not found. Please install it.");
 
-        const accounts: string[] = await ethereum.request({
-          method: "eth_requestAccounts",
-        });
+        const accounts: string[] = await ethereum.request({ method: "eth_requestAccounts" });
         const from = accounts?.[0];
         if (!from) throw new Error("No account authorized in MetaMask.");
 
         let chainId = await ethereum.request({ method: "eth_chainId" });
         if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
           try {
-            await ethereum.request({
-              method: "wallet_switchEthereumChain",
-              params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
-            });
+            await ethereum.request({ method: "wallet_switchEthereumChain", params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }] });
           } catch {
-            await ethereum.request({
-              method: "wallet_addEthereumChain",
-              params: [SEPOLIA_PARAMS],
-            });
+            await ethereum.request({ method: "wallet_addEthereumChain", params: [SEPOLIA_PARAMS] });
           }
           chainId = await ethereum.request({ method: "eth_chainId" });
-          if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
-            throw new Error("Please switch MetaMask to Sepolia.");
-          }
+          if (chainId !== SEPOLIA_CHAIN_ID_HEX) throw new Error("Please switch MetaMask to Sepolia.");
         }
 
         const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
@@ -1393,70 +1339,82 @@ export default function ArtworkDetail() {
 
         setMsg("Auction payment sent ✔️");
 
-        // refresh listing (if backend updates status)
         try {
           const l = await fetchActiveListingForArtwork(art!.id);
           if (l) setActiveListing(l as any);
         } catch {}
-        return;
+      } catch (e: any) {
+        setMsg(e?.message ?? "Payment failed");
+      } finally {
+        setPayBusy(false);
       }
+      return;
+    }
 
-      // Fiat/Stripe:
-      // Try create-auction-checkout (if you have it), otherwise fallback to create-checkout
-      const body = {
-        listing_id: activeListing.id,
-        success_url: `${location.origin}/checkout/success`,
-        cancel_url: location.href,
-      };
-
-      let url: string | null = null;
-
-      try {
-        const r1 = await supabase.functions.invoke("create-auction-checkout", { body });
-        if (!r1.error && r1.data?.url) url = r1.data.url;
-      } catch {}
-
-      if (!url) {
-        const r2 = await supabase.functions.invoke("create-checkout", {
-          body: {
-            ...body,
-            // optional hint for backend (safe even if ignored)
-            mode: "auction",
-          },
-        });
-        if (r2.error) throw r2.error;
-        if (!r2.data?.url) throw new Error("Checkout URL not returned");
-        url = r2.data.url;
-      }
-
-      window.location.href = url!;
+    setPayBusy(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("create-auction-checkout", {
+        body: {
+          listing_id: activeListing.id,
+          success_url: `${location.origin}/checkout/success`,
+          cancel_url: location.href,
+        },
+      });
+      if (error) throw error;
+      if (!data?.url) throw new Error("Checkout URL not returned");
+      window.location.href = data.url;
     } catch (e: any) {
-      setMsg(e?.message ?? "Payment setup failed");
+      setMsg(e?.message ?? "Payment setup failed (missing create-auction-checkout?)");
     } finally {
       setPayBusy(false);
     }
   }
 
-  /** ✅ Contact winner (seller) — FIXED: use liveWinnerId if modal not opened */
+  /** ✅ Contact winner (seller) — now sends artwork + congrats/payment instructions */
   async function contactWinner() {
-    const winnerId = liveWinnerId || auctionOutcome?.winner?.id || null;
-    if (!winnerId) {
-      setMsg("Winner not found yet.");
-      return;
-    }
+    if (!auctionOutcome?.winner?.id) return;
     try {
-      const tid = await dmGetOrCreateThread(winnerId);
+      const tid = await dmGetOrCreateThread(auctionOutcome.winner.id);
+
+      // 1) Send artwork card as context
       if (art) {
         await dmSendArtworkShare(tid, art.id, {
           title: art.title ?? "Untitled",
           image_url: art.image_url,
         });
       }
+
+      // 2) Send the congratulatory / payment instruction message
+      const currency = ((activeListing as any)?.sale_currency ?? auctionOutcome.currency ?? "USD") as string;
+      const msgText = buildWinnerCongratsMessage({
+        artworkTitle: art?.title ?? "Untitled",
+        amount: auctionOutcome?.amount ?? null,
+        currency: currency.toUpperCase(),
+      });
+
+      await postTextDM(tid, msgText);
+
+      // Open Messages thread
       nav(`/messages?t=${encodeURIComponent(tid)}`);
     } catch (e: any) {
       setMsg(e?.message ?? "Failed to open chat");
     }
   }
+
+  const isAuction = (activeListing as any)?.type === "auction" && !!(activeListing as any)?.end_at;
+
+  const auctionEndedByTime = useMemo(() => {
+    if (!isAuction) return false;
+    const endAt = (activeListing as any)?.end_at as string;
+    return Date.now() >= new Date(endAt).getTime();
+  }, [isAuction, (activeListing as any)?.end_at]);
+
+  const listingStatus = (activeListing as any)?.status ?? null;
+  const auctionClosed =
+    isAuction &&
+    (listingStatus === "ended" || listingStatus === "closed" || listingStatus === "paid" || auctionEndedByTime);
+
+  const auctionPaid = isAuction && listingStatus === "paid";
 
   async function onPlaceBid() {
     if (!activeListing) return;
@@ -1468,13 +1426,6 @@ export default function ArtworkDetail() {
       const amt = Number(bidInput || 0);
       if (!isFinite(amt) || amt <= 0) throw new Error("Enter a valid amount");
 
-      // ✅ extra strict guard: must be higher than current top bid (even if MIN_INC_BPS=0)
-      const currentTop = topBid?.amount ?? 0;
-      if (currentTop > 0 && amt <= currentTop) {
-        throw new Error(`Bid must be higher than the current top bid (${currentTop}).`);
-      }
-
-      // local guard (DB should also enforce!)
       const reserve = (activeListing as any)?.reserve_price ?? 0;
       const base = topBid ? topBid.amount * (1 + MIN_INC_BPS / 10000) : 0;
       const minNow = Math.max(reserve, base || reserve || 0);
@@ -1483,7 +1434,6 @@ export default function ArtworkDetail() {
       const b = await placeBid(activeListing.id, amt);
       setTopBid(b);
 
-      // refresh list so names load
       await loadBidHistory(activeListing.id, "reset");
 
       setBidMsg("Bid placed ✅");
@@ -1546,11 +1496,11 @@ export default function ArtworkDetail() {
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
   const isSeller = !!activeListing && viewerId === (activeListing as any).seller_id;
 
-  // ✅ winner derived live (not outcome state)
-  const isWinner = isWinnerLive;
+  const isWinner = !!viewerId && !!auctionOutcome?.winner?.id && viewerId === auctionOutcome.winner.id;
 
-  // ✅ reserve derived live (not outcome state)
-  const reserveMet = liveReserveMet;
+  const reserveMet = !!auctionOutcome?.reserveMet;
+
+  const paymentPending = isAuction && auctionClosed && reserveMet && !auctionPaid;
 
   const canBuy = !!activeListing && !!viewerId && !isSeller;
   const canBid = !!viewerId && !isSeller && isAuction && !auctionClosed && listingStatus === "active";
@@ -1564,9 +1514,7 @@ export default function ArtworkDetail() {
 
   const galleryThumbs = useMemo(
     () =>
-      ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as {
-        url?: string;
-      }[])
+      ([{ url: art?.image_url } as any, ...(Array.isArray(files) ? files : [])] as { url?: string }[])
         .filter((f) => !!f?.url)
         .slice(0, 10),
     [art?.image_url, files]
@@ -1641,9 +1589,7 @@ export default function ArtworkDetail() {
                     key={i}
                     onClick={() => setMainUrl(f.url || null)}
                     className={`aspect-square overflow-hidden rounded-xl border transition ${
-                      mainUrl === f.url
-                        ? "border-white/50"
-                        : "border-white/10 hover:border-white/30"
+                      mainUrl === f.url ? "border-white/50" : "border-white/10 hover:border-white/30"
                     } bg-neutral-900`}
                   >
                     {/* @ts-ignore */}
@@ -1661,17 +1607,12 @@ export default function ArtworkDetail() {
             {/* Header */}
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <h1 className="text-3xl font-semibold leading-tight truncate">
-                  {art.title || "Untitled"}
-                </h1>
+                <h1 className="text-3xl font-semibold leading-tight truncate">{art.title || "Untitled"}</h1>
 
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                   <span className="text-white/80">
                     {creator ? (
-                      <Link
-                        to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
-                        className="underline"
-                      >
+                      <Link to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`} className="underline">
                         {creator.display_name || creator.username || "Creator"}
                       </Link>
                     ) : (
@@ -1682,10 +1623,7 @@ export default function ArtworkDetail() {
                   <span className="text-white/80">
                     Owned by{" "}
                     {owner ? (
-                      <Link
-                        to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`}
-                        className="underline"
-                      >
+                      <Link to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`} className="underline">
                         {owner.display_name || owner.username || "Collector"}
                       </Link>
                     ) : (
@@ -1760,10 +1698,7 @@ export default function ArtworkDetail() {
                   ⧉
                 </button>
 
-                <button
-                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                  title="Favorite"
-                >
+                <button className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10" title="Favorite">
                   <HeartIcon />
                 </button>
               </div>
@@ -1774,28 +1709,18 @@ export default function ArtworkDetail() {
               <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
                 <StatBox
                   label="Top offer"
-                  value={
-                    displayedTopOffer
-                      ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency)
-                      : "—"
-                  }
+                  value={displayedTopOffer ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency) : "—"}
                 />
                 <StatBox
                   label="Original price"
                   value={
                     sales.length
-                      ? fmtCurrency(
-                          sales[sales.length - 1].price,
-                          sales[sales.length - 1].currency
-                        )
+                      ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency)
                       : "—"
                   }
                 />
                 <StatBox label="Rarity" value={"—"} />
-                <StatBox
-                  label="Last sale"
-                  value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"}
-                />
+                <StatBox label="Last sale" value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"} />
               </div>
             </Card>
 
@@ -1825,27 +1750,17 @@ export default function ArtworkDetail() {
                         </div>
                         {(activeListing as any).reserve_price && (
                           <div className="text-[11px] text-white/60 mt-1">
-                            Reserve:{" "}
-                            {fmtCurrency(
-                              (activeListing as any).reserve_price,
-                              activeListing.sale_currency
-                            )}
-                            {!topBid || topBid.amount < (activeListing as any).reserve_price
-                              ? " (not met)"
-                              : ""}
+                            Reserve: {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)}
+                            {!topBid || topBid.amount < (activeListing as any).reserve_price ? " (not met)" : ""}
                           </div>
                         )}
-                        {auctionClosed && !auctionPaid ? (
-                          <div className="mt-2 text-xs text-amber-300">Auction has ended.</div>
-                        ) : null}
-                        {auctionPaid ? (
-                          <div className="mt-2 text-xs text-emerald-300">Payment received.</div>
-                        ) : null}
+                        {auctionClosed && !auctionPaid ? <div className="mt-2 text-xs text-amber-300">Auction has ended.</div> : null}
+                        {auctionPaid ? <div className="mt-2 text-xs text-emerald-300">Payment received.</div> : null}
                       </div>
                     ) : (
                       <div className="space-y-1">
                         <div className="text-3xl font-semibold">
-                          {fmtCurrency((activeListing as any).fixed_price ?? null, activeListing.sale_currency)}
+                          {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
                         </div>
                       </div>
                     )}
@@ -1887,11 +1802,7 @@ export default function ArtworkDetail() {
                             onChange={(e) => setBidInput(e.target.value)}
                             disabled={!canBid || bidBusy}
                           />
-                          <button
-                            className="btn flex-1"
-                            onClick={onPlaceBid}
-                            disabled={!canBid || bidBusy}
-                          >
+                          <button className="btn flex-1" onClick={onPlaceBid} disabled={!canBid || bidBusy}>
                             {bidBusy ? "Bidding…" : "Place bid"}
                           </button>
                         </>
@@ -1913,9 +1824,7 @@ export default function ArtworkDetail() {
                             Buy now
                           </button>
                         )}
-                        <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">
-                          Make offer
-                        </button>
+                        <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">Make offer</button>
                       </>
                     )}
                   </div>
@@ -1924,28 +1833,18 @@ export default function ArtworkDetail() {
                   {isAuction && auctionClosed ? (
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
                       {!reserveMet ? (
-                        <div className="text-sm text-white/70">
-                          Reserve not met — no winner. Seller can relist.
-                        </div>
+                        <div className="text-sm text-white/70">Reserve not met — no winner. Seller can relist.</div>
                       ) : auctionPaid ? (
-                        <div className="text-sm text-white/80">
-                          ✅ Winner has paid. Proceed with handover / shipping.
-                        </div>
+                        <div className="text-sm text-white/80">✅ Winner has paid. Proceed with handover / shipping.</div>
                       ) : (
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                           <div className="text-sm text-white/80">
                             {isWinner ? (
-                              <span>
-                                You won the auction. Please complete payment to secure the artwork.
-                              </span>
+                              <span>You won the auction. Please complete payment to secure the artwork.</span>
                             ) : isSeller ? (
-                              <span>
-                                Awaiting winner payment. You can contact the winner if needed.
-                              </span>
+                              <span>Awaiting winner payment. You can contact the winner if needed.</span>
                             ) : (
-                              <span>
-                                Auction ended. Winner is completing payment.
-                              </span>
+                              <span>Auction ended. Winner is completing payment.</span>
                             )}
                           </div>
 
@@ -1984,19 +1883,14 @@ export default function ArtworkDetail() {
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
                         <div className="text-sm font-semibold">Bid history</div>
-                        <button
-                          className="text-xs underline text-white/70 hover:text-white"
-                          onClick={() => setTab("activity")}
-                        >
+                        <button className="text-xs underline text-white/70 hover:text-white" onClick={() => setTab("activity")}>
                           View in Activity
                         </button>
                       </div>
 
                       <div className="max-h-[220px] overflow-auto rounded-xl border border-white/10 divide-y divide-white/10">
                         {bidHistory.length === 0 ? (
-                          <div className="p-3 text-sm text-white/60">
-                            No bids yet.
-                          </div>
+                          <div className="p-3 text-sm text-white/60">No bids yet.</div>
                         ) : (
                           bidHistory.slice(0, 12).map((b) => {
                             const nm =
@@ -2007,13 +1901,9 @@ export default function ArtworkDetail() {
                               <div key={b.id} className="p-3 flex items-center justify-between gap-3">
                                 <div className="min-w-0">
                                   <div className="text-sm text-white/85 truncate">{nm}</div>
-                                  <div className="text-xs text-white/55">
-                                    {new Date(b.created_at).toLocaleString()}
-                                  </div>
+                                  <div className="text-xs text-white/55">{new Date(b.created_at).toLocaleString()}</div>
                                 </div>
-                                <div className="text-sm font-semibold">
-                                  {fmtCurrency(b.amount, activeListing.sale_currency)}
-                                </div>
+                                <div className="text-sm font-semibold">{fmtCurrency(b.amount, activeListing.sale_currency)}</div>
                               </div>
                             );
                           })
@@ -2093,15 +1983,8 @@ export default function ArtworkDetail() {
                   <button
                     className="btn"
                     onClick={handlePin}
-                    disabled={
-                      pinLoading ||
-                      !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
-                    }
-                    title={
-                      viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
-                        ? ""
-                        : "Only the creator/owner can pin"
-                    }
+                    disabled={pinLoading || !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))}
+                    title={viewerId && (viewerId === art.creator_id || viewerId === art.owner_id) ? "" : "Only the creator/owner can pin"}
                   >
                     {pinLoading ? "Pinning…" : "Pin to IPFS"}
                   </button>
@@ -2126,9 +2009,7 @@ export default function ArtworkDetail() {
                   key={t}
                   onClick={() => setTab(t)}
                   className={`px-2 pb-3 text-sm border-b-2 ${
-                    tab === t
-                      ? "border-white text-white"
-                      : "border-transparent text-white/70 hover:text-white"
+                    tab === t ? "border-white text-white" : "border-transparent text-white/70 hover:text-white"
                   }`}
                 >
                   {t === "details" ? "Details" : t === "orders" ? "Orders" : "Activity"}
@@ -2147,10 +2028,7 @@ export default function ArtworkDetail() {
                 <Card title={<span className="text-base font-semibold">Collection</span>}>
                   <div className="text-sm text-white/80">
                     {collection ? (
-                      <Link
-                        to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`}
-                        className="underline"
-                      >
+                      <Link to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`} className="underline">
                         {collection.name || collection.slug || "Untitled collection"}
                       </Link>
                     ) : (
@@ -2176,27 +2054,19 @@ export default function ArtworkDetail() {
                                       className="w-full h-full object-cover group-hover:opacity-90 transition"
                                     />
                                   ) : (
-                                    <div className="w-full h-full grid place-items-center text-xs text-white/50">
-                                      No image
-                                    </div>
+                                    <div className="w-full h-full grid place-items-center text-xs text-white/50">No image</div>
                                   )}
                                 </div>
-                                <div className="mt-1 text-xs truncate text-white/80">
-                                  {a.title || "Untitled"}
-                                </div>
+                                <div className="mt-1 text-xs truncate text-white/80">{a.title || "Untitled"}</div>
                               </Link>
                             ))}
                           </div>
                         ) : (
-                          <div className="mt-1 text-sm text-white/60">
-                            No more artworks in this collection yet.
-                          </div>
+                          <div className="mt-1 text-sm text-white/60">No more artworks in this collection yet.</div>
                         )}
                       </>
                     ) : (
-                      <div className="mt-1 text-sm text-white/60">
-                        This artwork is not part of a collection.
-                      </div>
+                      <div className="mt-1 text-sm text-white/60">This artwork is not part of a collection.</div>
                     )}
                   </div>
                 </Card>
@@ -2215,9 +2085,7 @@ export default function ArtworkDetail() {
               <div className="p-4 space-y-4">
                 {isAuction ? (
                   <Card title="Bid history">
-                    <div className="text-xs text-white/60 mb-2">
-                      All bids are recorded in real-time.
-                    </div>
+                    <div className="text-xs text-white/60 mb-2">All bids are recorded in real-time.</div>
 
                     <div className="max-h-[520px] overflow-auto rounded-xl border border-white/10 divide-y divide-white/10">
                       {bidHistory.length === 0 ? (
@@ -2232,13 +2100,9 @@ export default function ArtworkDetail() {
                             <div key={b.id} className="p-3 flex items-center justify-between gap-3">
                               <div className="min-w-0">
                                 <div className="text-sm text-white/85 truncate">{nm}</div>
-                                <div className="text-xs text-white/55">
-                                  {new Date(b.created_at).toLocaleString()}
-                                </div>
+                                <div className="text-xs text-white/55">{new Date(b.created_at).toLocaleString()}</div>
                               </div>
-                              <div className="text-sm font-semibold">
-                                {fmtCurrency(b.amount, activeListing?.sale_currency ?? "USD")}
-                              </div>
+                              <div className="text-sm font-semibold">{fmtCurrency(b.amount, activeListing?.sale_currency ?? "USD")}</div>
                             </div>
                           );
                         })
@@ -2274,8 +2138,7 @@ export default function ArtworkDetail() {
                       {sales.map((s) => (
                         <li key={s.id} className="p-3 rounded-xl bg-white/[0.04] border border-white/10">
                           <div className="text-sm">
-                            Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on{" "}
-                            {new Date(s.sold_at).toLocaleString()}
+                            Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on {new Date(s.sold_at).toLocaleString()}
                           </div>
                           <div className="text-xs text-white/70">
                             tx: {s.tx_hash ? <code className="break-all">{s.tx_hash}</code> : "—"}
@@ -2304,11 +2167,7 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
-      <ShareQRModal
-        open={showShareQR}
-        onClose={() => setShowShareQR(false)}
-        url={`${location.origin}/art/${id}`}
-      />
+      <ShareQRModal open={showShareQR} onClose={() => setShowShareQR(false)} url={`${location.origin}/art/${id}`} />
 
       <ShareToDMModal
         open={showShareDM}
@@ -2331,9 +2190,7 @@ export default function ArtworkDetail() {
           open={sellerOpen}
           onClose={() => setSellerOpen(false)}
           artworkId={art.id}
-          onListingUpdated={async () =>
-            setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)
-          }
+          onListingUpdated={async () => setActiveListing((await fetchActiveListingForArtwork(art.id)) as any)}
           postAuctionMode={isAuction && auctionClosed}
           paymentPending={paymentPending}
           onContactWinner={contactWinner}
@@ -2394,11 +2251,7 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select
-          className="input w-28"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
+        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
           <option value="ETH">ETH</option>
           <option value="USD">USD</option>
         </select>
@@ -2437,9 +2290,7 @@ function SellerConsole({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">
-            {postAuctionMode ? "Auction tools" : "Seller tools"}
-          </h3>
+          <h3 className="text-lg font-semibold">{postAuctionMode ? "Auction tools" : "Seller tools"}</h3>
           <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
             Close
           </button>
@@ -2450,13 +2301,8 @@ function SellerConsole({
           <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
             {paymentPending ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="text-sm text-white/80">
-                  Awaiting winner payment. You can contact the winner.
-                </div>
-                <button
-                  className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                  onClick={onContactWinner}
-                >
+                <div className="text-sm text-white/80">Awaiting winner payment. You can contact the winner.</div>
+                <button className="btn bg-white/0 border border-white/20 hover:bg-white/10" onClick={onContactWinner}>
                   Contact winner
                 </button>
               </div>
@@ -2502,16 +2348,12 @@ function SellerConsole({
 
         {tab === "details" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-            <div className="text-sm text-white/70">
-              Update artwork metadata (title/description, tags, etc.).
-            </div>
+            <div className="text-sm text-white/70">Update artwork metadata (title/description, tags, etc.).</div>
             <div className="flex gap-2">
               <a href={`/art/${artworkId}/edit`} className="btn">
                 Go to edit page
               </a>
-              <span className="text-xs text-white/60 self-center">
-                (If you don’t have an edit route yet, we can add one.)
-              </span>
+              <span className="text-xs text-white/60 self-center">(If you don’t have an edit route yet, we can add one.)</span>
             </div>
           </div>
         )}
