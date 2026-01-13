@@ -25,8 +25,32 @@ export async function fetchTopBid(listingId: string): Promise<Bid | null> {
     .order("amount", { ascending: false })
     .limit(1)
     .maybeSingle<Bid>();
+
   if (error && (error as any).code !== "PGRST116") throw error;
   return data ?? null;
+}
+
+export async function fetchBidById(bidId: string): Promise<Bid | null> {
+  const { data, error } = await supabase
+    .from("bids")
+    .select("id, listing_id, bidder_id, amount, created_at")
+    .eq("id", bidId)
+    .maybeSingle<Bid>();
+
+  if (error && (error as any).code !== "PGRST116") throw error;
+  return data ?? null;
+}
+
+export async function fetchRecentBids(listingId: string, limit = 10): Promise<Bid[]> {
+  const { data, error } = await supabase
+    .from("bids")
+    .select("id, listing_id, bidder_id, amount, created_at")
+    .eq("listing_id", listingId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) throw error;
+  return (data ?? []) as Bid[];
 }
 
 // compatibility alias
@@ -44,8 +68,18 @@ export function subscribeBids(listingId: string, onInsert: (bid: Bid) => void): 
     )
     .subscribe();
 
-  const off: Unsub = (() => { try { supabase.removeChannel(channel); } catch {} }) as Unsub;
-  off.unsubscribe = () => { try { supabase.removeChannel(channel); } catch {} };
+  const off: Unsub = (() => {
+    try {
+      supabase.removeChannel(channel);
+    } catch {}
+  }) as Unsub;
+
+  off.unsubscribe = () => {
+    try {
+      supabase.removeChannel(channel);
+    } catch {}
+  };
+
   return off;
 }
 
@@ -58,6 +92,7 @@ export async function endAuction(
   const { data, error } = await supabase
     .rpc("end_auction", { p_listing_id: listingId })
     .single<{ order_id: string | null; winning_bid_id: string | null }>();
+
   if (error) throw error;
   return data ?? null;
 }

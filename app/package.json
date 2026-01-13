@@ -14,7 +14,8 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "make:panel": "node scripts/make-panel-glb.mjs 0.01",
-    "vercel-build": "git lfs install && git -C .. lfs fetch https://github.com/ndstrzz/taedal-v7.git --include=\"app/public/3d/**,app/public/media/**\" --exclude=\"\" && git -C .. lfs checkout app/public/3d && git -C .. lfs checkout app/public/media && npm run build"
+
+    "vercel-build": "git lfs install --local || true && git -C .. lfs pull --include=\"app/public/3d/**,app/public/media/**\" --exclude=\"\" && git -C .. lfs checkout -- \"app/public/3d\" \"app/public/media\" && npm run build"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.10",
