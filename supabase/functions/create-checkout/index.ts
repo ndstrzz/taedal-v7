@@ -22,12 +22,28 @@ type Listing = {
   fixed_price: number | null;
   seller_id: string;
   artwork_id: string;
-  status: "active" | "ended";
+  status: string | null; // "active" | "ended" | "paid" | ...
+  type?: string | null;  // "fixed" | "auction" (your schema)
+  reserve_price?: number | null;
 };
 
 const ZERO_DEC = new Set(["JPY", "KRW"]);
 const toStripeAmount = (amount: number, currency: string) =>
   Math.round(amount * (ZERO_DEC.has(currency.toUpperCase()) ? 1 : 100));
+
+async function fetchTopBidAmount(sb: any, listingId: string): Promise<{ amount: number; bidder_id: string } | null> {
+  const { data, error } = await sb
+    .from("bids")
+    .select("amount,bidder_id")
+    .eq("listing_id", listingId)
+    .order("amount", { ascending: false })
+    .limit(1);
+
+  if (error) throw error;
+  const row = (data?.[0] ?? null) as any;
+  if (!row?.amount || !row?.bidder_id) return null;
+  return { amount: Number(row.amount), bidder_id: String(row.bidder_id) };
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return t();
@@ -45,34 +61,71 @@ Deno.serve(async (req) => {
     // Auth’d client (uses caller’s JWT)
     const sb = createClient(SUPABASE_URL, ANON, { global: { headers: { Authorization: auth } } });
 
-    // Who’s buying?
+    // Who’s paying?
     const { data: me } = await sb.auth.getUser();
     if (!me?.user?.id) return t("Unauthorized", 401);
     const buyerId = me.user.id;
 
-    // Fetch listing & artwork (trusted server-side)
+    // Fetch listing
     const { data: listing, error } = await sb
       .from("listings")
-      .select("id, sale_currency, fixed_price, seller_id, artwork_id, status")
+      .select("id, sale_currency, fixed_price, seller_id, artwork_id, status, type, reserve_price")
       .eq("id", listing_id)
       .maybeSingle<Listing>();
     if (error) throw error;
     if (!listing) return t("Listing not found", 404);
-    if (listing.status !== "active") return t("Listing is not active", 400);
-    if (!listing.fixed_price || !listing.sale_currency) return t("Listing missing price/currency", 400);
 
+    const listingType = (listing.type ?? "fixed").toLowerCase();
+    const currencyRaw = listing.sale_currency ?? "USD";
+    const currency = currencyRaw.toLowerCase();
+
+    // Fetch artwork (for product title/images)
     const { data: art } = await sb
       .from("artworks")
       .select("title,image_url")
       .eq("id", listing.artwork_id)
       .maybeSingle();
 
+    // Decide charge amount
+    let unitPrice: number | null = null;
+
+    if (listingType === "auction") {
+      // Auction: must be ended (or closed), and caller must be winner
+      const st = (listing.status ?? "").toLowerCase();
+      const endedOk = st === "ended" || st === "closed";
+      if (!endedOk) return t("Auction is not ended yet", 400);
+
+      const top = await fetchTopBidAmount(sb, listing.id);
+      if (!top) return t("No bids found for this auction", 400);
+
+      // reserve gate (if reserve exists)
+      const reserve = listing.reserve_price == null ? null : Number(listing.reserve_price);
+      if (reserve != null && Number(top.amount) < reserve) {
+        return t("Reserve not met", 400);
+      }
+
+      // winner gate
+      if (String(top.bidder_id) !== String(buyerId)) {
+        return t("Only the auction winner can pay", 403);
+      }
+
+      unitPrice = Number(top.amount);
+      if (!isFinite(unitPrice) || unitPrice <= 0) return t("Invalid auction price", 400);
+    } else {
+      // Fixed price: must be active
+      const st = (listing.status ?? "").toLowerCase();
+      if (st !== "active") return t("Listing is not active", 400);
+      if (!listing.fixed_price || !listing.sale_currency) return t("Listing missing price/currency", 400);
+
+      unitPrice = Number(listing.fixed_price);
+      if (!isFinite(unitPrice) || unitPrice <= 0) return t("Invalid listing price", 400);
+    }
+
     // Stripe session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, { httpClient: Stripe.createFetchHttpClient() });
 
-    const currency = listing.sale_currency.toLowerCase();
-    const unit_amount = toStripeAmount(listing.fixed_price, currency);
+    const unit_amount = toStripeAmount(unitPrice, currency);
 
     const success = (success_url || `${SITE}/checkout/success?listing=${listing.id}`).replace(/\/$/, "");
     const cancel = (cancel_url || `${SITE}/art/${listing.artwork_id}?cancelled=1`).replace(/\/$/, "");
@@ -83,21 +136,26 @@ Deno.serve(async (req) => {
       cancel_url: cancel,
       line_items: [
         {
-          quantity,
+          quantity: Math.max(1, Number(quantity || 1)),
           price_data: {
             currency,
             unit_amount,
             product_data: {
-              name: art?.title || "Artwork",
+              name:
+                listingType === "auction"
+                  ? `${art?.title || "Artwork"} (Auction winner payment)`
+                  : art?.title || "Artwork",
               images: art?.image_url ? [art.image_url] : [],
             },
           },
         },
       ],
-      // 👇 critical metadata for webhook
       metadata: {
         listing_id: listing.id,
         buyer_id: buyerId,
+        listing_type: listingType,
+        charged_amount: String(unitPrice),
+        charged_currency: currencyRaw,
       },
     });
 

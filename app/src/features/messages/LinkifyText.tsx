@@ -33,6 +33,24 @@ function splitIntoParts(text: string): Array<{ kind: "text" | "url"; value: stri
   return parts;
 }
 
+function parsePayLink(u: string): null | { amount?: string; currency?: string; label: string } {
+  try {
+    const url = new URL(u);
+    const pay = url.searchParams.get("pay");
+    if (pay !== "1") return null;
+
+    const amount = url.searchParams.get("amount") ?? undefined;
+    const currency = url.searchParams.get("currency") ?? url.searchParams.get("mode") ?? undefined;
+
+    let label = "Pay now";
+    if (amount) label = "Pay now";
+
+    return { amount, currency, label };
+  } catch {
+    return null;
+  }
+}
+
 export default function LinkifyText({ text }: { text: string }) {
   const parts = splitIntoParts(text);
 
@@ -43,6 +61,30 @@ export default function LinkifyText({ text }: { text: string }) {
 
         if (!isSafeHttpUrl(p.value)) return <React.Fragment key={idx}>{p.value}</React.Fragment>;
 
+        const pay = parsePayLink(p.value);
+
+        // ✅ Render payment CTA as a button-like chip instead of raw URL
+        if (pay) {
+          return (
+            <a
+              key={idx}
+              href={p.value}
+              className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-400/15 px-3 py-1.5 text-emerald-100 hover:bg-emerald-400/20 transition no-underline break-words"
+              title="Open payment"
+            >
+              <span className="text-sm">💳</span>
+              <span className="text-sm font-medium">{pay.label}</span>
+              {pay.amount ? (
+                <span className="text-xs text-emerald-200/80">
+                  {pay.currency ? `${pay.currency.toUpperCase()} ` : ""}
+                  {pay.amount}
+                </span>
+              ) : null}
+            </a>
+          );
+        }
+
+        // normal links
         return (
           <a
             key={idx}

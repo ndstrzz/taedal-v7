@@ -40,6 +40,7 @@ export default function MessagesPage() {
   const [err, setErr] = useState<string | null>(null);
 
   const desiredThreadId = sp.get("t");
+  const draftFromUrl = sp.get("draft") || "";
 
   const mergedInbox = useMemo(() => threads, [threads]);
 
@@ -154,6 +155,8 @@ export default function MessagesPage() {
       (cur) => {
         const copy = new URLSearchParams(cur);
         copy.set("t", t.thread_id);
+        // keep draft if it exists (so selecting doesn’t wipe it)
+        if (cur.get("draft")) copy.set("draft", cur.get("draft") as string);
         return copy;
       },
       { replace: true }
@@ -227,6 +230,18 @@ export default function MessagesPage() {
               meId={meId}
               thread={selected}
               onThreadMetaMaybeChanged={() => refreshThreads(tab)}
+              draftText={draftFromUrl}
+              onDraftConsumed={() => {
+                // Remove draft once ChatView has applied it (prevents reapplying on rerender)
+                setSp(
+                  (cur) => {
+                    const copy = new URLSearchParams(cur);
+                    copy.delete("draft");
+                    return copy;
+                  },
+                  { replace: true }
+                );
+              }}
             />
           ) : (
             <div className="h-full flex items-center justify-center text-sm text-white/60">

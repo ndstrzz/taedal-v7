@@ -1,5 +1,3 @@
-// C:\Users\User\Downloads\taedal-v7\app\src\features\messages\ChatView.tsx
-
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { DMMessageRow, DMThreadRow, DMKind } from "./types";
 import { dmFetchMessages, dmGetOrCreateThread, dmSendMessageV2, dmUploadMedia } from "./api";
@@ -91,10 +89,14 @@ export default function ChatView({
   meId,
   thread,
   onThreadMetaMaybeChanged,
+  draftText,
+  onDraftConsumed,
 }: {
   meId: string;
   thread: DMThreadRow;
   onThreadMetaMaybeChanged: () => void;
+  draftText?: string;
+  onDraftConsumed?: () => void;
 }) {
   const [realThreadId, setRealThreadId] = useState<string | null>(
     isSynthetic(thread.thread_id) ? null : thread.thread_id
@@ -128,6 +130,9 @@ export default function ChatView({
   // autoscroll
   const endRef = useRef<HTMLDivElement | null>(null);
 
+  // ✅ Draft application guard: apply at most once per selected thread id
+  const draftAppliedForThreadRef = useRef<string | null>(null);
+
   const displayName = thread.other_username ?? "User";
 
   function msgKey(m: { id: any }) {
@@ -153,6 +158,10 @@ export default function ChatView({
     setPickedFile(null);
     clearPending();
     setLpCache({});
+
+    // reset draft apply guard when switching threads
+    draftAppliedForThreadRef.current = null;
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [thread.thread_id]);
 
@@ -166,6 +175,31 @@ export default function ChatView({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ✅ Apply draft text (if provided) ONCE, without overwriting existing typing
+  useEffect(() => {
+    const d = (draftText ?? "").trim();
+    if (!d) return;
+
+    // Key it to the "selected" thread identity (synthetic id counts too)
+    const k = thread.thread_id;
+
+    // Don't re-apply for same thread
+    if (draftAppliedForThreadRef.current === k) return;
+
+    setText((cur) => {
+      const alreadyTyped = cur.trim().length > 0;
+      // apply only if empty
+      if (!alreadyTyped) return d;
+      return cur;
+    });
+
+    draftAppliedForThreadRef.current = k;
+
+    // Tell parent to remove ?draft= from URL so it won't re-trigger
+    onDraftConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftText, thread.thread_id]);
 
   async function load() {
     if (!realThreadId) return;
@@ -589,9 +623,11 @@ export default function ChatView({
             !!detectedUrl &&
             body.replace(/\s+/g, "").toLowerCase() === detectedUrl.replace(/\s+/g, "").toLowerCase();
 
-          // If it's ONLY a URL, render just the rich card (like your screenshot)
+          // If it's ONLY a URL, render just the rich card
           if (onlyUrl && (preview?.url || detectedUrl)) {
-            const p = preview?.url ? preview : ({ url: detectedUrl, siteName: shortHost(detectedUrl) } as LinkPreview);
+            const p = preview?.url
+              ? preview
+              : ({ url: detectedUrl, siteName: shortHost(detectedUrl) } as LinkPreview);
             return <LinkUnfurlCard key={key} p={p} me={me} />;
           }
 
