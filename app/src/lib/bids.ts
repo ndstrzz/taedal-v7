@@ -18,6 +18,7 @@ export async function placeBid(listingId: string, amount: number): Promise<Bid> 
   const { data, error } = await supabase
     .rpc("place_bid", { p_listing_id: listingId, p_amount: amount })
     .single<Bid>();
+
   if (error) throw error;
   return data!;
 }
@@ -104,7 +105,15 @@ export async function endAuction(listingId: string): Promise<EndAuctionResult | 
 
   if (!r1.error) return r1.data ?? null;
 
-  // 2) Fallback to old end_auction (keeps system working even if notify not deployed)
+  // IMPORTANT: do NOT silently fall back — log why notify failed
+  console.warn("[endAuction] end_auction_notify failed, falling back to end_auction:", {
+    message: r1.error.message,
+    details: (r1.error as any).details,
+    hint: (r1.error as any).hint,
+    code: (r1.error as any).code,
+  });
+
+  // 2) Fallback to old end_auction (keeps system working even if notify not working)
   const r2 = await supabase
     .rpc("end_auction", { p_listing_id: listingId })
     .maybeSingle<EndAuctionResult>();
