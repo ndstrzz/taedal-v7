@@ -1,7 +1,9 @@
 // C:\Users\User\Downloads\taedal-v7\app\src\routes\art\ArtworkDetail.tsx
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
+import QRCode from "qrcode";
+
 import { supabase } from "../../lib/supabase";
 import {
   createOrUpdateFixedPriceListing,
@@ -20,7 +22,6 @@ import {
 import RequestLicenseModal from "../../components/RequestLicenseModal";
 import PhysicalBadge from "../../components/art/PhysicalBadge";
 import OwnerAuctionPanel from "../../components/OwnerAuctionPanel";
-
 
 /** ✅ DM helpers */
 import {
@@ -303,7 +304,8 @@ function AuctionEndedModal({
   onClose,
   outcome,
   isWinner,
-  onPayNow,
+  onPayStripe,
+  onPayMetaMask,
   payBusy,
   paid,
 }: {
@@ -317,7 +319,8 @@ function AuctionEndedModal({
     winner: { id: string; display_name: string | null; username: string | null } | null;
   };
   isWinner: boolean;
-  onPayNow: () => void;
+  onPayStripe: () => void;
+  onPayMetaMask: () => void;
   payBusy: boolean;
   paid: boolean;
 }) {
@@ -327,6 +330,10 @@ function AuctionEndedModal({
     outcome?.winner?.display_name ||
     outcome?.winner?.username ||
     (outcome?.winner?.id ? outcome.winner.id.slice(0, 6) : null);
+
+  const ccy = (outcome?.currency ?? "USD").toUpperCase();
+  const canStripe = ccy !== "ETH";
+  const canMeta = ccy === "ETH";
 
   const showPay =
     !paid && !!outcome?.reserveMet && isWinner && outcome?.amount != null;
@@ -346,12 +353,12 @@ function AuctionEndedModal({
           <div className="mt-2 space-y-2">
             <div className="text-sm text-white/60">Final price</div>
             <div className="text-3xl font-semibold">
-              {outcome.amount} {outcome.currency}
+              {outcome.amount} {ccy}
             </div>
 
             {outcome.reserve != null ? (
               <div className="text-xs text-white/60">
-                Reserve: {outcome.reserve} {outcome.currency} •{" "}
+                Reserve: {outcome.reserve} {ccy} •{" "}
                 {outcome.reserveMet ? (
                   <span className="text-emerald-300">met</span>
                 ) : (
@@ -378,10 +385,33 @@ function AuctionEndedModal({
 
         <div className="mt-4 space-y-2">
           {showPay ? (
-            <button className="btn w-full" onClick={onPayNow} disabled={payBusy}>
-              {payBusy ? "Preparing payment…" : "Pay now"}
-            </button>
+            <>
+              <button
+                className="btn w-full"
+                onClick={onPayStripe}
+                disabled={payBusy || !canStripe}
+                title={!canStripe ? "Stripe is only for non-ETH auctions" : ""}
+              >
+                {payBusy ? "Preparing payment…" : "Pay with Stripe"}
+              </button>
+
+              <button
+                className="btn w-full bg-white/0 border border-white/20 hover:bg-white/10"
+                onClick={onPayMetaMask}
+                disabled={payBusy || !canMeta}
+                title={!canMeta ? "MetaMask is only for ETH auctions" : ""}
+              >
+                {payBusy ? "Preparing payment…" : "Pay with MetaMask"}
+              </button>
+
+              {!canStripe && !canMeta ? (
+                <div className="text-xs text-amber-300">
+                  This auction currency is not supported for payment yet.
+                </div>
+              ) : null}
+            </>
           ) : null}
+
           <button
             className="btn w-full bg-white/0 border border-white/20 hover:bg-white/10"
             onClick={onClose}
@@ -653,6 +683,7 @@ function isClosedStatus(status: any): boolean {
 export default function ArtworkDetail() {
   const { id } = useParams();
   const nav = useNavigate();
+  const loc = useLocation();
 
   const [viewerId, setViewerId] = useState<string | null>(null);
 
@@ -750,6 +781,9 @@ export default function ArtworkDetail() {
   const finalizeStateRef = useRef<{ listingId: string; at: number } | null>(null);
   const finalizeInFlightRef = useRef<string | null>(null);
 
+  // ✅ internal ref to prevent auto-pay retrigger loop
+  const autoPayRef = useRef<string | null>(null);
+
   useEffect(() => {
     (async () => {
       const { data } = await supabase.auth.getSession();
@@ -827,7 +861,6 @@ export default function ArtworkDetail() {
     }
 
     const outcome = buildOutcome(listing, tb);
-    // if winner wasn't loaded yet, ensure it’s filled
     if (outcome.reserveMet && tb?.bidder_id) {
       outcome.winner =
         winnerProfileRef.current?.id === tb.bidder_id ? winnerProfileRef.current : null;
@@ -837,7 +870,7 @@ export default function ArtworkDetail() {
     return outcome;
   }
 
-  async function finalizeAuctionOnce(listing: any, reason: "elapsed" | "openAfterEnd" | "tick") {
+  async function finalizeAuctionOnce(listing: any) {
     if (!listing?.id) return;
     const listingId = listing.id as string;
     const endAt = listing.end_at as string | null;
@@ -846,7 +879,7 @@ export default function ArtworkDetail() {
     const endedByTime = Date.now() >= new Date(endAt).getTime();
     if (!endedByTime) return;
 
-    // throttle attempts (idempotent rpc, but we still avoid spamming)
+    // throttle attempts
     const last = finalizeStateRef.current;
     if (last?.listingId === listingId && Date.now() - last.at < 8000) return;
     if (finalizeInFlightRef.current === listingId) return;
@@ -857,12 +890,12 @@ export default function ArtworkDetail() {
     try {
       await endAuction(listingId);
     } catch {
-      // idempotent: ignore failures like "already ended"
+      // idempotent: ignore
     } finally {
       finalizeInFlightRef.current = null;
     }
 
-    // Refresh listing row by id (status may become ended/paid)
+    // Refresh listing row by id
     let fresh: any = null;
     try {
       fresh = await refreshListingByIdSafe(listingId);
@@ -872,7 +905,6 @@ export default function ArtworkDetail() {
 
     const useListing = fresh ?? listing;
 
-    // Always compute outcome on finalize; show modal once.
     await computeOutcome(useListing);
     if (shownForListingRef.current !== listingId) {
       shownForListingRef.current = listingId;
@@ -1037,8 +1069,7 @@ export default function ArtworkDetail() {
 
         if (l && String((l as any).type) === "auction") {
           await refreshAuctionBits(l as any);
-          // If page loads after end time, finalize once (even if status is still "active")
-          await finalizeAuctionOnce(l as any, "openAfterEnd");
+          await finalizeAuctionOnce(l as any);
         }
 
         if (viewerId) {
@@ -1086,15 +1117,14 @@ export default function ArtworkDetail() {
   const winnerIdNow =
     reserveMetNow && topBid?.bidder_id ? (topBid.bidder_id as string) : null;
 
-  // ✅ Realtime: bid inserts (keeps topBid & history fresh immediately)
+  // ✅ Realtime: bid inserts
   useEffect(() => {
     if (!activeListing || !isAuction) return;
 
     const off = subscribeBids(activeListing.id, async (b) => {
       setTopBid((cur) => {
         if (!cur) return b;
-        // keep correct top bid even on ties
-        const better = cmpBid(cur, b) < 0; // cur is "worse" than b
+        const better = cmpBid(cur, b) < 0;
         return better ? b : cur;
       });
 
@@ -1110,15 +1140,12 @@ export default function ArtworkDetail() {
           bidder: null,
         };
 
-        // If this bid is from current viewer and we already know their profile name via session,
-        // we still keep bidder null and let refresh resolve. (keeps logic simple + consistent)
         return [row, ...cur].slice(0, 200);
       });
 
-      // If auction already closed (status update lags sometimes), refresh outcome quickly
       if (auctionClosed) {
         try {
-          await computeOutcome(activeListing as any, b.amount >= (topBid?.amount ?? -Infinity) ? b : undefined);
+          await computeOutcome(activeListing as any);
         } catch {}
       }
     });
@@ -1127,7 +1154,7 @@ export default function ArtworkDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeListing?.id, isAuction, auctionClosed]);
 
-  // ✅ Realtime: listing status updates (ended/closed/paid)
+  // ✅ Realtime: listing status updates
   useEffect(() => {
     if (!activeListing?.id) return;
     const channel = supabase
@@ -1144,14 +1171,13 @@ export default function ArtworkDetail() {
           const next = payload.new as any;
           setActiveListing((cur) => (cur ? ({ ...cur, ...next } as any) : (next as any)));
 
-          // If it flips to a closed state, compute outcome & show once
           const nextStatus = String(next?.status ?? "").toLowerCase();
           if (
             String(next?.type) === "auction" &&
             (nextStatus === "ended" || nextStatus === "closed" || nextStatus === "paid")
           ) {
             try {
-              await computeOutcome(next, undefined);
+              await computeOutcome(next);
             } catch {}
             if (shownForListingRef.current !== next.id) {
               shownForListingRef.current = next.id;
@@ -1169,7 +1195,7 @@ export default function ArtworkDetail() {
     };
   }, [activeListing?.id]);
 
-  // ✅ Poll fallback (keeps top bid + history consistent even if realtime drops)
+  // ✅ Poll fallback + finalize
   useEffect(() => {
     if (!activeListing || !isAuction) return;
 
@@ -1187,10 +1213,9 @@ export default function ArtworkDetail() {
         await loadBidHistory(activeListing.id, "reset");
       } catch {}
 
-      // If time has passed and status hasn't flipped yet, finalize (once)
       try {
         if (!alive) return;
-        await finalizeAuctionOnce(activeListing as any, "tick");
+        await finalizeAuctionOnce(activeListing as any);
       } catch {}
     }, 6000);
 
@@ -1200,7 +1225,7 @@ export default function ArtworkDetail() {
     };
   }, [activeListing?.id, isAuction]);
 
-  // ✅ When auction becomes closed, compute outcome (even if user never saw modal yet)
+  // ✅ When auction becomes closed, compute outcome
   useEffect(() => {
     if (!activeListing || !isAuction) return;
     if (!auctionClosed) return;
@@ -1212,6 +1237,50 @@ export default function ArtworkDetail() {
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeListing?.id, auctionClosed]);
+
+  // ✅ Auto-trigger payment when opening /art/:id?pay=1&method=...&listing=...
+  useEffect(() => {
+    if (!isAuction) return;
+    if (!activeListing?.id) return;
+    if (!auctionClosed || auctionPaid) return;
+    if (!reserveMetNow || !winnerIdNow) return;
+    if (!viewerId || viewerId !== winnerIdNow) return;
+
+    const qs = new URLSearchParams(loc.search);
+    if (qs.get("pay") !== "1") return;
+
+    const method = String(qs.get("method") ?? "").toLowerCase();
+    const listingId = String(qs.get("listing") ?? "");
+    if (listingId && listingId !== activeListing.id) return;
+
+    const key = `${activeListing.id}:${method}`;
+    if (autoPayRef.current === key) return; // prevent loop
+    autoPayRef.current = key;
+
+    // clear query params (so refresh doesn’t retrigger)
+    try {
+      nav(`/art/${id}`, { replace: true });
+    } catch {}
+
+    // kick payment
+    if (method === "stripe") {
+      void payForAuctionStripe();
+    } else if (method === "metamask") {
+      void payForAuctionMetaMask();
+    } else {
+      setMsg("Unknown pay method.");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    loc.search,
+    isAuction,
+    activeListing?.id,
+    auctionClosed,
+    auctionPaid,
+    reserveMetNow,
+    winnerIdNow,
+    viewerId,
+  ]);
 
   async function loadOwners(artworkId: string) {
     const { data } = await supabase
@@ -1300,36 +1369,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  async function handlePin() {
-    if (!art?.id) return;
-    setPinLoading(true);
-    setPinErr(null);
-    setPinData(null);
-    try {
-      const { data, error } = await supabase.functions.invoke("pin-artwork", {
-        body: { artwork_id: art.id },
-      });
-      if (error) throw error;
-      setPinData(data as PinResp);
-
-      const fresh = await supabase
-        .from("artworks")
-        .select(
-          "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
-        )
-        .eq("id", art.id)
-        .maybeSingle();
-      if (fresh.data) {
-        setArt(fresh.data as Artwork);
-        setMainUrl((fresh.data as Artwork).image_url || null);
-      }
-    } catch (e: any) {
-      setPinErr(e?.message ?? "Pin failed.");
-    } finally {
-      setPinLoading(false);
-    }
-  }
-
   function asMsg(e: unknown) {
     if (!e) return "Unknown error";
     if (typeof e === "string") return e;
@@ -1338,46 +1377,6 @@ export default function ArtworkDetail() {
       return JSON.stringify(e);
     } catch {
       return String(e);
-    }
-  }
-
-  async function ensureOwnershipRow() {
-    if (!viewerId || !art?.id) return;
-    const { data } = await supabase
-      .from("ownerships")
-      .select("owner_id")
-      .eq("artwork_id", art.id)
-      .eq("owner_id", viewerId)
-      .maybeSingle();
-
-    if (!data) {
-      await supabase.from("ownerships").upsert({
-        artwork_id: art.id,
-        owner_id: viewerId,
-        quantity: 1,
-        hidden: false,
-        updated_at: new Date().toISOString(),
-      });
-    }
-  }
-
-  async function toggleHidden(next: boolean) {
-    if (!viewerId || !art?.id) return;
-    setHideBusy(true);
-    setMsg(null);
-    try {
-      await ensureOwnershipRow();
-      const { error } = await supabase
-        .from("ownerships")
-        .update({ hidden: next, updated_at: new Date().toISOString() })
-        .eq("artwork_id", art.id)
-        .eq("owner_id", viewerId);
-      if (error) throw error;
-      setMyHidden(next);
-    } catch (e) {
-      setMsg(asMsg(e));
-    } finally {
-      setHideBusy(false);
     }
   }
 
@@ -1397,7 +1396,7 @@ export default function ArtworkDetail() {
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
-          title: art.title ?? "Artwork purchase",
+          quantity: 1,
           success_url: `${location.origin}/checkout/success`,
           cancel_url: location.href,
         },
@@ -1482,156 +1481,196 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Auction payment flow (winner only) */
-  async function payForAuctionNow() {
+  /** ✅ Auction payment (Stripe) — winner only */
+  async function payForAuctionStripe() {
     if (!activeListing || !isAuction) return;
-
-    // ensure outcome is computed
-    if (!auctionOutcome) {
-      try {
-        await computeOutcome(activeListing as any);
-      } catch {}
-    }
 
     const winnerId = winnerIdNow;
     if (!reserveMetNow || !winnerId) return;
-    if (!viewerId || viewerId !== winnerId) return;
+    if (!viewerId || viewerId !== winnerId) {
+      setMsg("Only the auction winner can pay.");
+      return;
+    }
     if (auctionPaid) return;
 
     const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
-    const amount = Number(topBid?.amount ?? auctionOutcome?.amount ?? 0);
-    if (!isFinite(amount) || amount <= 0) return;
-
-    setMsg(null);
-
-    // ETH: use MetaMask, send to seller wallet
     if (currency === "ETH") {
-      setPayBusy(true);
-      try {
-        const ethereum = (window as any).ethereum;
-        if (!ethereum) throw new Error("MetaMask not found. Please install it.");
-
-        const accounts: string[] = await ethereum.request({
-          method: "eth_requestAccounts",
-        });
-        const from = accounts?.[0];
-        if (!from) throw new Error("No account authorized in MetaMask.");
-
-        let chainId = await ethereum.request({ method: "eth_chainId" });
-        if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
-          try {
-            await ethereum.request({
-              method: "wallet_switchEthereumChain",
-              params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
-            });
-          } catch {
-            await ethereum.request({
-              method: "wallet_addEthereumChain",
-              params: [SEPOLIA_PARAMS],
-            });
-          }
-          chainId = await ethereum.request({ method: "eth_chainId" });
-          if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
-            throw new Error("Please switch MetaMask to Sepolia.");
-          }
-        }
-
-        const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
-        if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
-
-        const value = toHex(parseEther(amount));
-        const txHash: string = await ethereum.request({
-          method: "eth_sendTransaction",
-          params: [{ from, to, value }],
-        });
-
-        try {
-          await supabase.functions.invoke("record-auction-eth-payment", {
-            body: {
-              listing_id: activeListing.id,
-              tx_hash: txHash,
-              buyer_wallet: from,
-              amount_eth: amount,
-              network: "sepolia",
-            },
-          });
-        } catch (e) {
-          console.warn("record-auction-eth-payment failed:", e);
-        }
-
-        setMsg("Auction payment sent ✔️");
-
-        // refresh listing by id (status may become paid)
-        try {
-          await refreshListingByIdSafe(activeListing.id);
-        } catch {}
-      } catch (e: any) {
-        setMsg(e?.message ?? "Payment failed");
-      } finally {
-        setPayBusy(false);
-      }
+      setMsg("This auction is in ETH. Please pay with MetaMask.");
       return;
     }
 
-    // Fiat/Stripe: Edge Function creates checkout session
     setPayBusy(true);
+    setMsg(null);
+
     try {
-      const { data, error } = await supabase.functions.invoke("create-auction-checkout", {
+      const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
-          success_url: `${location.origin}/checkout/success`,
-          cancel_url: location.href,
+          quantity: 1,
+          success_url: `${location.origin}/checkout/success?listing=${encodeURIComponent(
+            activeListing.id
+          )}`,
+          cancel_url: `${location.origin}/art/${art?.id}?cancelled=1`,
         },
       });
+
       if (error) throw error;
       if (!data?.url) throw new Error("Checkout URL not returned");
       window.location.href = data.url;
     } catch (e: any) {
-      setMsg(e?.message ?? "Payment setup failed (missing create-auction-checkout?)");
+      setMsg(e?.message ?? "Payment setup failed");
     } finally {
       setPayBusy(false);
+    }
+  }
+
+  /** ✅ Auction payment (MetaMask) — winner only */
+  async function payForAuctionMetaMask() {
+    if (!activeListing || !isAuction) return;
+
+    const winnerId = winnerIdNow;
+    if (!reserveMetNow || !winnerId) return;
+    if (!viewerId || viewerId !== winnerId) {
+      setMsg("Only the auction winner can pay.");
+      return;
+    }
+    if (auctionPaid) return;
+
+    const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
+    if (currency !== "ETH") {
+      setMsg("This auction is not in ETH. Please pay with Stripe.");
+      return;
+    }
+
+    const amount = Number(topBid?.amount ?? auctionOutcome?.amount ?? 0);
+    if (!isFinite(amount) || amount <= 0) {
+      setMsg("Invalid auction amount.");
+      return;
+    }
+
+    setPayBusy(true);
+    setMsg(null);
+
+    try {
+      const ethereum = (window as any).ethereum;
+      if (!ethereum) throw new Error("MetaMask not found. Please install it.");
+
+      const accounts: string[] = await ethereum.request({
+        method: "eth_requestAccounts",
+      });
+      const from = accounts?.[0];
+      if (!from) throw new Error("No account authorized in MetaMask.");
+
+      let chainId = await ethereum.request({ method: "eth_chainId" });
+      if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
+        try {
+          await ethereum.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: SEPOLIA_CHAIN_ID_HEX }],
+          });
+        } catch {
+          await ethereum.request({
+            method: "wallet_addEthereumChain",
+            params: [SEPOLIA_PARAMS],
+          });
+        }
+        chainId = await ethereum.request({ method: "eth_chainId" });
+        if (chainId !== SEPOLIA_CHAIN_ID_HEX) {
+          throw new Error("Please switch MetaMask to Sepolia.");
+        }
+      }
+
+      const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
+      if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
+
+      const value = toHex(parseEther(amount));
+      const txHash: string = await ethereum.request({
+        method: "eth_sendTransaction",
+        params: [{ from, to, value }],
+      });
+
+      try {
+        await supabase.functions.invoke("record-auction-eth-payment", {
+          body: {
+            listing_id: activeListing.id,
+            tx_hash: txHash,
+            buyer_wallet: from,
+            amount_eth: amount,
+            network: "sepolia",
+          },
+        });
+      } catch (e) {
+        console.warn("record-auction-eth-payment failed:", e);
+      }
+
+      setMsg("Auction payment sent ✔️");
+
+      try {
+        await refreshListingByIdSafe(activeListing.id);
+      } catch {}
+    } catch (e: any) {
+      setMsg(e?.message ?? "Payment failed");
+    } finally {
+      setPayBusy(false);
+    }
+  }
+
+  /** ✅ Try send a text DM via RPC; fallback safe */
+  async function trySendDmText(threadId: string, text: string, artworkId?: string) {
+    try {
+      // If you have this function in DB, it will work.
+      // If not, it will throw, and we just ignore.
+      await (supabase as any).rpc("dm_send_message_v2", {
+        p_thread_id: threadId,
+        p_kind: "text",
+        p_content: text,
+        p_attachment_url: null,
+        p_artwork_id: artworkId ?? null,
+        p_meta: null,
+      });
+      return true;
+    } catch {
+      return false;
     }
   }
 
   /** ✅ Contact winner (seller) */
   async function contactWinner() {
     const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
-    if (!winId) return;
+    if (!winId || !activeListing || !art) return;
 
     try {
       const tid = await dmGetOrCreateThread(winId);
 
-      // 1) send congratulation message first (so winner sees context immediately)
-      try {
-        const sellerName =
-          owner?.display_name || owner?.username || (owner?.id ? owner.id.slice(0, 6) : "Seller");
-        const title = art?.title ?? "this artwork";
-        const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
-        const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
-        const payHint =
-          ccy === "ETH"
-            ? "You can pay using MetaMask (ETH) when you open the artwork page."
-            : "You can pay via Stripe (card) when you open the artwork page.";
+      const base = location.origin;
+      const listingId = activeListing.id;
 
-        const text =
-          `Congrats — you’re the winner of this auction for “${title}”! 🎉\n\n` +
-          (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n\n` : "") +
-          `${payHint}\n\n` +
-          `Open the artwork here to complete payment: ${location.origin}/art/${art?.id}`;
+      const stripeLink = `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
+        listingId
+      )}`;
+      const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(
+        listingId
+      )}`;
 
-        // if you have a plain text DM send helper, use it here.
-        // Otherwise we just send the artwork card below (your current DM system).
-        // (Keeping safe: no assumptions about "send text" endpoint)
-        void text;
-      } catch {}
+      const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
+      const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
 
-      // 2) send the artwork card as the “context” message
-      if (art) {
-        await dmSendArtworkShare(tid, art.id, {
-          title: art.title ?? "Untitled",
-          image_url: art.image_url,
-        });
-      }
+      const text =
+        `🎉 Congratulations — you’re the winner of the auction for “${art.title ?? "this artwork"}”!\n\n` +
+        (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n\n` : "") +
+        `Complete payment below:\n` +
+        `• Pay with Stripe: ${stripeLink}\n` +
+        `• Pay with MetaMask: ${metaLink}\n\n` +
+        `Note: Stripe works for non-ETH auctions; MetaMask works for ETH auctions.\n\n` +
+        `Artwork: ${base}/art/${art.id}`;
+
+      // Try send text, but even if not available, still send artwork share
+      await trySendDmText(tid, text, art.id);
+
+      await dmSendArtworkShare(tid, art.id, {
+        title: art.title ?? "Untitled",
+        image_url: art.image_url,
+      });
 
       nav(`/messages?t=${encodeURIComponent(tid)}`);
     } catch (e: any) {
@@ -1655,14 +1694,12 @@ export default function ArtworkDetail() {
     const reserve = Number((activeListing as any)?.reserve_price ?? 0) || 0;
 
     if (!topBid) {
-      // first bid must satisfy reserve if set, otherwise any positive
       return reserve > 0 ? reserve : 0;
     }
 
     const base = topBid.amount * (1 + MIN_INC_BPS / 10000);
     const min = Math.max(reserve, base);
 
-    // avoid weird floating issues: keep up to 8 decimals for ETH (safe UI), 2 for fiat
     const ccy = String(activeListing?.sale_currency ?? "USD").toUpperCase();
     const dp = ccy === "ETH" ? 8 : 2;
     const factor = Math.pow(10, dp);
@@ -1706,12 +1743,10 @@ export default function ArtworkDetail() {
         throw new Error(`Bid must be ≥ ${minNow}`);
       }
 
-      // fast UI: optimistic clear + message
       setBidInput("");
 
       const b = await placeBid(activeListing.id, amt);
 
-      // immediate UI: update top bid & history now (before realtime arrives)
       setTopBid((cur) => {
         if (!cur) return b;
         const better = cmpBid(cur, b) < 0;
@@ -1733,7 +1768,6 @@ export default function ArtworkDetail() {
         return [row, ...cur].slice(0, 200);
       });
 
-      // refresh list so names load + ordering remains correct
       await loadBidHistory(activeListing.id, "reset");
 
       setBidMsg("Bid placed ✅");
@@ -1750,9 +1784,8 @@ export default function ArtworkDetail() {
     if (!listingEndAt) return;
     if (auctionClosed) return;
 
-    // If already elapsed (rare timing), finalize immediately
     if (Date.now() >= new Date(listingEndAt).getTime()) {
-      void finalizeAuctionOnce(activeListing as any, "elapsed");
+      void finalizeAuctionOnce(activeListing as any);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeListing?.id, isAuction, listingEndAt, auctionClosed]);
@@ -1787,6 +1820,7 @@ export default function ArtworkDetail() {
   }
 
   const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
+
   const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
   const bidStep = ccy === "ETH" ? "0.00000001" : "0.01";
 
@@ -2042,7 +2076,7 @@ export default function ArtworkDetail() {
                         endAt={listingEndAt}
                         onElapsed={async () => {
                           try {
-                            await finalizeAuctionOnce(activeListing as any, "elapsed");
+                            await finalizeAuctionOnce(activeListing as any);
                           } catch {}
                         }}
                       />
@@ -2113,7 +2147,7 @@ export default function ArtworkDetail() {
                           <div className="text-sm text-white/80">
                             {isWinner ? (
                               <span>
-                                You won the auction. Please complete payment to secure the artwork.
+                                You won the auction. Choose a payment method to secure the artwork.
                               </span>
                             ) : isSeller ? (
                               <span>Awaiting winner payment. You can contact the winner if needed.</span>
@@ -2122,12 +2156,22 @@ export default function ArtworkDetail() {
                             )}
                           </div>
 
-                          <div className="flex gap-2">
+                          <div className="flex gap-2 flex-wrap">
                             {isWinner ? (
-                              <button className="btn" onClick={payForAuctionNow} disabled={payBusy}>
-                                {payBusy ? "Preparing…" : "Pay now"}
-                              </button>
+                              <>
+                                <button className="btn" onClick={payForAuctionStripe} disabled={payBusy || ccy === "ETH"}>
+                                  {payBusy ? "Preparing…" : "Stripe"}
+                                </button>
+                                <button
+                                  className="btn bg-white/0 border border-white/20 hover:bg-white/10"
+                                  onClick={payForAuctionMetaMask}
+                                  disabled={payBusy || ccy !== "ETH"}
+                                >
+                                  {payBusy ? "Preparing…" : "MetaMask"}
+                                </button>
+                              </>
                             ) : null}
+
                             {isSeller ? (
                               <button
                                 className="btn bg-white/0 border border-white/20 hover:bg-white/10"
@@ -2152,7 +2196,7 @@ export default function ArtworkDetail() {
 
                   {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
 
-                  {/* ✅ Bid history preview (always visible for auction) */}
+                  {/* ✅ Bid history preview */}
                   {isAuction ? (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
@@ -2232,245 +2276,13 @@ export default function ArtworkDetail() {
                 </>
               )}
             </Card>
-
-            {/* IPFS */}
-            <Card title="IPFS">
-              {art.token_uri ? (
-                <div className="text-xs space-y-1">
-                  <div>
-                    <Pill tone="success">Pinned</Pill>
-                  </div>
-                  {art.ipfs_image_cid && (
-                    <div>
-                      Image CID: <code>{art.ipfs_image_cid}</code>
-                    </div>
-                  )}
-                  {art.ipfs_metadata_cid && (
-                    <div>
-                      Metadata CID: <code>{art.ipfs_metadata_cid}</code>{" "}
-                      <a
-                        className="underline"
-                        href={`https://gateway.pinata.cloud/ipfs/${art.ipfs_metadata_cid}`}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open metadata
-                      </a>
-                    </div>
-                  )}
-                  <div>
-                    Token URI: <code>{art.token_uri}</code>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-3">
-                  <button
-                    className="btn"
-                    onClick={handlePin}
-                    disabled={
-                      pinLoading ||
-                      !(viewerId && (viewerId === art.creator_id || viewerId === art.owner_id))
-                    }
-                    title={
-                      viewerId && (viewerId === art.creator_id || viewerId === art.owner_id)
-                        ? ""
-                        : "Only the creator/owner can pin"
-                    }
-                  >
-                    {pinLoading ? "Pinning…" : "Pin to IPFS"}
-                  </button>
-                  {pinErr && <span className="text-rose-400 text-sm">{pinErr}</span>}
-                  {pinData && (
-                    <span className="text-xs text-neutral-300">
-                      ✅ Pinned — CID: <code>{pinData.metadataCID}</code>
-                    </span>
-                  )}
-                </div>
-              )}
-            </Card>
           </div>
         </div>
 
-        {/* Tabs area */}
-        <div>
-          <div className="mt-2 rounded-2xl border border-white/10 bg-white/[0.04]">
-            <div className="flex gap-4 px-4 pt-3 border-b border-white/10">
-              {(["details", "orders", "activity"] as const).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setTab(t)}
-                  className={`px-2 pb-3 text-sm border-b-2 ${
-                    tab === t
-                      ? "border-white text-white"
-                      : "border-transparent text-white/70 hover:text-white"
-                  }`}
-                >
-                  {t === "details" ? "Details" : t === "orders" ? "Orders" : "Activity"}
-                </button>
-              ))}
-            </div>
-
-            {tab === "details" && (
-              <div className="p-4 space-y-4">
-                <Card title={<span className="text-base font-semibold">About</span>}>
-                  <div className="text-sm text-white/80 whitespace-pre-wrap">
-                    {art.description || "No description provided."}
-                  </div>
-                </Card>
-
-                <Card title={<span className="text-base font-semibold">Collection</span>}>
-                  <div className="text-sm text-white/80">
-                    {collection ? (
-                      <Link
-                        to={`/collection/${encodeURIComponent(collection.slug || collection.id)}`}
-                        className="underline"
-                      >
-                        {collection.name || collection.slug || "Untitled collection"}
-                      </Link>
-                    ) : (
-                      <span className="text-white/60">Not part of a collection.</span>
-                    )}
-                  </div>
-
-                  <div className="mt-3">
-                    <div className="font-medium">More from this collection</div>
-                    {collection ? (
-                      <>
-                        {moreLoading ? (
-                          <div className="mt-2 text-sm text-white/60">Loading…</div>
-                        ) : moreFrom.length > 0 ? (
-                          <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                            {moreFrom.map((a) => (
-                              <Link key={a.id} to={`/art/${a.id}`} className="group block">
-                                <div className="aspect-square rounded-xl overflow-hidden border border-white/10 bg-neutral-900">
-                                  {a.image_url ? (
-                                    <img
-                                      src={a.image_url}
-                                      alt={a.title ?? "Artwork"}
-                                      className="w-full h-full object-cover group-hover:opacity-90 transition"
-                                    />
-                                  ) : (
-                                    <div className="w-full h-full grid place-items-center text-xs text-white/50">
-                                      No image
-                                    </div>
-                                  )}
-                                </div>
-                                <div className="mt-1 text-xs truncate text-white/80">
-                                  {a.title || "Untitled"}
-                                </div>
-                              </Link>
-                            ))}
-                          </div>
-                        ) : (
-                          <div className="mt-1 text-sm text-white/60">
-                            No more artworks in this collection yet.
-                          </div>
-                        )}
-                      </>
-                    ) : (
-                      <div className="mt-1 text-sm text-white/60">
-                        This artwork is not part of a collection.
-                      </div>
-                    )}
-                  </div>
-                </Card>
-              </div>
-            )}
-
-            {tab === "orders" && (
-              <div className="p-4">
-                <Card>
-                  <div className="text-sm text-white/70">Orders UI coming soon.</div>
-                </Card>
-              </div>
-            )}
-
-            {tab === "activity" && (
-              <div className="p-4 space-y-4">
-                {isAuction ? (
-                  <Card title="Bid history">
-                    <div className="text-xs text-white/60 mb-2">
-                      All bids are recorded in real-time.
-                    </div>
-
-                    <div className="max-h-[520px] overflow-auto rounded-xl border border-white/10 divide-y divide-white/10">
-                      {bidHistory.length === 0 ? (
-                        <div className="p-3 text-sm text-white/60">No bids yet.</div>
-                      ) : (
-                        bidHistory.map((b) => {
-                          const nm =
-                            b.bidder?.display_name ||
-                            b.bidder?.username ||
-                            (b.bidder_id ? b.bidder_id.slice(0, 6) : "—");
-                          return (
-                            <div key={b.id} className="p-3 flex items-center justify-between gap-3">
-                              <div className="min-w-0">
-                                <div className="text-sm text-white/85 truncate">{nm}</div>
-                                <div className="text-xs text-white/55">
-                                  {new Date(b.created_at).toLocaleString()}
-                                </div>
-                              </div>
-                              <div className="text-sm font-semibold">
-                                {fmtCurrency(b.amount, activeListing?.sale_currency ?? "USD")}
-                              </div>
-                            </div>
-                          );
-                        })
-                      )}
-                    </div>
-
-                    <div className="mt-3 flex items-center justify-between gap-2">
-                      <button
-                        className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                        onClick={() => loadBidHistory(activeListing!.id, "reset")}
-                        disabled={bidHistoryBusy}
-                      >
-                        {bidHistoryBusy ? "Refreshing…" : "Refresh"}
-                      </button>
-
-                      <button
-                        className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                        onClick={() => loadBidHistory(activeListing!.id, "more")}
-                        disabled={bidHistoryBusy || !bidHistoryHasMore}
-                        title={!bidHistoryHasMore ? "No more bids" : ""}
-                      >
-                        Load more
-                      </button>
-                    </div>
-                  </Card>
-                ) : null}
-
-                <Card title="Sales activity">
-                  {sales.length === 0 ? (
-                    <div className="text-sm text-white/70">No sales yet.</div>
-                  ) : (
-                    <ul className="space-y-3">
-                      {sales.map((s) => (
-                        <li
-                          key={s.id}
-                          className="p-3 rounded-xl bg-white/[0.04] border border-white/10"
-                        >
-                          <div className="text-sm">
-                            Sale • <b>{fmtCurrency(s.price, s.currency)}</b> on{" "}
-                            {new Date(s.sold_at).toLocaleString()}
-                          </div>
-                          <div className="text-xs text-white/70">
-                            tx: {s.tx_hash ? <code className="break-all">{s.tx_hash}</code> : "—"}
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Card>
-              </div>
-            )}
-          </div>
-
-          <div className="flex gap-2 mt-4">
-            <Link to="/" className="btn">
-              Back
-            </Link>
-          </div>
+        <div className="flex gap-2 mt-4">
+          <Link to="/" className="btn">
+            Back
+          </Link>
         </div>
       </div>
 
@@ -2522,7 +2334,8 @@ export default function ArtworkDetail() {
         onClose={() => setAuctionEndOpen(false)}
         outcome={auctionOutcome}
         isWinner={isWinner}
-        onPayNow={payForAuctionNow}
+        onPayStripe={payForAuctionStripe}
+        onPayMetaMask={payForAuctionMetaMask}
         payBusy={payBusy}
         paid={auctionPaid}
       />
