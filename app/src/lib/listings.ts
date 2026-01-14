@@ -6,14 +6,7 @@ export type Listing = {
   artwork_id: string;
   seller_id: string;
   type: "fixed_price" | "auction" | "coming_soon";
-  status:
-    | "draft"
-    | "active"
-    | "paused"
-    | "ended"
-    | "canceled"
-    | "closed"
-    | "paid";
+  status: "draft" | "active" | "paused" | "ended" | "canceled";
   sale_currency: string | null;
   fixed_price: number | null;
   quantity?: number | null;
@@ -35,6 +28,11 @@ export type JoinedListing = Listing & {
     status: string;
   };
 };
+
+const LISTING_SELECT = `
+  id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price,
+  start_at, end_at, created_at, updated_at, seller_wallet
+`;
 
 /**
  * Create or update the user's active fixed-price listing for a given artwork.
@@ -87,9 +85,10 @@ export async function fetchActiveListings(limit = 24): Promise<JoinedListing[]> 
     .from("listings")
     .select(
       `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
-      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet,
-      artworks!inner ( id, title, image_url, creator_id, status )
+      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity, reserve_price, start_at, end_at, created_at, updated_at, seller_wallet,
+      artworks!inner (
+        id, title, image_url, creator_id, status
+      )
     `
     )
     .eq("status", "active")
@@ -101,17 +100,10 @@ export async function fetchActiveListings(limit = 24): Promise<JoinedListing[]> 
 }
 
 /** Fetch the current active listing for a specific artwork (or null). */
-export async function fetchActiveListingForArtwork(
-  artworkId: string
-): Promise<Listing | null> {
+export async function fetchActiveListingForArtwork(artworkId: string): Promise<Listing | null> {
   const { data, error } = await supabase
     .from("listings")
-    .select(
-      `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
-      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
-    `
-    )
+    .select(LISTING_SELECT)
     .eq("artwork_id", artworkId)
     .eq("status", "active")
     .maybeSingle<Listing>();
@@ -121,18 +113,11 @@ export async function fetchActiveListingForArtwork(
   return data ?? null;
 }
 
-/** Fetch any listing by id (ended/closed/paid included). */
-export async function fetchListingById(
-  listingId: string
-): Promise<Listing | null> {
+/** ✅ NEW: Fetch listing by id (or null). */
+export async function fetchListingById(listingId: string): Promise<Listing | null> {
   const { data, error } = await supabase
     .from("listings")
-    .select(
-      `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
-      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
-    `
-    )
+    .select(LISTING_SELECT)
     .eq("id", listingId)
     .maybeSingle<Listing>();
 
@@ -141,22 +126,19 @@ export async function fetchListingById(
 }
 
 /**
- * Fetch the latest listing for an artwork (any status).
- * Useful for showing ended auctions when no active listing exists.
+ * ✅ NEW: Fetch latest listing for an artwork.
+ * - Prefer active listing if exists
+ * - Else return most recently updated listing (or null)
  */
-export async function fetchLatestListingForArtwork(
-  artworkId: string
-): Promise<Listing | null> {
+export async function fetchLatestListingForArtwork(artworkId: string): Promise<Listing | null> {
+  const active = await fetchActiveListingForArtwork(artworkId);
+  if (active) return active;
+
   const { data, error } = await supabase
     .from("listings")
-    .select(
-      `
-      id, artwork_id, seller_id, type, status, sale_currency, fixed_price, quantity,
-      reserve_price, start_at, end_at, created_at, updated_at, seller_wallet
-    `
-    )
+    .select(LISTING_SELECT)
     .eq("artwork_id", artworkId)
-    .order("created_at", { ascending: false })
+    .order("updated_at", { ascending: false })
     .limit(1)
     .maybeSingle<Listing>();
 

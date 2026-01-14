@@ -1,3 +1,4 @@
+// C:\Users\User\Downloads\taedal-v7\app\src\features\messages\LinkifyText.tsx
 import React from "react";
 
 function isSafeHttpUrl(u: string): boolean {
@@ -33,7 +34,14 @@ function splitIntoParts(text: string): Array<{ kind: "text" | "url"; value: stri
   return parts;
 }
 
-function parsePayLink(u: string): null | { amount?: string; currency?: string; label: string } {
+function methodLabel(method?: string | null) {
+  const m = (method || "").toLowerCase();
+  if (m === "stripe" || m === "card") return { label: "Pay with Card", icon: "💳" };
+  if (m === "metamask" || m === "eth" || m === "crypto") return { label: "Pay with MetaMask", icon: "🦊" };
+  return { label: "Pay now", icon: "💳" };
+}
+
+function parsePayLink(u: string): null | { amount?: string; currency?: string; label: string; icon: string } {
   try {
     const url = new URL(u);
     const pay = url.searchParams.get("pay");
@@ -41,11 +49,11 @@ function parsePayLink(u: string): null | { amount?: string; currency?: string; l
 
     const amount = url.searchParams.get("amount") ?? undefined;
     const currency = url.searchParams.get("currency") ?? url.searchParams.get("mode") ?? undefined;
+    const method = url.searchParams.get("method");
 
-    let label = "Pay now";
-    if (amount) label = "Pay now";
+    const { label, icon } = methodLabel(method);
 
-    return { amount, currency, label };
+    return { amount, currency, label, icon };
   } catch {
     return null;
   }
@@ -72,7 +80,7 @@ export default function LinkifyText({ text }: { text: string }) {
               className="inline-flex items-center gap-2 rounded-xl border border-emerald-300/25 bg-emerald-400/15 px-3 py-1.5 text-emerald-100 hover:bg-emerald-400/20 transition no-underline break-words"
               title="Open payment"
             >
-              <span className="text-sm">💳</span>
+              <span className="text-sm">{pay.icon}</span>
               <span className="text-sm font-medium">{pay.label}</span>
               {pay.amount ? (
                 <span className="text-xs text-emerald-200/80">
