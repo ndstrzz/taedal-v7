@@ -678,6 +678,31 @@ function isClosedStatus(status: any): boolean {
   return s === "ended" || s === "closed" || s === "paid" || s === "canceled";
 }
 
+function parseInvokeError(err: any): string {
+  // Supabase edge invoke errors often hide the actual response in `context`
+  if (!err) return "Unknown error";
+  if (typeof err === "string") return err;
+  if (err?.context) {
+    const c = err.context;
+    // try common shapes
+    const msg =
+      c?.error?.message ||
+      c?.error ||
+      c?.message ||
+      (typeof c === "string" ? c : null);
+    if (msg) return String(msg);
+    try {
+      return JSON.stringify(c);
+    } catch {}
+  }
+  if (err?.message) return String(err.message);
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return String(err);
+  }
+}
+
 /* ------------------------------ main page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -1397,6 +1422,13 @@ export default function ArtworkDetail() {
         body: {
           listing_id: activeListing.id,
           quantity: 1,
+
+          // Extra fields (safe even if the function ignores them)
+          listing_type: String((activeListing as any)?.type ?? "fixed"),
+          artwork_id: art.id,
+          seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
+          buyer_id: viewerId,
+
           success_url: `${location.origin}/checkout/success`,
           cancel_url: location.href,
         },
@@ -1404,8 +1436,8 @@ export default function ArtworkDetail() {
       if (error) throw error;
       if (!data?.url) throw new Error("Stripe session URL not returned");
       window.location.href = data.url;
-    } catch (e) {
-      setMsg(asMsg(e));
+    } catch (e: any) {
+      setMsg(parseInvokeError(e));
     }
   }
 
@@ -1483,7 +1515,7 @@ export default function ArtworkDetail() {
 
   /** ✅ Auction payment (Stripe) — winner only */
   async function payForAuctionStripe() {
-    if (!activeListing || !isAuction) return;
+    if (!activeListing || !isAuction || !art) return;
 
     const winnerId = winnerIdNow;
     if (!reserveMetNow || !winnerId) return;
@@ -1499,18 +1531,36 @@ export default function ArtworkDetail() {
       return;
     }
 
+    const finalAmt = Number(topBid?.amount ?? auctionOutcome?.amount ?? 0);
+
     setPayBusy(true);
     setMsg(null);
 
     try {
+      const successUrl = `${location.origin}/art/${art.id}?paid=1&listing=${encodeURIComponent(
+        activeListing.id
+      )}`;
+      const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
+        activeListing.id
+      )}`;
+
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
           quantity: 1,
-          success_url: `${location.origin}/checkout/success?listing=${encodeURIComponent(
-            activeListing.id
-          )}`,
-          cancel_url: `${location.origin}/art/${art?.id}?cancelled=1`,
+
+          // ✅ These fields help your edge function build the right Stripe checkout for auctions,
+          // and also make your webhook fallback resolution work reliably.
+          listing_type: "auction",
+          artwork_id: art.id,
+          seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
+          buyer_id: viewerId,
+          currency,
+          // if your function supports overriding/using this, great; if not, harmless
+          auction_amount: isFinite(finalAmt) && finalAmt > 0 ? finalAmt : null,
+
+          success_url: successUrl,
+          cancel_url: cancelUrl,
         },
       });
 
@@ -1518,7 +1568,7 @@ export default function ArtworkDetail() {
       if (!data?.url) throw new Error("Checkout URL not returned");
       window.location.href = data.url;
     } catch (e: any) {
-      setMsg(e?.message ?? "Payment setup failed");
+      setMsg(parseInvokeError(e));
     } finally {
       setPayBusy(false);
     }
@@ -1659,10 +1709,10 @@ export default function ArtworkDetail() {
         `🎉 Congratulations — you’re the winner of the auction for “${art.title ?? "this artwork"}”!\n\n` +
         (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n\n` : "") +
         `Complete payment below:\n` +
-        `• Pay with Stripe: ${stripeLink}\n` +
-        `• Pay with MetaMask: ${metaLink}\n\n` +
-        `Note: Stripe works for non-ETH auctions; MetaMask works for ETH auctions.\n\n` +
-        `Artwork: ${base}/art/${art.id}`;
+        (ccy === "ETH"
+          ? `• Pay with MetaMask: ${metaLink}\n`
+          : `• Pay with Stripe: ${stripeLink}\n`) +
+        `\nArtwork: ${base}/art/${art.id}`;
 
       // Try send text, but even if not available, still send artwork share
       await trySendDmText(tid, text, art.id);
@@ -2159,7 +2209,11 @@ export default function ArtworkDetail() {
                           <div className="flex gap-2 flex-wrap">
                             {isWinner ? (
                               <>
-                                <button className="btn" onClick={payForAuctionStripe} disabled={payBusy || ccy === "ETH"}>
+                                <button
+                                  className="btn"
+                                  onClick={payForAuctionStripe}
+                                  disabled={payBusy || ccy === "ETH"}
+                                >
                                   {payBusy ? "Preparing…" : "Stripe"}
                                 </button>
                                 <button

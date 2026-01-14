@@ -1,3 +1,4 @@
+// C:\Users\User\Downloads\taedal-v7\supabase\functions\stripe-webhook\index.ts
 // deno-lint-ignore-file no-explicit-any
 /// <reference lib="deno.window" />
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
@@ -11,8 +12,13 @@ const STRIPE_WEBHOOK_SECRET = Deno.env.get("STRIPE_WEBHOOK_SECRET")!;
 const res = (body: any, status = 200) =>
   new Response(typeof body === "string" ? body : JSON.stringify(body), {
     status,
-    headers: { "Content-Type": typeof body === "string" ? "text/plain" : "application/json" },
+    headers: {
+      "Content-Type": typeof body === "string" ? "text/plain" : "application/json",
+    },
   });
+
+const lower = (v: any) => String(v ?? "").toLowerCase();
+const upper = (v: any) => String(v ?? "").toUpperCase();
 
 Deno.serve(async (req) => {
   if (req.method !== "POST") return res("Method not allowed", 405);
@@ -24,7 +30,11 @@ Deno.serve(async (req) => {
   try {
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, { httpClient: Stripe.createFetchHttpClient() });
-    const event = await stripe.webhooks.constructEventAsync(rawBody, sig, STRIPE_WEBHOOK_SECRET);
+    const event = await stripe.webhooks.constructEventAsync(
+      rawBody,
+      sig,
+      STRIPE_WEBHOOK_SECRET,
+    );
 
     if (event.type === "checkout.session.completed") {
       const session: any = event.data.object;
@@ -34,21 +44,29 @@ Deno.serve(async (req) => {
       const md = session.metadata || {};
       let listingId = md.listing_id || null;
       let artworkId = md.artwork_id || null;
-      let sellerId  = md.seller_id  || null;
-      let buyerId   = md.buyer_id   || null;
+      let sellerId = md.seller_id || null;
+      let buyerId = md.buyer_id || null;
       const quantity = Number(md.quantity || 1);
 
-      // Fallback: if we have listing_id but missing artwork/seller, fetch them
-      if (listingId && (!artworkId || !sellerId)) {
+      // Try to determine listing type from metadata (best), else infer from DB
+      let listingType = lower(md.listing_type || md.type || "");
+      let listingStatus: string | null = null;
+
+      // Fallback: if we have listing_id but missing artwork/seller (or listing_type), fetch them
+      if (listingId && (!artworkId || !sellerId || !listingType)) {
         const { data: listing, error } = await db
           .from("listings")
-          .select("artwork_id, seller_id, status")
+          .select("artwork_id, seller_id, status, type")
           .eq("id", listingId)
           .maybeSingle();
+
         if (error) console.error("lookup listing error", error.message);
+
         if (listing) {
-          artworkId = artworkId || listing.artwork_id;
-          sellerId  = sellerId  || listing.seller_id;
+          artworkId = artworkId || (listing as any).artwork_id;
+          sellerId = sellerId || (listing as any).seller_id;
+          listingStatus = lower((listing as any).status);
+          if (!listingType) listingType = lower((listing as any).type);
         }
       }
 
@@ -56,60 +74,121 @@ Deno.serve(async (req) => {
       if ((!listingId || !artworkId || !sellerId || !buyerId) && session.client_reference_id) {
         try {
           const [b, l, a, s] = String(session.client_reference_id).split(":");
-          buyerId   = buyerId   || b;
+          buyerId = buyerId || b;
           listingId = listingId || l;
           artworkId = artworkId || a;
-          sellerId  = sellerId  || s;
-        } catch {}
+          sellerId = sellerId || s;
+        } catch {
+          // ignore
+        }
       }
 
       if (!listingId || !artworkId || !sellerId || !buyerId) {
         console.error("stripe-webhook: missing ids", {
-          listingId, artworkId, sellerId, buyerId,
-          meta: session.metadata, client_reference_id: session.client_reference_id,
+          listingId,
+          artworkId,
+          sellerId,
+          buyerId,
+          meta: session.metadata,
+          client_reference_id: session.client_reference_id,
         });
         return res({ error: "Missing metadata" }, 400);
       }
 
-      const amountTotal: number = session.amount_total; // smallest unit
-      const currency: string = (session.currency || "").toUpperCase();
+      // Amount from Stripe (smallest unit)
+      const amountTotal: number = Number(session.amount_total ?? 0);
+      const currency: string = upper(session.currency || "");
       const price = ["JPY", "KRW"].includes(currency) ? amountTotal : amountTotal / 100;
 
-      // 1) End listing (idempotent)
-      await db.from("listings").update({ status: "ended" }).eq("id", listingId).eq("status", "active");
+      // 1) Update listing status (idempotent)
+      // - Fixed price: active -> ended
+      // - Auction winner payment: ended/closed -> paid
+      // NOTE: We intentionally DO NOT require "active" for auctions, because payment happens after ending.
+      if (listingType === "auction") {
+        // if we couldn't read status earlier, read it now
+        if (!listingStatus) {
+          const { data: srow } = await db
+            .from("listings")
+            .select("status")
+            .eq("id", listingId)
+            .maybeSingle();
+          listingStatus = lower((srow as any)?.status);
+        }
+
+        // If already paid, skip changing it again
+        if (listingStatus !== "paid") {
+          await db
+            .from("listings")
+            .update({ status: "paid" })
+            .eq("id", listingId)
+            .in("status", ["ended", "closed"]); // only transition from end states
+        }
+      } else {
+        // Fixed price
+        await db
+          .from("listings")
+          .update({ status: "ended" })
+          .eq("id", listingId)
+          .eq("status", "active");
+      }
 
       // 2) Record sale
-      await db.from("sales").insert({
-        artwork_id: artworkId,
-        buyer_id: buyerId,
-        seller_id: sellerId,
-        price,
-        currency,
-        sold_at: new Date().toISOString(),
-        tx_hash: null,
-      }).then(({ error }) => error && console.error("sales insert error", error.message));
+      await db
+        .from("sales")
+        .insert({
+          artwork_id: artworkId,
+          buyer_id: buyerId,
+          seller_id: sellerId,
+          price,
+          currency,
+          sold_at: new Date().toISOString(),
+          tx_hash: null,
+        })
+        .then(({ error }) => error && console.error("sales insert error", error.message));
 
       // 3) Transfer ownership
-      await db.from("artworks").update({ owner_id: buyerId }).eq("id", artworkId)
+      await db
+        .from("artworks")
+        .update({ owner_id: buyerId })
+        .eq("id", artworkId)
         .then(({ error }) => error && console.error("artworks update error", error.message));
 
       // 4) Ownership bookkeeping (+ buyer)
-      await db.from("ownerships").upsert({
-        artwork_id: artworkId,
-        owner_id: buyerId,
-        quantity: quantity > 0 ? quantity : 1,
-        updated_at: new Date().toISOString(),
-      }, { onConflict: "artwork_id,owner_id" })
+      await db
+        .from("ownerships")
+        .upsert(
+          {
+            artwork_id: artworkId,
+            owner_id: buyerId,
+            quantity: quantity > 0 ? quantity : 1,
+            updated_at: new Date().toISOString(),
+          },
+          { onConflict: "artwork_id,owner_id" },
+        )
         .then(({ error }) => error && console.error("ownerships upsert error", error.message));
 
       // 5) Optional: decrement seller qty if you support editions
       try {
-        await db.rpc("decrement_ownership_if_exists", { p_artwork_id: artworkId, p_owner_id: sellerId });
+        await db.rpc("decrement_ownership_if_exists", {
+          p_artwork_id: artworkId,
+          p_owner_id: sellerId,
+        });
       } catch (e) {
-        console.warn("RPC decrement_ownership_if_exists not present or failed", (e as any)?.message ?? e);
+        console.warn(
+          "RPC decrement_ownership_if_exists not present or failed",
+          (e as any)?.message ?? e,
+        );
       }
 
-      console.log("stripe-webhook ✔ processed", { listingId, artworkId, buyerId, sellerId, price, currency });
+      console.log("stripe-webhook ✔ processed", {
+        listingId,
+        listingType,
+        artworkId,
+        buyerId,
+        sellerId,
+        price,
+        currency,
+      });
       return res({ ok: true });
     }
 
