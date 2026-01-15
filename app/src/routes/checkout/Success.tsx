@@ -5,7 +5,7 @@ import { supabase } from "../../lib/supabase";
 
 type Status =
   | { state: "loading" }
-  | { state: "ok"; paid: boolean; meta: any }
+  | { state: "ok"; paid: boolean; meta: any; artworkId: string; listingId: string }
   | { state: "error"; message: string; detail?: string };
 
 export default function CheckoutSuccess() {
@@ -19,8 +19,14 @@ export default function CheckoutSuccess() {
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
   const receipt = useMemo(
-    () => ({ sessionId, listingId: listingIdFromUrl, artworkId: artworkIdFromUrl }),
-    [sessionId, listingIdFromUrl, artworkIdFromUrl]
+    () => ({
+      sessionId,
+      listingId:
+        status.state === "ok" ? status.listingId : listingIdFromUrl,
+      artworkId:
+        status.state === "ok" ? status.artworkId : artworkIdFromUrl,
+    }),
+    [sessionId, listingIdFromUrl, artworkIdFromUrl, status]
   );
 
   const run = async () => {
@@ -57,7 +63,6 @@ export default function CheckoutSuccess() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      // Because checkout-finalize now ALWAYS returns 200, error should usually be null.
       if (error) {
         setStatus({
           state: "error",
@@ -76,11 +81,22 @@ export default function CheckoutSuccess() {
         return;
       }
 
+      const meta = data?.session?.metadata ?? {};
+      const artworkId = String(data?.artwork_id || meta?.artwork_id || artworkIdFromUrl || "");
+      const listingId = String(data?.listing_id || meta?.listing_id || listingIdFromUrl || "");
+
       setStatus({
         state: "ok",
         paid: Boolean(data?.paid),
-        meta: data?.session?.metadata ?? {},
+        meta,
+        artworkId,
+        listingId,
       });
+
+      // ✅ Auto redirect to fresh artwork page
+      if (artworkId) {
+        nav(`/art/${artworkId}?justPurchased=1&t=${Date.now()}`, { replace: true });
+      }
     } catch (e: any) {
       setStatus({
         state: "error",
@@ -96,7 +112,10 @@ export default function CheckoutSuccess() {
   }, [sessionId]);
 
   const goArtwork = () => {
-    if (artworkIdFromUrl) nav(`/art/${artworkIdFromUrl}`);
+    const artworkId =
+      status.state === "ok" ? status.artworkId : artworkIdFromUrl;
+
+    if (artworkId) nav(`/art/${artworkId}?justPurchased=1&t=${Date.now()}`);
     else nav("/home");
   };
 
@@ -115,7 +134,7 @@ export default function CheckoutSuccess() {
           <div className="mt-3">
             {status.paid ? (
               <div className="text-white/80">
-                Payment received and finalized. Your purchase should reflect now.
+                Payment received and finalized. Redirecting you back to the artwork…
               </div>
             ) : (
               <div className="text-amber-300">
