@@ -13,15 +13,19 @@ export default function CheckoutSuccess() {
   const [sp] = useSearchParams();
 
   const sessionId = sp.get("session_id") || "";
-  const listingId = sp.get("listing") || sp.get("listing_id") || "";
-  const artworkId = sp.get("artwork") || sp.get("artwork_id") || "";
+  const listingIdFromUrl = sp.get("listing") || sp.get("listing_id") || "";
+  const artworkIdFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
 
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
-  const receipt = useMemo(
-    () => ({ sessionId, listingId, artworkId }),
-    [sessionId, listingId, artworkId]
-  );
+  const effective = useMemo(() => {
+    const meta = status.state === "ok" ? status.meta || {} : {};
+    return {
+      sessionId,
+      listingId: listingIdFromUrl || meta?.listing_id || meta?.listing || "",
+      artworkId: artworkIdFromUrl || meta?.artwork_id || meta?.artwork || "",
+    };
+  }, [sessionId, listingIdFromUrl, artworkIdFromUrl, status]);
 
   const run = async () => {
     if (!sessionId) {
@@ -35,7 +39,6 @@ export default function CheckoutSuccess() {
       const { data: sess } = await supabase.auth.getSession();
       const accessToken = sess.session?.access_token;
 
-      // If your finalize function is allowed without auth, you can remove this check.
       if (!accessToken) {
         setStatus({
           state: "error",
@@ -45,17 +48,28 @@ export default function CheckoutSuccess() {
         return;
       }
 
+      // IMPORTANT:
+      // Keep your function name the same as what you deployed.
+      // You are currently calling "checkout-finalize" in your code,
+      // so we keep it here.
       const { data, error } = await supabase.functions.invoke("checkout-finalize", {
-        body: { session_id: sessionId },
+        body: {
+          session_id: sessionId,
+          listing_id: listingIdFromUrl || undefined,
+          artwork_id: artworkIdFromUrl || undefined,
+        },
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
       if (error) throw error;
 
+      // We store the returned metadata (or whole payload) so UI can fallback to it
+      const meta = data?.session?.metadata ?? data?.metadata ?? {};
+
       setStatus({
         state: "ok",
         paid: Boolean(data?.paid),
-        meta: data?.session?.metadata ?? {},
+        meta,
       });
     } catch (e: any) {
       setStatus({
@@ -72,7 +86,7 @@ export default function CheckoutSuccess() {
   }, [sessionId]);
 
   const goArtwork = () => {
-    if (artworkId) nav(`/art/${artworkId}`);
+    if (effective.artworkId) nav(`/art/${effective.artworkId}`);
     else nav("/home");
   };
 
@@ -122,19 +136,19 @@ export default function CheckoutSuccess() {
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Stripe session</div>
               <div className="text-white/85 break-all text-right">
-                {receipt.sessionId || "—"}
+                {effective.sessionId || "—"}
               </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Listing</div>
               <div className="text-white/85 break-all text-right">
-                {receipt.listingId || "—"}
+                {effective.listingId || "—"}
               </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Artwork</div>
               <div className="text-white/85 break-all text-right">
-                {receipt.artworkId || "—"}
+                {effective.artworkId || "—"}
               </div>
             </div>
           </div>

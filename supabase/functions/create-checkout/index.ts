@@ -6,7 +6,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+
+// NOTE: you are currently using SERVICE_ROLE_KEY as the env name in this function.
+// Keep it consistent with your Supabase secrets.
 const SERVICE_KEY = Deno.env.get("SERVICE_ROLE_KEY")!;
+
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
 const SITE = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
 
@@ -53,6 +57,20 @@ function withSessionId(url: string) {
   return u.toString();
 }
 
+function withSuccessContext(url: string, listingId: string, artworkId: string) {
+  // Ensure success URL includes listing/artwork so UI can navigate correctly + pass to finalize
+  const u = new URL(url);
+  if (listingId) {
+    if (!u.searchParams.get("listing_id")) u.searchParams.set("listing_id", listingId);
+    if (!u.searchParams.get("listing")) u.searchParams.set("listing", listingId); // backwards compat
+  }
+  if (artworkId) {
+    if (!u.searchParams.get("artwork_id")) u.searchParams.set("artwork_id", artworkId);
+    if (!u.searchParams.get("artwork")) u.searchParams.set("artwork", artworkId); // backwards compat
+  }
+  return u.toString();
+}
+
 Deno.serve(async (req) => {
   try {
     if (req.method === "OPTIONS") return text("ok", 200);
@@ -88,19 +106,12 @@ Deno.serve(async (req) => {
     const quantity = Number(body?.quantity || 1);
 
     // Default URLs (safe defaults)
-    const success_url_raw = String(
-      body?.success_url || `${SITE}/checkout/success`
-    );
-    const cancel_url = String(
-      body?.cancel_url || `${SITE}/checkout/cancel`
-    );
+    const success_url_raw = String(body?.success_url || `${SITE}/checkout/success`);
+    const cancel_url = String(body?.cancel_url || `${SITE}/checkout/cancel`);
 
     if (!listing_id) return json({ error: "Missing listing_id" }, 400);
     if (!isFinite(quantity) || quantity <= 0)
       return json({ error: "Invalid quantity" }, 400);
-
-    // ✅ IMPORTANT: always include session_id placeholder
-    const success_url = withSessionId(success_url_raw);
 
     // 3) Use service role to fetch listing + top bid reliably
     const db = createClient(SUPABASE_URL, SERVICE_KEY);
@@ -173,6 +184,10 @@ Deno.serve(async (req) => {
 
     const unit_amount = toStripeUnitAmount(payableAmount, currency);
 
+    // ✅ IMPORTANT: add listing/artwork context + always include session_id placeholder
+    const success_url_ctx = withSuccessContext(success_url_raw, String(listing.id), String(listing.artwork_id));
+    const success_url = withSessionId(success_url_ctx);
+
     // 5) Create Stripe checkout session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, {
@@ -180,9 +195,8 @@ Deno.serve(async (req) => {
       httpClient: Stripe.createFetchHttpClient(),
     });
 
-    const name = listingType === "auction"
-      ? "Auction winner payment"
-      : "Artwork purchase";
+    const name =
+      listingType === "auction" ? "Auction winner payment" : "Artwork purchase";
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",

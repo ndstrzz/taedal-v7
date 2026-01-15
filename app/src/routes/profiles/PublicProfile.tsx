@@ -145,6 +145,7 @@ export default function PublicProfile() {
       .eq("author_id", profileId) // ✅ Updated to author_id
       .order("created_at", { ascending: false })
       .limit(200);
+
     if (error) throw error;
     const createdRows = (data ?? []) as any[];
 
@@ -161,6 +162,7 @@ export default function PublicProfile() {
       .eq("hidden", true)
       .gt("quantity", 0)
       .in("artwork_id", ids);
+
     if (hErr) throw hErr;
 
     const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
@@ -175,31 +177,36 @@ export default function PublicProfile() {
     );
   }
 
+  // ✅ FIXED: no FK join — do 2 queries safely
   async function loadPurchased(profileId: string) {
     const { data: own, error } = await supabase
       .from("ownerships")
-      .select(`
-                artwork_id,
-        updated_at,
-        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
-            `)
+      .select("artwork_id, updated_at")
       .eq("owner_id", profileId)
       .eq("hidden", false)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
+
     if (error) throw error;
 
-    type Row = { artwork_id: string; artworks: any | any[] };
-    const rows = (own ?? []) as Row[];
-    const map = new Map(
-      rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
-        .filter(Boolean)
-        .map((a: any) => [a.id, a])
-    );
+    const ids = Array.from(new Set((own ?? []).map((r: any) => r.artwork_id))).filter(Boolean);
+
+    if (ids.length === 0) {
+      setPurchased([]);
+      return;
+    }
+
+    const { data: arts, error: aErr } = await supabase
+      .from("artworks")
+      .select("id,title,image_url")
+      .in("id", ids);
+
+    if (aErr) throw aErr;
+
+    const map = new Map((arts ?? []).map((a: any) => [a.id, a]));
     setPurchased(
-      rows.map(r => r.artwork_id)
+      ids
         .map((id) => map.get(id))
         .filter(Boolean)
         .map((a: any) => ({
@@ -210,24 +217,37 @@ export default function PublicProfile() {
     );
   }
 
+  // ✅ FIXED: no FK join — do 2 queries safely
   async function loadHidden(profileId: string) {
-    const { data, error } = await supabase
+    const { data: own, error } = await supabase
       .from("ownerships")
-      .select(`
-                artwork_id,
-        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
-            `)
+      .select("artwork_id, updated_at")
       .eq("owner_id", profileId)
       .eq("hidden", true)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
+
     if (error) throw error;
 
-    const rows = (data ?? []) as { artworks: any | any[] }[];
+    const ids = Array.from(new Set((own ?? []).map((r: any) => r.artwork_id))).filter(Boolean);
+
+    if (ids.length === 0) {
+      setHidden([]);
+      return;
+    }
+
+    const { data: arts, error: aErr } = await supabase
+      .from("artworks")
+      .select("id,title,image_url")
+      .in("id", ids);
+
+    if (aErr) throw aErr;
+
+    const map = new Map((arts ?? []).map((a: any) => [a.id, a]));
     setHidden(
-      rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+      ids
+        .map((id) => map.get(id))
         .filter(Boolean)
         .map((a: any) => ({
           id: a.id,
@@ -322,7 +342,8 @@ export default function PublicProfile() {
       }
 
       const payload: any = await res.json();
-      const passUrl: string | undefined = payload.passUrl || payload.url || payload.link || payload.profileUrl;
+      const passUrl: string | undefined =
+        payload.passUrl || payload.url || payload.link || payload.profileUrl;
 
       if (passUrl) window.location.href = passUrl;
       else setMsg("Wallet card prepared, but no URL was returned from the server.");
@@ -364,10 +385,20 @@ export default function PublicProfile() {
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
-      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
+      <div
+        className="relative border-b border-neutral-800 overflow-hidden"
+        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
+      >
         {coverUrl ? (
           isCoverVideo ? (
-            <video src={coverUrl} className="absolute inset-0 h-full w-full object-cover" autoPlay loop muted playsInline />
+            <video
+              src={coverUrl}
+              className="absolute inset-0 h-full w-full object-cover"
+              autoPlay
+              loop
+              muted
+              playsInline
+            />
           ) : (
             <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
           )
