@@ -6,7 +6,7 @@ import { supabase } from "../../lib/supabase";
 type Status =
   | { state: "loading" }
   | { state: "ok"; paid: boolean; meta: any }
-  | { state: "error"; message: string };
+  | { state: "error"; message: string; detail?: string };
 
 export default function CheckoutSuccess() {
   const nav = useNavigate();
@@ -19,11 +19,7 @@ export default function CheckoutSuccess() {
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
   const receipt = useMemo(
-    () => ({
-      sessionId,
-      listingId,
-      artworkId,
-    }),
+    () => ({ sessionId, listingId, artworkId }),
     [sessionId, listingId, artworkId]
   );
 
@@ -35,9 +31,25 @@ export default function CheckoutSuccess() {
     setStatus({ state: "loading" });
 
     try {
+      // ✅ ensure we have auth (Stripe redirect sometimes lands before session restored)
+      const { data: sess } = await supabase.auth.getSession();
+      const accessToken = sess.session?.access_token;
+
+      // If your finalize function is allowed without auth, you can remove this check.
+      if (!accessToken) {
+        setStatus({
+          state: "error",
+          message: "You’re not signed in, so the app can’t finalize this purchase.",
+          detail: "Sign in and press Refresh.",
+        });
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke("checkout-finalize", {
         body: { session_id: sessionId },
+        headers: { Authorization: `Bearer ${accessToken}` },
       });
+
       if (error) throw error;
 
       setStatus({
@@ -48,9 +60,8 @@ export default function CheckoutSuccess() {
     } catch (e: any) {
       setStatus({
         state: "error",
-        message:
-          e?.message ??
-          "Failed to verify checkout (network/CORS/env).",
+        message: "Failed to send a request to the Edge Function",
+        detail: e?.message ?? String(e),
       });
     }
   };
@@ -80,12 +91,11 @@ export default function CheckoutSuccess() {
           <div className="mt-3">
             {status.paid ? (
               <div className="text-white/80">
-                Payment received. If your purchase doesn’t reflect immediately,
-                hit refresh once.
+                Payment received and finalized. Your purchase should reflect now.
               </div>
             ) : (
               <div className="text-amber-300">
-                Checkout exists but not marked paid yet.
+                Checkout exists but not marked paid yet. Try Refresh in a few seconds.
               </div>
             )}
           </div>
@@ -95,8 +105,13 @@ export default function CheckoutSuccess() {
           <div className="mt-4 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4">
             <div className="text-amber-200 font-medium">Needs review</div>
             <div className="text-amber-200/80 mt-1">{status.message}</div>
+            {status.detail && (
+              <div className="text-amber-200/70 text-xs mt-2 whitespace-pre-wrap">
+                {status.detail}
+              </div>
+            )}
             <div className="text-amber-200/70 text-sm mt-2">
-              This does NOT mean Stripe failed — it means the app couldn’t verify/finalize.
+              Stripe succeeded — the app just couldn’t verify/finalize. You can retry.
             </div>
           </div>
         )}
@@ -106,15 +121,21 @@ export default function CheckoutSuccess() {
           <div className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Stripe session</div>
-              <div className="text-white/85 break-all text-right">{receipt.sessionId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.sessionId || "—"}
+              </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Listing</div>
-              <div className="text-white/85 break-all text-right">{receipt.listingId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.listingId || "—"}
+              </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Artwork</div>
-              <div className="text-white/85 break-all text-right">{receipt.artworkId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.artworkId || "—"}
+              </div>
             </div>
           </div>
         </div>
@@ -127,7 +148,7 @@ export default function CheckoutSuccess() {
         </div>
 
         <div className="mt-4 text-xs text-white/45">
-          If your purchase doesn’t reflect after refresh, share the Stripe session id with support.
+          If it still doesn’t reflect, share the Stripe session id with support.
         </div>
       </div>
     </div>
