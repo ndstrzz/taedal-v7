@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
-  fetchNotifications,
+  fetchNotificationsForUser, // Updated import
   markManyRead,
   createNotification,
   type NotificationRow,
@@ -58,11 +58,14 @@ export default function Inbox() {
       const { data } = await supabase.auth.getUser();
       const uid = data.user?.id ?? null;
       setUserId(uid);
+      
       if (!uid) {
         setItems([]);
         return;
       }
-      const rows = await fetchNotifications(250);
+
+      // Updated call: passing both the userId (uid) and the limit
+      const rows = await fetchNotificationsForUser(uid, 250);
       setItems(rows);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load inbox.");
@@ -131,7 +134,6 @@ export default function Inbox() {
     }
     setErr(null);
     try {
-      // actor_id must match auth.uid() due to your insert policy
       await createNotification({
         user_id: userId,
         actor_id: userId,
