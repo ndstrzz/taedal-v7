@@ -25,6 +25,8 @@ function j(body: any, status = 200) {
   });
 }
 
+// Stripe sends amount_total in smallest units.
+// USD/SGD/EUR = cents; JPY/KRW = no decimals.
 function isZeroDecimalCurrency(currencyUpper: string) {
   return ["JPY", "KRW"].includes(currencyUpper.toUpperCase());
 }
@@ -45,6 +47,7 @@ Deno.serve(async (req) => {
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization") || "";
     if (!authHeader) throw new Error("Missing Authorization.");
 
+    // Identify signed-in caller
     const supabaseUser = createClient(SUPABASE_URL, ANON, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -58,6 +61,7 @@ Deno.serve(async (req) => {
     const session_id = String(body?.session_id || "");
     if (!session_id) throw new Error("Missing session_id");
 
+    // Retrieve Stripe session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, {
       apiVersion: "2023-10-16",
@@ -72,6 +76,7 @@ Deno.serve(async (req) => {
 
     if (!paid) throw new Error("Stripe session is not paid/complete yet.");
 
+    // Validate metadata (source of truth)
     const meta: any = session?.metadata || {};
     const listingId = String(meta?.listing_id || "");
     const artworkId = String(meta?.artwork_id || "");
@@ -84,8 +89,10 @@ Deno.serve(async (req) => {
     const amountTotalSmallest = Number(session?.amount_total ?? 0);
     const amountTotal = stripeAmountToNormal(amountTotalSmallest, currency);
 
+    // Admin client (bypasses RLS)
     const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE);
 
+    // ✅ Calls your SQL RPC (you already inserted)
     const { data, error } = await supabaseAdmin.rpc("fulfill_stripe_purchase", {
       p_stripe_session_id: String(session_id),
       p_listing_id: listingId,
@@ -94,17 +101,13 @@ Deno.serve(async (req) => {
       p_amount: amountTotal,
       p_currency: currency,
     });
+
     if (error) throw error;
 
     return j(
       {
         ok: true,
         paid: true,
-
-        // ✅ important: return these as top-level
-        listing_id: listingId,
-        artwork_id: artworkId,
-
         result: data,
         session: {
           id: session?.id,
