@@ -32,7 +32,7 @@ import {
 } from "../../features/messages/api";
 
 /** ✅ Notification helper */
-import { createNotification } from "../../lib/notifications";
+import { createNotification } from "../../lib/notifications.ts";
 
 
 /* ------------------------------ Helper Functions ------------------------------ */
@@ -1696,9 +1696,11 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Contact winner (seller) — now includes Inbox notification */
+  /** ✅ Contact winner (seller) — integrates "Notify Winner" logic from instructions */
   async function contactWinner() {
     const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
+    const winningBidId = topBid?.id ?? null; // For the metadata
+
     if (!winId || !activeListing || !art) return;
 
     try {
@@ -1714,42 +1716,43 @@ export default function ArtworkDetail() {
 
       // Check for available checkout link
       const stripeLink = ccy === "ETH" ? null : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
-      const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(listingId)}`;
 
-      // 1) Build Congratulation Message
+      // 1) Build Congratulation Message for the DM thread
       const msg = buildWinnerCongratsMessage({
         artworkTitle: art.title,
         artworkId: art.id,
         stripeUrl: stripeLink,
       });
 
-      // 2) SEND MESSAGE in your existing messaging system
+      // 2) SEND MESSAGE via DM
       await dmSendText(tid, msg);
 
-      // 3) Send artwork card
+      // 3) Send artwork card via DM
       await dmSendArtworkShare(tid, art.id, {
         title: art.title ?? "Untitled",
         image_url: art.image_url,
       });
 
-      // 4) CREATE INBOX NOTIFICATION for the winner
+      // 4) PATCH ADDED: INSERT NOTIFICATION for the winning bidder in notifications table
+      // This implements the logic shown in your provided image (ArtWorkDetail "notify the winner")
       await createNotification({
-        user_id: winId,
-        actor_id: actorId,
-        type: "auction_won",
-        title: "You won the auction 🎉",
-        body: `Congratulations — you won the auction for ${art.title ?? "an artwork"}. Tap to pay.`,
-        href: `/messages?t=${encodeURIComponent(tid)}`, // or `/art/${art.id}` if you prefer
+        user_id: winId,               // recipient (winner)
+        actor_id: actorId,             // sender (owner)
+        type: "auction_win",           // auction_win as per instructions
+        title: "Congratulations! You won the auction 🥳",
+        body: `You won "${art.title ?? "this artwork"}". Please complete your purchase via Stripe or MetaMask on the artwork page.`,
+        href: `/art/${art.id}`,        // Link to the artwork page for payment
         metadata: {
+          listing_id: listingId,
           artwork_id: art.id,
-          kind: "auction_won",
+          winning_bid_id: winningBidId,
         },
       });
 
-      // 5) Jump to Messages
+      // 5) Jump to Messages thread
       nav(`/messages?t=${encodeURIComponent(tid)}`);
     } catch (e: any) {
-      setMsg(e?.message ?? "Failed to open chat");
+      setMsg(e?.message ?? "Failed to open chat or notify winner");
     }
   }
 

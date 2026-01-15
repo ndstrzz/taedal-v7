@@ -1,6 +1,8 @@
+// app/src/components/Sidebar.tsx
 import { NavLink, Link, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { getUnreadCounts, type UnreadCounts } from "../lib/notifications";
 
 /* ----------------------------- Types ----------------------------- */
 type UserBits = {
@@ -16,7 +18,7 @@ type NavItem = {
   iconSrc: string;
   alt?: string;
   onClick?: () => void; // for actions like opening the search panel
-  badgeDot?: boolean; // ✅ show a dot indicator
+  badge?: number; // unread badge
 };
 
 type SearchRow = {
@@ -45,21 +47,27 @@ function saveRecent(list: SearchRow[]) {
   } catch {}
 }
 
-/* ---------------------------- Rail Link ---------------------------- */
-function RailLink({ to, label, iconSrc, alt, onClick, badgeDot }: NavItem) {
-  const Icon = (
-    <div className="relative grid place-items-center w-8 shrink-0">
-      <img
-        src={iconSrc}
-        alt={alt || label}
-        className="h-5 w-5 transition-transform group-hover/item:scale-105"
-      />
-      {badgeDot ? (
-        <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 border border-black/70" />
-      ) : null}
-    </div>
+function Badge({ n }: { n?: number }) {
+  if (!n || n <= 0) return null;
+  const text = n > 99 ? "99+" : String(n);
+  return (
+    <span
+      className="
+        absolute -top-1 -right-1
+        min-w-[18px] h-[18px] px-1
+        rounded-full bg-red-500 text-white
+        text-[10px] leading-[18px] font-semibold
+        text-center
+        shadow
+      "
+    >
+      {text}
+    </span>
   );
+}
 
+/* ---------------------------- Rail Link ---------------------------- */
+function RailLink({ to, label, iconSrc, alt, onClick, badge }: NavItem) {
   // Action button variant
   if (onClick) {
     return (
@@ -73,7 +81,14 @@ function RailLink({ to, label, iconSrc, alt, onClick, badgeDot }: NavItem) {
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
         ].join(" ")}
       >
-        {Icon}
+        <div className="relative grid place-items-center w-8 shrink-0">
+          <img
+            src={iconSrc}
+            alt={alt || label}
+            className="h-5 w-5 transition-transform group-hover/item:scale-105"
+          />
+          <Badge n={badge} />
+        </div>
         <span
           className="
             overflow-hidden opacity-0 max-w-0
@@ -113,11 +128,8 @@ function RailLink({ to, label, iconSrc, alt, onClick, badgeDot }: NavItem) {
                 isActive ? "scale-105" : "group-hover/item:scale-105",
               ].join(" ")}
             />
-            {badgeDot ? (
-              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 border border-black/70" />
-            ) : null}
+            <Badge n={badge} />
           </div>
-
           <span
             className="
               overflow-hidden opacity-0 max-w-0
@@ -144,8 +156,11 @@ export default function Sidebar() {
   /* -------------------- auth / profile -------------------- */
   const [user, setUser] = useState<UserBits | null>(null);
 
-  // ✅ inbox unread dot
-  const [inboxUnreadDot, setInboxUnreadDot] = useState(false);
+  /* -------------------- unread badges -------------------- */
+  const [unread, setUnread] = useState<UnreadCounts>({
+    inboxUnread: 0,
+    messagesUnread: 0,
+  });
 
   useEffect(() => {
     let mounted = true;
@@ -153,11 +168,7 @@ export default function Sidebar() {
       const { data } = await supabase.auth.getSession();
       const u = data.session?.user ?? null;
       if (!mounted) return;
-      if (!u) {
-        setUser(null);
-        setInboxUnreadDot(false);
-        return;
-      }
+      if (!u) return setUser(null);
 
       const { data: prof } = await supabase
         .from("profiles")
@@ -175,18 +186,13 @@ export default function Sidebar() {
 
     const sub = supabase.auth.onAuthStateChange((_e, s) => {
       const u = s?.user ?? null;
-      if (!u) {
-        setUser(null);
-        setInboxUnreadDot(false);
-        return;
-      }
+      if (!u) return setUser(null);
       (async () => {
         const { data: prof } = await supabase
           .from("profiles")
           .select("username, avatar_url")
           .eq("id", u.id)
           .maybeSingle();
-
         setUser({
           id: u.id,
           email: u.email,
@@ -196,48 +202,62 @@ export default function Sidebar() {
       })();
     });
 
-    return () => sub.data.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      sub.data.subscription.unsubscribe();
+    };
   }, []);
 
-  // ✅ watch unread notifications (dot only)
+  // refresh unread counts
   useEffect(() => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      setUnread({ inboxUnread: 0, messagesUnread: 0 });
+      return;
+    }
 
     let alive = true;
 
-    async function refreshDot() {
+    const refresh = async () => {
       try {
-        const { count } = await supabase
-          .from("notifications")
-          .select("id", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .is("read_at", null);
+        const counts = await getUnreadCounts(user.id);
         if (!alive) return;
-        setInboxUnreadDot(Boolean(count && count > 0));
+        setUnread(counts);
       } catch {
-        if (!alive) return;
-        setInboxUnreadDot(false);
+        // ignore
       }
-    }
+    };
 
-    refreshDot();
+    refresh();
 
+    // Poll (simple + reliable)
+    const t = window.setInterval(refresh, 20000);
+
+    // Refresh when tab becomes visible
+    const onVis = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVis);
+
+    // Optional realtime (if enabled in Supabase)
     const ch = supabase
-      .channel(`inbox_dot_${user.id}`)
+      .channel("sidebar-unread")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
-        () => {
-          void refreshDot();
-        }
+        {
+          event: "*",
+          schema: "public",
+          table: "notifications",
+          filter: `user_id=eq.${user.id}`,
+        },
+        () => refresh()
       )
       .subscribe();
 
     return () => {
       alive = false;
-      try {
-        supabase.removeChannel(ch);
-      } catch {}
+      window.clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+      supabase.removeChannel(ch);
     };
   }, [user?.id]);
 
@@ -255,10 +275,8 @@ export default function Sidebar() {
 
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
-      if (panelRef.current && panelRef.current.contains(e.target as Node))
-        return;
-      if (accountRef.current && accountRef.current.contains(e.target as Node))
-        return;
+      if (panelRef.current && panelRef.current.contains(e.target as Node)) return;
+      if (accountRef.current && accountRef.current.contains(e.target as Node)) return;
       setSearchOpen(false);
       setAccountOpen(false);
     }
@@ -336,20 +354,40 @@ export default function Sidebar() {
 
   /* -------------------- nav model -------------------- */
   const mainNav: NavItem[] = [
-    { to: "/discover", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Discover" },
-    { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
-    { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
-    { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
-
-    { to: "/messages", label: "Messages", iconSrc: "/images/messages-icon.svg", alt: "Messages" },
-
-    // ✅ Inbox + unread dot
+    {
+      to: "/discover",
+      label: "Discover",
+      iconSrc: "/images/discover-icon.svg",
+      alt: "Discover",
+    },
+    {
+      to: "/explore",
+      label: "Collections",
+      iconSrc: "/images/collections-icon.svg",
+    },
+    {
+      to: "/contracts",
+      label: "Contracts",
+      iconSrc: "/images/contract-icon.svg",
+    },
+    {
+      to: "/studio",
+      label: "Studio",
+      iconSrc: "/images/studio-icon.svg",
+    },
+    {
+      to: "/messages",
+      label: "Messages",
+      iconSrc: "/images/messages-icon.svg",
+      alt: "Messages",
+      badge: unread.messagesUnread,
+    },
     {
       to: "/inbox",
       label: "Inbox",
       iconSrc: "/images/inbox-icon.svg",
       alt: "Inbox",
-      badgeDot: inboxUnreadDot,
+      badge: unread.inboxUnread,
     },
   ];
 
@@ -417,7 +455,7 @@ export default function Sidebar() {
         {/* Main nav */}
         <nav className="mt-2 grid gap-2 px-1" role="navigation">
           {mainNav.map((it) => (
-            <RailLink key={it.to || it.label} {...it} />
+            <RailLink key={it.to ?? it.label} {...it} />
           ))}
 
           {/* Social dropdown */}
@@ -471,7 +509,11 @@ export default function Sidebar() {
                   ].join(" ")
                 }
               >
-                <img src="/images/post-feed-icon.svg" alt="Post feed" className="h-4 w-4 object-contain" />
+                <img
+                  src="/images/post-feed-icon.svg"
+                  alt="Post feed"
+                  className="h-4 w-4 object-contain"
+                />
                 <span>post feed</span>
               </NavLink>
 
@@ -486,7 +528,11 @@ export default function Sidebar() {
                   ].join(" ")
                 }
               >
-                <img src="/images/view-feed-icon.svg" alt="View feed" className="h-4 w-4 object-contain" />
+                <img
+                  src="/images/view-feed-icon.svg"
+                  alt="View feed"
+                  className="h-4 w-4 object-contain"
+                />
                 <span>view feed</span>
               </NavLink>
             </div>

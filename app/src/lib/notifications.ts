@@ -14,10 +14,40 @@ export type NotificationRow = {
   read_at: string | null;
 };
 
-export async function fetchNotifications(limit = 50): Promise<NotificationRow[]> {
+export type UnreadCounts = {
+  inboxUnread: number;     // excludes message-type notifs
+  messagesUnread: number;  // message-type notifs only
+};
+
+export type CreateNotificationInput = {
+  user_id: string;               // recipient
+  actor_id?: string | null;      // sender/trigger
+  type: string;                  // e.g. "auction_won", "purchase", "contract_update", "message"
+  title: string;
+  body?: string | null;
+  href?: string | null;
+  metadata?: any;
+};
+
+export async function createNotification(input: CreateNotificationInput) {
+  const payload = {
+    user_id: input.user_id,
+    actor_id: input.actor_id ?? null,
+    type: input.type,
+    title: input.title,
+    body: input.body ?? null,
+    href: input.href ?? null,
+    metadata: input.metadata ?? {},
+  };
+
+  const { error } = await supabase.from("notifications").insert(payload);
+  if (error) throw error;
+}
+
+export async function fetchNotifications(limit = 200): Promise<NotificationRow[]> {
   const { data, error } = await supabase
     .from("notifications")
-    .select("*")
+    .select("id,user_id,actor_id,type,title,body,href,metadata,created_at,read_at")
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -25,44 +55,51 @@ export async function fetchNotifications(limit = 50): Promise<NotificationRow[]>
   return (data ?? []) as NotificationRow[];
 }
 
-export async function markNotificationRead(id: string) {
-  const { error } = await supabase
+export async function fetchInboxNotifications(limit = 200): Promise<NotificationRow[]> {
+  const { data, error } = await supabase
     .from("notifications")
-    .update({ read_at: new Date().toISOString() })
-    .eq("id", id);
+    .select("id,user_id,actor_id,type,title,body,href,metadata,created_at,read_at")
+    .neq("type", "message")
+    .order("created_at", { ascending: false })
+    .limit(limit);
 
   if (error) throw error;
+  return (data ?? []) as NotificationRow[];
 }
 
-export async function markAllNotificationsRead() {
-  // Only mark unread ones to reduce writes
-  const { error } = await supabase
+export async function getUnreadCounts(userId: string): Promise<UnreadCounts> {
+  const inbox = await supabase
     .from("notifications")
-    .update({ read_at: new Date().toISOString() })
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .neq("type", "message")
     .is("read_at", null);
 
-  if (error) throw error;
+  if (inbox.error) throw inbox.error;
+
+  const msgs = await supabase
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .eq("type", "message")
+    .is("read_at", null);
+
+  if (msgs.error) throw msgs.error;
+
+  return {
+    inboxUnread: inbox.count ?? 0,
+    messagesUnread: msgs.count ?? 0,
+  };
 }
 
-export async function createNotification(params: {
-  user_id: string; // recipient
-  actor_id?: string | null; // who triggered it (owner)
-  type: string;
-  title: string;
-  body?: string | null;
-  href?: string | null;
-  metadata?: any;
-}) {
-  const payload = {
-    user_id: params.user_id,
-    actor_id: params.actor_id ?? null,
-    type: params.type,
-    title: params.title,
-    body: params.body ?? null,
-    href: params.href ?? null,
-    metadata: params.metadata ?? {},
-  };
+export async function markManyRead(userId: string, ids: string[]) {
+  if (!ids.length) return;
+  const now = new Date().toISOString();
+  const { error } = await supabase
+    .from("notifications")
+    .update({ read_at: now })
+    .eq("user_id", userId)
+    .in("id", ids);
 
-  const { error } = await supabase.from("notifications").insert(payload);
   if (error) throw error;
 }

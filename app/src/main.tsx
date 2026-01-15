@@ -183,7 +183,7 @@ const router = createBrowserRouter([
         children: [{ index: true, element: <MessagesPage /> }],
       },
 
-      /* ✅ NEW: Inbox */
+      /* ✅ NEW: Inbox (added with RequireAuth as per instructions) */
       {
         path: "/inbox",
         element: <AppLayout />,
