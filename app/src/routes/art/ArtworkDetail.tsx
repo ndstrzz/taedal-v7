@@ -1,4 +1,4 @@
-// C:\Users\User\Downloads\taedal-v7\app\src\routes\art\ArtworkDetail.tsx
+// app/src/routes/art/ArtworkDetail.tsx
 
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
@@ -28,7 +28,63 @@ import {
   dmGetOrCreateThread,
   dmListFriends,
   dmSendArtworkShare,
+  dmSendText,
 } from "../../features/messages/api";
+
+/** ✅ Notification helper */
+import { createNotification } from "../../lib/notifications.ts";
+
+/* ------------------------------ Helper Functions ------------------------------ */
+
+function buildWinnerCongratsMessage(params: {
+  artworkTitle?: string | null;
+  artworkId: string;
+  stripeUrl?: string | null;
+  metamaskUrl?: string | null;
+}) {
+  const title = params.artworkTitle || "your artwork";
+  const artLink = `${window.location.origin}/art/${params.artworkId}`;
+
+  const stripeLine = params.stripeUrl
+    ? `1) **Card / Stripe** -> ${params.stripeUrl}`
+    : `1) **Card / Stripe** (not available for this auction)`;
+
+  const metaLine = params.metamaskUrl
+    ? `2) **Crypto / MetaMask** -> ${params.metamaskUrl}`
+    : `2) **Crypto / MetaMask** (not available for this auction)`;
+
+  return [
+    `🎉 Congratulations! You’re the winning bidder for **${title}**.`,
+    `To complete your purchase, please choose a payment method below:`,
+    stripeLine,
+    metaLine,
+    `Artwork link: ${artLink}`,
+    `If you need help, just reply here — I’ll assist you with the next step.`,
+  ].join("\n");
+}
+
+async function safeSendDmText(threadId: string, text: string, artworkId?: string) {
+  // Prefer your app helper
+  try {
+    await dmSendText(threadId, text);
+    return;
+  } catch {
+    // Fallback to RPC if available
+    try {
+      await (supabase as any).rpc("dm_send_message_v2", {
+        p_thread_id: threadId,
+        p_kind: "text",
+        p_content: text,
+        p_attachment_url: null,
+        p_artwork_id: artworkId ?? null,
+        p_meta: null,
+      });
+      return;
+    } catch (e) {
+      throw e;
+    }
+  }
+}
 
 /* ------------------------------ WalletModal ------------------------------ */
 
@@ -240,7 +296,8 @@ function ShareToDMModal({
             <div className="text-sm font-medium text-white/90 truncate">
               {artwork.title ?? "Untitled"}
             </div>
-            <div className="text-xs text-white/60 truncate">/art/{artwork.id}</div>
+            {/* ✅ FIXED interpolation */}
+            <div className="text-xs text-white/60 truncate">{`/art/${artwork.id}`}</div>
           </div>
         </div>
 
@@ -427,13 +484,15 @@ function AuctionEndedModal({
 /* ------------------------------ config ------------------------------ */
 
 const FALLBACK_PAYTO = (import.meta as any)?.env?.VITE_SEPOLIA_PAYTO ?? "";
+const SEPOLIA_RPC_URL =
+  (import.meta as any)?.env?.VITE_SEPOLIA_RPC_URL ?? "https://rpc.sepolia.org";
 
 const SEPOLIA_CHAIN_ID_HEX = "0xaa36a7"; // 11155111
 const SEPOLIA_PARAMS = {
   chainId: SEPOLIA_CHAIN_ID_HEX,
   chainName: "Sepolia",
   nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
-  rpcUrls: ["https://sepolia.infura.io/v3/"],
+  rpcUrls: [SEPOLIA_RPC_URL],
   blockExplorerUrls: ["https://sepolia.etherscan.io"],
 };
 
@@ -453,7 +512,7 @@ type Artwork = {
   title: string | null;
   description: string | null;
   image_url: string | null;
-  creator_id: string;
+  author_id: string; // ✅ Updated from creator_id
   owner_id: string | null;
   created_at: string;
   ipfs_image_cid?: string | null;
@@ -679,12 +738,10 @@ function isClosedStatus(status: any): boolean {
 }
 
 function parseInvokeError(err: any): string {
-  // Supabase edge invoke errors often hide the actual response in `context`
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
   if (err?.context) {
     const c = err.context;
-    // try common shapes
     const msg =
       c?.error?.message ||
       c?.error ||
@@ -719,7 +776,6 @@ export default function ArtworkDetail() {
   const [loading, setLoading] = useState(true);
   const [msg, setMsg] = useState<string | null>(null);
 
-  // NOTE: can hold ACTIVE or ENDED auction listing (we use latest listing fallback)
   const [activeListing, setActiveListing] = useState<
     | (Listing & {
         type?: string | null;
@@ -734,12 +790,10 @@ export default function ArtworkDetail() {
     | null
   >(null);
 
-  // 5% min increment
   const MIN_INC_BPS = 500;
 
   const [topBid, setTopBid] = useState<Bid | null>(null);
 
-  /** ✅ Bid history */
   const [bidHistory, setBidHistory] = useState<
     (BidHistoryRow & { bidder?: Profile | null })[]
   >([]);
@@ -787,7 +841,6 @@ export default function ArtworkDetail() {
   const [showShareQR, setShowShareQR] = useState(false);
   const [showShareDM, setShowShareDM] = useState(false);
 
-  // ✅ Auction ended popup state
   const [auctionEndOpen, setAuctionEndOpen] = useState(false);
   const [auctionOutcome, setAuctionOutcome] = useState<null | {
     amount: number | null;
@@ -801,12 +854,9 @@ export default function ArtworkDetail() {
     { id: string; display_name: string | null; username: string | null } | null
   >(null);
 
-  // ✅ internal refs to avoid duplicate popups / finalize spam
   const shownForListingRef = useRef<string | null>(null);
   const finalizeStateRef = useRef<{ listingId: string; at: number } | null>(null);
   const finalizeInFlightRef = useRef<string | null>(null);
-
-  // ✅ internal ref to prevent auto-pay retrigger loop
   const autoPayRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -817,7 +867,6 @@ export default function ArtworkDetail() {
   }, []);
 
   async function fetchListingForPage(artworkId: string) {
-    // Prefer active listing. If none, allow showing the latest AUCTION listing even if ended/paid.
     const active = await fetchActiveListingForArtwork(artworkId);
     if (active) return active as any;
 
@@ -857,10 +906,9 @@ export default function ArtworkDetail() {
 
     const winner =
       reserveMet && tb?.bidder_id
-        ? (winnerProfileRef.current &&
-          winnerProfileRef.current.id === tb.bidder_id
-            ? winnerProfileRef.current
-            : null)
+        ? winnerProfileRef.current && winnerProfileRef.current.id === tb.bidder_id
+          ? winnerProfileRef.current
+          : null
         : null;
 
     return {
@@ -904,7 +952,6 @@ export default function ArtworkDetail() {
     const endedByTime = Date.now() >= new Date(endAt).getTime();
     if (!endedByTime) return;
 
-    // throttle attempts
     const last = finalizeStateRef.current;
     if (last?.listingId === listingId && Date.now() - last.at < 8000) return;
     if (finalizeInFlightRef.current === listingId) return;
@@ -915,12 +962,11 @@ export default function ArtworkDetail() {
     try {
       await endAuction(listingId);
     } catch {
-      // idempotent: ignore
+      // idempotent
     } finally {
       finalizeInFlightRef.current = null;
     }
 
-    // Refresh listing row by id
     let fresh: any = null;
     try {
       fresh = await refreshListingByIdSafe(listingId);
@@ -974,11 +1020,8 @@ export default function ArtworkDetail() {
         bidder: profMap.get(r.bidder_id) ?? null,
       }));
 
-      if (mode === "reset") {
-        setBidHistory(enriched);
-      } else {
-        setBidHistory((cur) => [...cur, ...enriched]);
-      }
+      if (mode === "reset") setBidHistory(enriched);
+      else setBidHistory((cur) => [...cur, ...enriched]);
 
       setBidHistoryHasMore(rows.length === limit);
     } catch (e: any) {
@@ -1006,7 +1049,7 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
+            "id,title,description,image_url,author_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
           )
           .eq("id", id)
           .maybeSingle();
@@ -1028,7 +1071,7 @@ export default function ArtworkDetail() {
           supabase
             .from("profiles")
             .select("id,username,display_name,avatar_url")
-            .eq("id", (data as Artwork).creator_id)
+            .eq("id", (data as Artwork).author_id)
             .maybeSingle(),
           (data as Artwork).owner_id
             ? supabase
@@ -1051,7 +1094,6 @@ export default function ArtworkDetail() {
         setActiveListing(l as any);
         setFiles(((af.data as any[]) ?? []).filter((f) => !!f?.url));
 
-        // Collection + more from collection
         const collId = (data as Artwork).collection_id ?? null;
         if (collId) {
           const { data: collWide, error: cwErr } = await supabase
@@ -1142,7 +1184,6 @@ export default function ArtworkDetail() {
   const winnerIdNow =
     reserveMetNow && topBid?.bidder_id ? (topBid.bidder_id as string) : null;
 
-  // ✅ Realtime: bid inserts
   useEffect(() => {
     if (!activeListing || !isAuction) return;
 
@@ -1179,7 +1220,6 @@ export default function ArtworkDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeListing?.id, isAuction, auctionClosed]);
 
-  // ✅ Realtime: listing status updates
   useEffect(() => {
     if (!activeListing?.id) return;
     const channel = supabase
@@ -1220,7 +1260,6 @@ export default function ArtworkDetail() {
     };
   }, [activeListing?.id]);
 
-  // ✅ Poll fallback + finalize
   useEffect(() => {
     if (!activeListing || !isAuction) return;
 
@@ -1250,7 +1289,6 @@ export default function ArtworkDetail() {
     };
   }, [activeListing?.id, isAuction]);
 
-  // ✅ When auction becomes closed, compute outcome
   useEffect(() => {
     if (!activeListing || !isAuction) return;
     if (!auctionClosed) return;
@@ -1263,7 +1301,6 @@ export default function ArtworkDetail() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeListing?.id, auctionClosed]);
 
-  // ✅ Auto-trigger payment when opening /art/:id?pay=1&method=...&listing=...
   useEffect(() => {
     if (!isAuction) return;
     if (!activeListing?.id) return;
@@ -1279,15 +1316,13 @@ export default function ArtworkDetail() {
     if (listingId && listingId !== activeListing.id) return;
 
     const key = `${activeListing.id}:${method}`;
-    if (autoPayRef.current === key) return; // prevent loop
+    if (autoPayRef.current === key) return;
     autoPayRef.current = key;
 
-    // clear query params (so refresh doesn’t retrigger)
     try {
       nav(`/art/${id}`, { replace: true });
     } catch {}
 
-    // kick payment
     if (method === "stripe") {
       void payForAuctionStripe();
     } else if (method === "metamask") {
@@ -1352,6 +1387,7 @@ export default function ArtworkDetail() {
     const ids = Array.from(
       new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))
     ) as string[];
+
     let map = new Map<string, Profile>();
     if (ids.length > 0) {
       const { data: profs } = await supabase
@@ -1360,6 +1396,7 @@ export default function ArtworkDetail() {
         .in("id", ids);
       (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
     }
+
     setSales(
       rows.map((r) => ({
         ...r,
@@ -1405,7 +1442,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Payment (fixed-price) */
   async function onBuy() {
     if (!activeListing || !art) return;
 
@@ -1423,13 +1459,18 @@ export default function ArtworkDetail() {
           listing_id: activeListing.id,
           quantity: 1,
 
-          // Extra fields (safe even if the function ignores them)
           listing_type: String((activeListing as any)?.type ?? "fixed"),
           artwork_id: art.id,
           seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
           buyer_id: viewerId,
 
-          success_url: `${location.origin}/checkout/success`,
+          success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
+            activeListing.id
+          )}&artwork_id=${encodeURIComponent(
+            art.id
+          )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+            `/art/${art.id}`
+          )}`,
           cancel_url: location.href,
         },
       });
@@ -1441,7 +1482,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ ETH payment (fixed-price) */
   async function onBuyWithMetaMask() {
     if (!activeListing) return;
     setPayBusy(true);
@@ -1513,7 +1553,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Auction payment (Stripe) — winner only */
   async function payForAuctionStripe() {
     if (!activeListing || !isAuction || !art) return;
 
@@ -1537,9 +1576,12 @@ export default function ArtworkDetail() {
     setMsg(null);
 
     try {
-      const successUrl = `${location.origin}/art/${art.id}?paid=1&listing=${encodeURIComponent(
+      const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
         activeListing.id
-      )}`;
+      )}&artwork_id=${encodeURIComponent(
+        art.id
+      )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(`/art/${art.id}`)}`;
+
       const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
         activeListing.id
       )}`;
@@ -1548,17 +1590,12 @@ export default function ArtworkDetail() {
         body: {
           listing_id: activeListing.id,
           quantity: 1,
-
-          // ✅ These fields help your edge function build the right Stripe checkout for auctions,
-          // and also make your webhook fallback resolution work reliably.
           listing_type: "auction",
           artwork_id: art.id,
           seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
           buyer_id: viewerId,
           currency,
-          // if your function supports overriding/using this, great; if not, harmless
           auction_amount: isFinite(finalAmt) && finalAmt > 0 ? finalAmt : null,
-
           success_url: successUrl,
           cancel_url: cancelUrl,
         },
@@ -1574,7 +1611,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Auction payment (MetaMask) — winner only */
   async function payForAuctionMetaMask() {
     if (!activeListing || !isAuction) return;
 
@@ -1665,79 +1701,81 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Try send a text DM via RPC; fallback safe */
-  async function trySendDmText(threadId: string, text: string, artworkId?: string) {
-    try {
-      // If you have this function in DB, it will work.
-      // If not, it will throw, and we just ignore.
-      await (supabase as any).rpc("dm_send_message_v2", {
-        p_thread_id: threadId,
-        p_kind: "text",
-        p_content: text,
-        p_attachment_url: null,
-        p_artwork_id: artworkId ?? null,
-        p_meta: null,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /** ✅ Contact winner (seller) */
   async function contactWinner() {
     const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
+    const winningBidId = topBid?.id ?? null;
+
     if (!winId || !activeListing || !art) return;
 
     try {
+      const { data: sess } = await supabase.auth.getSession();
+      const actorId = sess.session?.user?.id;
+      if (!actorId) throw new Error("Not signed in.");
+
       const tid = await dmGetOrCreateThread(winId);
 
       const base = location.origin;
       const listingId = activeListing.id;
-
-      const stripeLink = `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
-        listingId
-      )}`;
-      const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(
-        listingId
-      )}`;
-
-      const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
       const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
 
-      const text =
-        `🎉 Congratulations — you’re the winner of the auction for “${art.title ?? "this artwork"}”!\n\n` +
-        (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n\n` : "") +
-        `Complete payment below:\n` +
-        (ccy === "ETH"
-          ? `• Pay with MetaMask: ${metaLink}\n`
-          : `• Pay with Stripe: ${stripeLink}\n`) +
-        `\nArtwork: ${base}/art/${art.id}`;
+      const stripeLink =
+        ccy === "ETH"
+          ? null
+          : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
 
-      // Try send text, but even if not available, still send artwork share
-      await trySendDmText(tid, text, art.id);
+      const metaLink =
+        ccy === "ETH"
+          ? `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(listingId)}`
+          : null;
+
+      const text = buildWinnerCongratsMessage({
+        artworkTitle: art.title,
+        artworkId: art.id,
+        stripeUrl: stripeLink,
+        metamaskUrl: metaLink,
+      });
+
+      await safeSendDmText(tid, text, art.id);
 
       await dmSendArtworkShare(tid, art.id, {
         title: art.title ?? "Untitled",
         image_url: art.image_url,
       });
 
+      await createNotification({
+        user_id: winId,
+        actor_id: actorId,
+        type: "auction_win",
+        title: "Congratulations! You won the auction 🥳",
+        body: `You won "${art.title ?? "this artwork"}". Please complete your purchase via Stripe or MetaMask on the artwork page.`,
+        href: `/art/${art.id}`,
+        metadata: {
+          listing_id: listingId,
+          artwork_id: art.id,
+          winning_bid_id: winningBidId,
+        },
+      } as any);
+
       nav(`/messages?t=${encodeURIComponent(tid)}`);
     } catch (e: any) {
-      setMsg(e?.message ?? "Failed to open chat");
+      setMsg(e?.message ?? "Failed to open chat or notify winner");
     }
   }
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
-  const isSeller = !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
-
+  const isSeller =
+    !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
   const isWinner = !!viewerId && !!winnerIdNow && viewerId === winnerIdNow;
 
   const paymentPending = isAuction && auctionClosed && reserveMetNow && !auctionPaid;
 
   const canBuy = !!activeListing && !!viewerId && !isSeller && !isAuction;
   const canBid =
-    !!viewerId && !isSeller && isAuction && !auctionClosed && String(listingStatus ?? "") === "active";
+    !!viewerId &&
+    !isSeller &&
+    isAuction &&
+    !auctionClosed &&
+    String(listingStatus ?? "") === "active";
 
   const minNextBid = useMemo(() => {
     if (!isAuction) return 0;
@@ -1828,7 +1866,6 @@ export default function ArtworkDetail() {
     }
   }
 
-  // ✅ Countdown finalize trigger
   useEffect(() => {
     if (!activeListing || !isAuction) return;
     if (!listingEndAt) return;
@@ -1869,15 +1906,13 @@ export default function ArtworkDetail() {
     );
   }
 
-  const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
-
+  const canRequestLicense = !!viewerId && viewerId !== art.author_id;
   const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
   const bidStep = ccy === "ETH" ? "0.00000001" : "0.01";
 
   return (
     <>
       <div className="max-w-7xl mx-auto p-6 space-y-8">
-        {/* Top: Image + Right panel */}
         <div className="grid gap-8 lg:grid-cols-12">
           {/* Left */}
           <div className="lg:col-span-7 space-y-3">
@@ -1908,8 +1943,11 @@ export default function ArtworkDetail() {
                         : "border-white/10 hover:border-white/30"
                     } bg-neutral-900`}
                   >
-                    {/* @ts-ignore */}
-                    <img src={f.url} className="h-full w-full object-cover" />
+                    <img
+                      src={f.url}
+                      className="h-full w-full object-cover"
+                      alt="gallery item"
+                    />
                   </button>
                 ))}
               </div>
@@ -1920,7 +1958,6 @@ export default function ArtworkDetail() {
           <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
             {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
-            {/* Header */}
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <h1 className="text-3xl font-semibold leading-tight truncate">
@@ -1978,7 +2015,6 @@ export default function ArtworkDetail() {
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                 {isOwner && (
                   <button
@@ -2033,7 +2069,6 @@ export default function ArtworkDetail() {
               </div>
             </div>
 
-            {/* Stats */}
             <Card>
               <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
                 <StatBox
@@ -2063,7 +2098,6 @@ export default function ArtworkDetail() {
               </div>
             </Card>
 
-            {/* Listing / Auction */}
             <Card
               title="Listing"
               right={
@@ -2133,7 +2167,6 @@ export default function ArtworkDetail() {
                     ) : null}
                   </div>
 
-                  {/* Main action area */}
                   <div className="mt-3 flex gap-2">
                     {isAuction ? (
                       canBid ? (
@@ -2181,7 +2214,6 @@ export default function ArtworkDetail() {
                     )}
                   </div>
 
-                  {/* Post-auction payment panel */}
                   {isAuction && auctionClosed ? (
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
                       {!reserveMetNow ? (
@@ -2250,7 +2282,6 @@ export default function ArtworkDetail() {
 
                   {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
 
-                  {/* ✅ Bid history preview */}
                   {isAuction ? (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
@@ -2347,7 +2378,11 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
-      <ShareQRModal open={showShareQR} onClose={() => setShowShareQR(false)} url={`${location.origin}/art/${id}`} />
+      <ShareQRModal
+        open={showShareQR}
+        onClose={() => setShowShareQR(false)}
+        url={`${location.origin}/art/${id}`}
+      />
 
       <ShareToDMModal
         open={showShareDM}
@@ -2361,7 +2396,7 @@ export default function ArtworkDetail() {
           open={showLicense}
           onClose={() => setShowLicense(false)}
           artworkId={art.id}
-          ownerId={art.creator_id}
+          ownerId={art.author_id}
         />
       )}
 
@@ -2439,7 +2474,11 @@ function OwnerListPanel({
           step="0.00000001"
           min="0"
         />
-        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+        <select
+          className="input w-28"
+          value={currency}
+          onChange={(e) => setCurrency(e.target.value)}
+        >
           <option value="ETH">ETH</option>
           <option value="USD">USD</option>
         </select>
@@ -2478,13 +2517,14 @@ function SellerConsole({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">{postAuctionMode ? "Auction tools" : "Seller tools"}</h3>
+          <h3 className="text-lg font-semibold">
+            {postAuctionMode ? "Auction tools" : "Seller tools"}
+          </h3>
           <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
             Close
           </button>
         </div>
 
-        {/* Post-auction banner */}
         {postAuctionMode ? (
           <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
             {paymentPending ? (
