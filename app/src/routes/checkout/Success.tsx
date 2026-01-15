@@ -12,30 +12,44 @@ export default function CheckoutSuccess() {
   const nav = useNavigate();
   const [sp] = useSearchParams();
 
-  const sessionId = sp.get("session_id") || "";
-  const listingIdFromUrl = sp.get("listing") || sp.get("listing_id") || "";
-  const artworkIdFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
+  // Stripe should redirect with a real session_id.
+  const sessionIdRaw = sp.get("session_id") || "";
+  const listingFromUrl = sp.get("listing") || sp.get("listing_id") || "";
+  const artworkFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
 
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
-  const effective = useMemo(() => {
-    const meta = status.state === "ok" ? status.meta || {} : {};
-    return {
-      sessionId,
-      listingId: listingIdFromUrl || meta?.listing_id || meta?.listing || "",
-      artworkId: artworkIdFromUrl || meta?.artwork_id || meta?.artwork || "",
-    };
-  }, [sessionId, listingIdFromUrl, artworkIdFromUrl, status]);
+  // After finalize, we may discover ids via Stripe metadata even if URL didn’t have them
+  const [resolved, setResolved] = useState<{ listingId: string; artworkId: string }>({
+    listingId: listingFromUrl,
+    artworkId: artworkFromUrl,
+  });
+
+  const receipt = useMemo(
+    () => ({ sessionId: sessionIdRaw, listingId: resolved.listingId, artworkId: resolved.artworkId }),
+    [sessionIdRaw, resolved.listingId, resolved.artworkId]
+  );
 
   const run = async () => {
-    if (!sessionId) {
+    // If you ever see "{CHECKOUT_SESSION_ID}" here, your create-checkout success_url is wrong/encoded.
+    if (!sessionIdRaw) {
       setStatus({ state: "error", message: "Missing session_id in URL." });
       return;
     }
+    if (sessionIdRaw.includes("CHECKOUT_SESSION_ID")) {
+      setStatus({
+        state: "error",
+        message: "Stripe did not inject a real session id (still a placeholder).",
+        detail:
+          "Fix create-checkout: do NOT URL-encode {CHECKOUT_SESSION_ID}. Use a raw placeholder in success_url.",
+      });
+      return;
+    }
+
     setStatus({ state: "loading" });
 
     try {
-      // ✅ ensure we have auth (Stripe redirect sometimes lands before session restored)
+      // Ensure we have auth (Stripe redirect sometimes lands before session restored)
       const { data: sess } = await supabase.auth.getSession();
       const accessToken = sess.session?.access_token;
 
@@ -48,23 +62,28 @@ export default function CheckoutSuccess() {
         return;
       }
 
-      // IMPORTANT:
-      // Keep your function name the same as what you deployed.
-      // You are currently calling "checkout-finalize" in your code,
-      // so we keep it here.
       const { data, error } = await supabase.functions.invoke("checkout-finalize", {
-        body: {
-          session_id: sessionId,
-          listing_id: listingIdFromUrl || undefined,
-          artwork_id: artworkIdFromUrl || undefined,
-        },
+        body: { session_id: sessionIdRaw },
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      if (error) throw error;
+      if (error) {
+        const ctx = (error as any)?.context;
+        const detail =
+          typeof ctx === "string"
+            ? ctx
+            : ctx
+              ? JSON.stringify(ctx, null, 2)
+              : (error as any)?.message ?? String(error);
 
-      // We store the returned metadata (or whole payload) so UI can fallback to it
-      const meta = data?.session?.metadata ?? data?.metadata ?? {};
+        throw new Error(detail);
+      }
+
+      const meta = data?.session?.metadata ?? {};
+      const listingId = String(data?.listing_id || meta?.listing_id || receipt.listingId || "");
+      const artworkId = String(data?.artwork_id || meta?.artwork_id || receipt.artworkId || "");
+
+      setResolved({ listingId, artworkId });
 
       setStatus({
         state: "ok",
@@ -74,7 +93,7 @@ export default function CheckoutSuccess() {
     } catch (e: any) {
       setStatus({
         state: "error",
-        message: "Failed to send a request to the Edge Function",
+        message: "Failed to verify/finalize with the Edge Function",
         detail: e?.message ?? String(e),
       });
     }
@@ -83,10 +102,11 @@ export default function CheckoutSuccess() {
   useEffect(() => {
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId]);
+  }, [sessionIdRaw]);
 
   const goArtwork = () => {
-    if (effective.artworkId) nav(`/art/${effective.artworkId}`);
+    const id = resolved.artworkId || artworkFromUrl;
+    if (id) nav(`/art/${id}`);
     else nav("/home");
   };
 
@@ -136,19 +156,19 @@ export default function CheckoutSuccess() {
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Stripe session</div>
               <div className="text-white/85 break-all text-right">
-                {effective.sessionId || "—"}
+                {receipt.sessionId || "—"}
               </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Listing</div>
               <div className="text-white/85 break-all text-right">
-                {effective.listingId || "—"}
+                {receipt.listingId || "—"}
               </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Artwork</div>
               <div className="text-white/85 break-all text-right">
-                {effective.artworkId || "—"}
+                {receipt.artworkId || "—"}
               </div>
             </div>
           </div>

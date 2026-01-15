@@ -145,7 +145,6 @@ export default function PublicProfile() {
       .eq("author_id", profileId) // ✅ Updated to author_id
       .order("created_at", { ascending: false })
       .limit(200);
-
     if (error) throw error;
     const createdRows = (data ?? []) as any[];
 
@@ -162,7 +161,6 @@ export default function PublicProfile() {
       .eq("hidden", true)
       .gt("quantity", 0)
       .in("artwork_id", ids);
-
     if (hErr) throw hErr;
 
     const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
@@ -177,36 +175,31 @@ export default function PublicProfile() {
     );
   }
 
-  // ✅ FIXED: no FK join — do 2 queries safely
   async function loadPurchased(profileId: string) {
     const { data: own, error } = await supabase
       .from("ownerships")
-      .select("artwork_id, updated_at")
+      .select(`
+                artwork_id,
+        updated_at,
+        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
+            `)
       .eq("owner_id", profileId)
       .eq("hidden", false)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
-
     if (error) throw error;
 
-    const ids = Array.from(new Set((own ?? []).map((r: any) => r.artwork_id))).filter(Boolean);
-
-    if (ids.length === 0) {
-      setPurchased([]);
-      return;
-    }
-
-    const { data: arts, error: aErr } = await supabase
-      .from("artworks")
-      .select("id,title,image_url")
-      .in("id", ids);
-
-    if (aErr) throw aErr;
-
-    const map = new Map((arts ?? []).map((a: any) => [a.id, a]));
+    type Row = { artwork_id: string; artworks: any | any[] };
+    const rows = (own ?? []) as Row[];
+    const map = new Map(
+      rows
+        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+        .filter(Boolean)
+        .map((a: any) => [a.id, a])
+    );
     setPurchased(
-      ids
+      rows.map((r) => r.artwork_id)
         .map((id) => map.get(id))
         .filter(Boolean)
         .map((a: any) => ({
@@ -217,37 +210,24 @@ export default function PublicProfile() {
     );
   }
 
-  // ✅ FIXED: no FK join — do 2 queries safely
   async function loadHidden(profileId: string) {
-    const { data: own, error } = await supabase
+    const { data, error } = await supabase
       .from("ownerships")
-      .select("artwork_id, updated_at")
+      .select(`
+                artwork_id,
+        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
+            `)
       .eq("owner_id", profileId)
       .eq("hidden", true)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
-
     if (error) throw error;
 
-    const ids = Array.from(new Set((own ?? []).map((r: any) => r.artwork_id))).filter(Boolean);
-
-    if (ids.length === 0) {
-      setHidden([]);
-      return;
-    }
-
-    const { data: arts, error: aErr } = await supabase
-      .from("artworks")
-      .select("id,title,image_url")
-      .in("id", ids);
-
-    if (aErr) throw aErr;
-
-    const map = new Map((arts ?? []).map((a: any) => [a.id, a]));
+    const rows = (data ?? []) as { artworks: any | any[] }[];
     setHidden(
-      ids
-        .map((id) => map.get(id))
+      rows
+        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
         .filter(Boolean)
         .map((a: any) => ({
           id: a.id,
