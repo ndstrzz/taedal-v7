@@ -28,7 +28,9 @@ import {
   dmGetOrCreateThread,
   dmListFriends,
   dmSendArtworkShare,
+  dmSendText,
 } from "../../features/messages/api";
+
 
 /* ------------------------------ WalletModal ------------------------------ */
 
@@ -1665,68 +1667,59 @@ export default function ArtworkDetail() {
     }
   }
 
-  /** ✅ Try send a text DM via RPC; fallback safe */
-  async function trySendDmText(threadId: string, text: string, artworkId?: string) {
-    try {
-      // If you have this function in DB, it will work.
-      // If not, it will throw, and we just ignore.
-      await (supabase as any).rpc("dm_send_message_v2", {
-        p_thread_id: threadId,
-        p_kind: "text",
-        p_content: text,
-        p_attachment_url: null,
-        p_artwork_id: artworkId ?? null,
-        p_meta: null,
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
+
 
   /** ✅ Contact winner (seller) */
-  async function contactWinner() {
-    const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
-    if (!winId || !activeListing || !art) return;
+/** ✅ Contact winner (seller) */
+async function contactWinner() {
+  const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
+  if (!winId || !activeListing || !art) return;
 
-    try {
-      const tid = await dmGetOrCreateThread(winId);
+  try {
+    const tid = await dmGetOrCreateThread(winId);
 
-      const base = location.origin;
-      const listingId = activeListing.id;
+    const base = location.origin;
+    const listingId = activeListing.id;
 
-      const stripeLink = `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
-        listingId
-      )}`;
-      const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(
-        listingId
-      )}`;
+    const stripeLink = `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
+      listingId
+    )}`;
+    const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(
+      listingId
+    )}`;
 
-      const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
-      const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
+    const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
+    const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
 
-      const text =
-        `🎉 Congratulations — you’re the winner of the auction for “${art.title ?? "this artwork"}”!\n\n` +
-        (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n\n` : "") +
-        `Complete payment below:\n` +
-        (ccy === "ETH"
-          ? `• Pay with MetaMask: ${metaLink}\n`
-          : `• Pay with Stripe: ${stripeLink}\n`) +
-        `\nArtwork: ${base}/art/${art.id}`;
+    // 1) Congratulation + context message
+    const header =
+      `🎉 Congratulations — you’re the winner of the bidding auction for “${art.title ?? "this artwork"}”!\n\n` +
+      (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n` : "") +
+      `Auction listing: ${listingId}\n\n` +
+      `Choose a payment method below (tap the link):`;
 
-      // Try send text, but even if not available, still send artwork share
-      await trySendDmText(tid, text, art.id);
+    await dmSendText(tid, header);
 
-      await dmSendArtworkShare(tid, art.id, {
-        title: art.title ?? "Untitled",
-        image_url: art.image_url,
-      });
-
-      nav(`/messages?t=${encodeURIComponent(tid)}`);
-    } catch (e: any) {
-      setMsg(e?.message ?? "Failed to open chat");
+    // 2) Send the payment link as URL-only messages (renders as rich “card” in ChatView)
+    if (ccy === "ETH") {
+      await dmSendText(tid, metaLink);
+    } else {
+      await dmSendText(tid, stripeLink);
     }
+
+    // 3) Send artwork card (nice preview)
+    await dmSendArtworkShare(tid, art.id, {
+      title: art.title ?? "Untitled",
+      image_url: art.image_url,
+    });
+
+    // 4) Jump you to Messages thread (seller side)
+    nav(`/messages?t=${encodeURIComponent(tid)}`);
+  } catch (e: any) {
+    setMsg(e?.message ?? "Failed to open chat");
   }
+}
+
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
   const isSeller = !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
