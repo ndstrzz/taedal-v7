@@ -3,12 +3,18 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
 import {
-  fetchNotifications,
+  fetchNotificationsForUser,
   markManyRead,
   type NotificationRow,
 } from "../../lib/notifications";
 
-type TabKey = "all" | "auctions" | "purchases" | "contracts" | "messages" | "system";
+type TabKey =
+  | "all"
+  | "auctions"
+  | "purchases"
+  | "contracts"
+  | "messages"
+  | "system";
 
 function categoryOf(n: NotificationRow): TabKey {
   const t = (n.type || "").toLowerCase();
@@ -42,15 +48,20 @@ export default function Inbox() {
   async function load() {
     setLoading(true);
     setErr(null);
+
     try {
-      const { data } = await supabase.auth.getUser();
-      const uid = data.user?.id ?? null;
+      const { data: auth, error: authErr } = await supabase.auth.getUser();
+      if (authErr) throw authErr;
+
+      const uid = auth.user?.id ?? null;
       setUserId(uid);
+
       if (!uid) {
         setItems([]);
         return;
       }
-      const rows = await fetchNotifications(250);
+
+      const rows = await fetchNotificationsForUser(uid, 250);
       setItems(rows);
     } catch (e: any) {
       setErr(e?.message ?? "Failed to load inbox.");
@@ -88,14 +99,14 @@ export default function Inbox() {
 
   async function markAllVisibleRead() {
     if (!userId) return;
+    if (!unreadIds.length) return;
+
     try {
       await markManyRead(userId, unreadIds);
-      // update local state
+
       const now = new Date().toISOString();
       setItems((prev) =>
-        prev.map((n) =>
-          unreadIds.includes(n.id) ? { ...n, read_at: now } : n
-        )
+        prev.map((n) => (unreadIds.includes(n.id) ? { ...n, read_at: now } : n))
       );
     } catch (e: any) {
       setErr(e?.message ?? "Failed to mark as read.");
@@ -114,6 +125,7 @@ export default function Inbox() {
         // don't block navigation
       }
     }
+
     if (n.href) nav(n.href);
   }
 
@@ -197,16 +209,20 @@ export default function Inbox() {
 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center justify-between gap-3">
-                      <div className="font-medium truncate">{n.title}</div>
+                      <div className="font-medium truncate">
+                        {n.title || "Notification"}
+                      </div>
                       <div className="text-xs text-white/45 shrink-0">
                         {fmt(n.created_at)}
                       </div>
                     </div>
+
                     {n.body && (
                       <div className="text-sm text-white/65 mt-1 line-clamp-2">
                         {n.body}
                       </div>
                     )}
+
                     <div className="text-xs text-white/40 mt-2">
                       {categoryOf(n).toUpperCase()}
                     </div>
