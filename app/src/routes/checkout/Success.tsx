@@ -12,36 +12,27 @@ export default function CheckoutSuccess() {
   const nav = useNavigate();
   const [sp] = useSearchParams();
 
-  // Stripe should redirect with a real session_id.
-  const sessionIdRaw = sp.get("session_id") || "";
-  const listingFromUrl = sp.get("listing") || sp.get("listing_id") || "";
-  const artworkFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
+  const sessionId = sp.get("session_id") || "";
+  const listingIdFromUrl = sp.get("listing") || sp.get("listing_id") || "";
+  const artworkIdFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
 
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
-  // After finalize, we may discover ids via Stripe metadata even if URL didn’t have them
-  const [resolved, setResolved] = useState<{ listingId: string; artworkId: string }>({
-    listingId: listingFromUrl,
-    artworkId: artworkFromUrl,
-  });
-
   const receipt = useMemo(
-    () => ({ sessionId: sessionIdRaw, listingId: resolved.listingId, artworkId: resolved.artworkId }),
-    [sessionIdRaw, resolved.listingId, resolved.artworkId]
+    () => ({ sessionId, listingId: listingIdFromUrl, artworkId: artworkIdFromUrl }),
+    [sessionId, listingIdFromUrl, artworkIdFromUrl]
   );
 
   const run = async () => {
-    // If you ever see "{CHECKOUT_SESSION_ID}" here, your create-checkout success_url is wrong/encoded.
-    if (!sessionIdRaw) {
+    if (!sessionId) {
       setStatus({ state: "error", message: "Missing session_id in URL." });
       return;
     }
-    if (sessionIdRaw.includes("CHECKOUT_SESSION_ID")) {
+    if (sessionId.includes("CHECKOUT_SESSION_ID")) {
       setStatus({
         state: "error",
-        message: "Stripe did not inject a real session id (still a placeholder).",
-        detail:
-          "Fix create-checkout: do NOT URL-encode {CHECKOUT_SESSION_ID}. Use a raw placeholder in success_url.",
+        message: "Stripe did not inject a real session id (still placeholder).",
+        detail: "Fix create-checkout success_url so {CHECKOUT_SESSION_ID} is NOT url-encoded.",
       });
       return;
     }
@@ -49,7 +40,6 @@ export default function CheckoutSuccess() {
     setStatus({ state: "loading" });
 
     try {
-      // Ensure we have auth (Stripe redirect sometimes lands before session restored)
       const { data: sess } = await supabase.auth.getSession();
       const accessToken = sess.session?.access_token;
 
@@ -63,37 +53,38 @@ export default function CheckoutSuccess() {
       }
 
       const { data, error } = await supabase.functions.invoke("checkout-finalize", {
-        body: { session_id: sessionIdRaw },
+        body: { session_id: sessionId },
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
+      // Because checkout-finalize now ALWAYS returns 200, error should usually be null.
       if (error) {
-        const ctx = (error as any)?.context;
-        const detail =
-          typeof ctx === "string"
-            ? ctx
-            : ctx
-              ? JSON.stringify(ctx, null, 2)
-              : (error as any)?.message ?? String(error);
-
-        throw new Error(detail);
+        setStatus({
+          state: "error",
+          message: "Finalize call failed (transport).",
+          detail: (error as any)?.message ?? String(error),
+        });
+        return;
       }
 
-      const meta = data?.session?.metadata ?? {};
-      const listingId = String(data?.listing_id || meta?.listing_id || receipt.listingId || "");
-      const artworkId = String(data?.artwork_id || meta?.artwork_id || receipt.artworkId || "");
-
-      setResolved({ listingId, artworkId });
+      if (!data?.ok) {
+        setStatus({
+          state: "error",
+          message: "Failed to verify/finalize with the Edge Function",
+          detail: String(data?.error || "Unknown error"),
+        });
+        return;
+      }
 
       setStatus({
         state: "ok",
         paid: Boolean(data?.paid),
-        meta,
+        meta: data?.session?.metadata ?? {},
       });
     } catch (e: any) {
       setStatus({
         state: "error",
-        message: "Failed to verify/finalize with the Edge Function",
+        message: "Unexpected error during finalize",
         detail: e?.message ?? String(e),
       });
     }
@@ -102,11 +93,10 @@ export default function CheckoutSuccess() {
   useEffect(() => {
     run();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionIdRaw]);
+  }, [sessionId]);
 
   const goArtwork = () => {
-    const id = resolved.artworkId || artworkFromUrl;
-    if (id) nav(`/art/${id}`);
+    if (artworkIdFromUrl) nav(`/art/${artworkIdFromUrl}`);
     else nav("/home");
   };
 
@@ -155,21 +145,15 @@ export default function CheckoutSuccess() {
           <div className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Stripe session</div>
-              <div className="text-white/85 break-all text-right">
-                {receipt.sessionId || "—"}
-              </div>
+              <div className="text-white/85 break-all text-right">{receipt.sessionId || "—"}</div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Listing</div>
-              <div className="text-white/85 break-all text-right">
-                {receipt.listingId || "—"}
-              </div>
+              <div className="text-white/85 break-all text-right">{receipt.listingId || "—"}</div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Artwork</div>
-              <div className="text-white/85 break-all text-right">
-                {receipt.artworkId || "—"}
-              </div>
+              <div className="text-white/85 break-all text-right">{receipt.artworkId || "—"}</div>
             </div>
           </div>
         </div>
