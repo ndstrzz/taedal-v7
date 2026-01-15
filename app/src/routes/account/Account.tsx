@@ -111,7 +111,7 @@ type ArtworkThumb = {
   id: string;
   title: string | null;
   image_url: string | null;
-  creator_id: string;
+  author_id: string; // ✅ Updated
   created_at: string;
 };
 
@@ -201,8 +201,8 @@ export default function Account() {
   async function loadCreated(uid: string) {
     const { data, error } = await supabase
       .from("artworks")
-      .select("id,title,image_url,creator_id,created_at")
-      .eq("creator_id", uid)
+      .select("id,title,image_url,author_id,created_at") // ✅ Updated to author_id
+      .eq("author_id", uid)
       .order("created_at", { ascending: false })
       .limit(60);
     if (error) throw error;
@@ -249,7 +249,7 @@ export default function Account() {
 
     const { data: arts, error: artsErr } = await supabase
       .from("artworks")
-      .select("id,title,image_url,creator_id,created_at")
+      .select("id,title,image_url,author_id,created_at") // ✅ Updated to author_id
       .in("id", ids);
     if (artsErr) throw artsErr;
 
@@ -375,8 +375,7 @@ export default function Account() {
             .getPublicUrl(path);
           avatar_url = `${pub.publicUrl}${
             pub.publicUrl.includes("?") ? "&" : "?"
-          }${stamp}`;
-        } catch (err) {
+          }${stamp}`;        } catch (err) {
           return fail("Avatar upload", err);
         }
       }
@@ -398,8 +397,7 @@ export default function Account() {
               .getPublicUrl(path);
             cover_url = `${pub.publicUrl}${
               pub.publicUrl.includes("?") ? "&" : "?"
-            }${stamp}`;
-          } else {
+            }${stamp}`;          } else {
             const resized = await resizeImage(coverFile, 1600, 500);
             const path = `${uid}/cover-${Date.now()}.jpg`;
             const { error: upErr } = await supabase.storage
@@ -414,8 +412,7 @@ export default function Account() {
               .getPublicUrl(path);
             cover_url = `${pub.publicUrl}${
               pub.publicUrl.includes("?") ? "&" : "?"
-            }${stamp}`;
-          }
+            }${stamp}`;          }
         } catch (err) {
           return fail("Cover upload", err);
         }
@@ -755,22 +752,18 @@ export default function Account() {
         {/* Tabs */}
         <div className="flex gap-3">
           <button
-            className={`px-3 py-1 rounded-lg ${
-              activeTab === "created"
+            className={`px-3 py-1 rounded-lg ${              activeTab === "created"
                 ? "bg-neutral-800"
                 : "bg-neutral-900 border border-neutral-800"
-            }`}
-            onClick={() => setActiveTab("created")}
+            }`}            onClick={() => setActiveTab("created")}
           >
             Created
           </button>
           <button
-            className={`px-3 py-1 rounded-lg ${
-              activeTab === "purchased"
+            className={`px-3 py-1 rounded-lg ${              activeTab === "purchased"
                 ? "bg-neutral-800"
                 : "bg-neutral-900 border border-neutral-800"
-            }`}
-            onClick={() => setActiveTab("purchased")}
+            }`}            onClick={() => setActiveTab("purchased")}
           >
             Purchased
           </button>

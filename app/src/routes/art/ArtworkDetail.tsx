@@ -1,5 +1,3 @@
-// C:\Users\User\Downloads\taedal-v7\app\src\routes\art\ArtworkDetail.tsx
-
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useLocation } from "react-router-dom";
 import QRCode from "qrcode";
@@ -47,13 +45,10 @@ function buildWinnerCongratsMessage(params: {
 
   return [
     `🎉 Congratulations! You’re the winning bidder for **${title}**.`,
-    ``,
     `To complete your purchase, please choose a payment method below:`,
     `1) **Card / Stripe** ${params.stripeUrl ? `-> ${params.stripeUrl}` : "(owner will provide checkout link shortly)"}`,
     `2) **Crypto / MetaMask** -> open the artwork page and use the crypto checkout option (if available)`,
-    ``,
     `Artwork link: ${artLink}`,
-    ``,
     `If you need help, just reply here — I’ll assist you with the next step.`,
   ].join("\n");
 }
@@ -268,7 +263,7 @@ function ShareToDMModal({
             <div className="text-sm font-medium text-white/90 truncate">
               {artwork.title ?? "Untitled"}
             </div>
-            <div className="text-xs text-white/60 truncate">/art/{artwork.id}</div>
+            <div className="text-xs text-white/60 truncate">/art/${artwork.id}</div>
           </div>
         </div>
 
@@ -481,7 +476,7 @@ type Artwork = {
   title: string | null;
   description: string | null;
   image_url: string | null;
-  creator_id: string;
+  author_id: string; // ✅ Updated from creator_id
   owner_id: string | null;
   created_at: string;
   ipfs_image_cid?: string | null;
@@ -707,7 +702,7 @@ function isClosedStatus(status: any): boolean {
 }
 
 function parseInvokeError(err: any): string {
-  // Supabase edge invoke errors often hide the actual response in `context`
+  // Supabase edge invoke errors often hide the actual response in context
   if (!err) return "Unknown error";
   if (typeof err === "string") return err;
   if (err?.context) {
@@ -1034,7 +1029,7 @@ export default function ArtworkDetail() {
         const { data, error } = await supabase
           .from("artworks")
           .select(
-            "id,title,description,image_url,creator_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
+            "id,title,description,image_url,author_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
           )
           .eq("id", id)
           .maybeSingle();
@@ -1056,7 +1051,7 @@ export default function ArtworkDetail() {
           supabase
             .from("profiles")
             .select("id,username,display_name,avatar_url")
-            .eq("id", (data as Artwork).creator_id)
+            .eq("id", (data as Artwork).author_id) // ✅ Updated: author_id is artist source
             .maybeSingle(),
           (data as Artwork).owner_id
             ? supabase
@@ -1578,7 +1573,6 @@ export default function ArtworkDetail() {
       const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
         activeListing.id
       )}`;
-
       const { data, error } = await supabase.functions.invoke("create-checkout", {
         body: {
           listing_id: activeListing.id,
@@ -1734,11 +1728,10 @@ export default function ArtworkDetail() {
       });
 
       // 4) PATCH ADDED: INSERT NOTIFICATION for the winning bidder in notifications table
-      // This implements the logic shown in your provided image (ArtWorkDetail "notify the winner")
       await createNotification({
         user_id: winId,               // recipient (winner)
         actor_id: actorId,             // sender (owner)
-        type: "auction_win",           // auction_win as per instructions
+        type: "auction_win",           
         title: "Congratulations! You won the auction 🥳",
         body: `You won "${art.title ?? "this artwork"}". Please complete your purchase via Stripe or MetaMask on the artwork page.`,
         href: `/art/${art.id}`,        // Link to the artwork page for payment
@@ -1896,7 +1889,7 @@ export default function ArtworkDetail() {
     );
   }
 
-  const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
+  const canRequestLicense = !!viewerId && viewerId !== art.author_id; // ✅ Changed from creator_id to author_id
   const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
   const bidStep = ccy === "ETH" ? "0.00000001" : "0.01";
 
@@ -1931,8 +1924,7 @@ export default function ArtworkDetail() {
                       mainUrl === f.url
                         ? "border-white/50"
                         : "border-white/10 hover:border-white/30"
-                    } bg-neutral-900`}
-                  >
+                    } bg-neutral-900`}                  >
                     <img src={f.url} className="h-full w-full object-cover" alt="gallery item" />
                   </button>
                 ))}
@@ -2378,7 +2370,7 @@ export default function ArtworkDetail() {
           open={showLicense}
           onClose={() => setShowLicense(false)}
           artworkId={art.id}
-          ownerId={art.creator_id}
+          ownerId={art.author_id} // ✅ Updated: using author_id
         />
       )}
 
@@ -2532,8 +2524,7 @@ function SellerConsole({
                 tab === t
                   ? "bg-white text-black font-medium"
                   : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
-              }`}
-            >
+              }`}            >
               {t === "price" ? "Price" : t === "auction" ? "Auction" : "Details"}
             </button>
           ))}

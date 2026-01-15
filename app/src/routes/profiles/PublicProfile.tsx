@@ -59,7 +59,8 @@ export default function PublicProfile() {
   // message button busy
   const [msgBusy, setMsgBusy] = useState(false);
 
-  const ARTWORK_COLS = "id,title,image_url,creator_id,owner_id,created_at";
+  // ✅ Updated column list: author_id
+  const ARTWORK_COLS = "id,title,image_url,author_id,owner_id,created_at";
 
   /* session (viewer) */
   useEffect(() => {
@@ -141,7 +142,7 @@ export default function PublicProfile() {
     const { data, error } = await supabase
       .from("artworks")
       .select(ARTWORK_COLS)
-      .eq("creator_id", profileId)
+      .eq("author_id", profileId) // ✅ Updated to author_id
       .order("created_at", { ascending: false })
       .limit(200);
     if (error) throw error;
@@ -158,6 +159,7 @@ export default function PublicProfile() {
       .select("artwork_id")
       .eq("owner_id", profileId)
       .eq("hidden", true)
+      .gt("quantity", 0)
       .in("artwork_id", ids);
     if (hErr) throw hErr;
 
@@ -176,22 +178,20 @@ export default function PublicProfile() {
   async function loadPurchased(profileId: string) {
     const { data: own, error } = await supabase
       .from("ownerships")
-      .select(
-        `
-        artwork_id,
+      .select(`
+                artwork_id,
         updated_at,
-        artworks:artworks!ownerships_artwork_id_fkey ( id, title, image_url )
-      `
-      )
+        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
+            `)
       .eq("owner_id", profileId)
       .eq("hidden", false)
+      .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
     if (error) throw error;
 
     type Row = { artwork_id: string; artworks: any | any[] };
     const rows = (own ?? []) as Row[];
-    const ids = rows.map((r) => r.artwork_id);
     const map = new Map(
       rows
         .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
@@ -199,7 +199,7 @@ export default function PublicProfile() {
         .map((a: any) => [a.id, a])
     );
     setPurchased(
-      ids
+      rows.map(r => r.artwork_id)
         .map((id) => map.get(id))
         .filter(Boolean)
         .map((a: any) => ({
@@ -213,14 +213,13 @@ export default function PublicProfile() {
   async function loadHidden(profileId: string) {
     const { data, error } = await supabase
       .from("ownerships")
-      .select(
-        `
-        artwork_id,
-        artworks:artworks!ownerships_artwork_id_fkey ( id, title, image_url )
-      `
-      )
+      .select(`
+                artwork_id,
+        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
+            `)
       .eq("owner_id", profileId)
       .eq("hidden", true)
+      .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
     if (error) throw error;
