@@ -5,12 +5,12 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
+const ANON_KEY =
+  Deno.env.get("SUPABASE_ANON_KEY") || Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_KEY =
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
   Deno.env.get("SERVICE_ROLE_KEY") ||
-  Deno.env.get("SERVICE_ROLE") ||
-  "";
+  Deno.env.get("SUPABASE_SERVICE_KEY")!;
 const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
 const SITE = (Deno.env.get("SITE_URL") || "http://localhost:5173").replace(/\/$/, "");
 
@@ -27,7 +27,6 @@ function json(body: any, status = 200) {
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
 }
-
 function text(body: string, status = 200) {
   return new Response(body, {
     status,
@@ -39,7 +38,7 @@ function currencyToStripe(code: string) {
   return String(code || "USD").toLowerCase();
 }
 
-// Stripe "unit_amount" is in the smallest currency unit.
+// Stripe unit_amount is smallest currency unit.
 // USD/SGD/EUR = cents; JPY/KRW = no decimals.
 function toStripeUnitAmount(amount: number, currencyUpper: string) {
   const c = currencyUpper.toUpperCase();
@@ -48,29 +47,17 @@ function toStripeUnitAmount(amount: number, currencyUpper: string) {
   return Math.round(amount * 100);
 }
 
-/**
- * IMPORTANT:
- * Stripe ONLY replaces the placeholder if it appears literally as:
- *   {CHECKOUT_SESSION_ID}
- * If you build it via URLSearchParams, the braces get encoded -> Stripe won't replace.
- */
-function ensureSessionIdPlaceholderRaw(url: string) {
-  // Fix common bad encoding produced by URL()/searchParams:
-  url = url.replace(
-    /session_id=%7B(CHECKOUT_SESSION_ID)%7D/gi,
-    "session_id={$1}"
-  );
+function buildSuccessUrl(baseUrl: string, listingId: string, artworkId: string) {
+  const u = new URL(baseUrl);
 
-  // If already has session_id=..., keep it
-  if (url.includes("session_id=")) return url;
+  // Always ensure these are present (frontend uses them)
+  if (!u.searchParams.get("listing_id")) u.searchParams.set("listing_id", listingId);
+  if (!u.searchParams.get("artwork_id")) u.searchParams.set("artwork_id", artworkId);
 
-  const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}session_id={CHECKOUT_SESSION_ID}`;
-}
-
-function ensureParam(url: string, key: string, value: string) {
-  const u = new URL(url);
-  if (!u.searchParams.get(key)) u.searchParams.set(key, value);
+  // Always ensure Stripe placeholder exists
+  if (!u.searchParams.get("session_id")) {
+    u.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
+  }
   return u.toString();
 }
 
@@ -80,7 +67,7 @@ Deno.serve(async (req) => {
     if (req.method !== "POST") return text("Method not allowed", 405);
 
     if (!SUPABASE_URL || !ANON_KEY || !SERVICE_KEY) {
-      return json({ error: "Supabase keys not set (SUPABASE_URL / SUPABASE_ANON_KEY / SERVICE ROLE)" }, 500);
+      return json({ error: "Supabase keys not set" }, 500);
     }
     if (!STRIPE_SK) return json({ error: "Stripe secret not set" }, 500);
 
@@ -90,7 +77,7 @@ Deno.serve(async (req) => {
       "";
     if (!authHeader) return json({ error: "Missing Authorization header" }, 401);
 
-    // 1) Identify user (MUST be the payer)
+    // 1) Identify caller (must be buyer/payer)
     const authed = createClient(SUPABASE_URL, ANON_KEY, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -103,26 +90,23 @@ Deno.serve(async (req) => {
     if (userErr || !user?.id) return json({ error: "Not authenticated" }, 401);
     const buyerId = user.id;
 
-    // 2) Read request body
+    // 2) Body
     const body = await req.json().catch(() => ({}));
     const listing_id = String(body?.listing_id || "");
     const quantity = Number(body?.quantity || 1);
 
-    // Default URLs (safe defaults)
-    let success_url = String(body?.success_url || `${SITE}/checkout/success`);
-    let cancel_url = String(body?.cancel_url || `${SITE}/checkout/cancel`);
+    const success_url_raw = String(body?.success_url || `${SITE}/checkout/success`);
+    const cancel_url = String(body?.cancel_url || `${SITE}/checkout/cancel`);
 
     if (!listing_id) return json({ error: "Missing listing_id" }, 400);
     if (!isFinite(quantity) || quantity <= 0) return json({ error: "Invalid quantity" }, 400);
 
-    // 3) Use service role to fetch listing + top bid reliably
+    // 3) Service role: fetch listing + winner/top bid reliably
     const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
     const { data: listing, error: lErr } = await db
       .from("listings")
-      .select(
-        "id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at"
-      )
+      .select("id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at")
       .eq("id", listing_id)
       .maybeSingle();
 
@@ -134,26 +118,22 @@ Deno.serve(async (req) => {
     const currency = String(listing.sale_currency || "USD").toUpperCase();
 
     if (currency === "ETH") {
-      return json(
-        { error: "Stripe is not supported for ETH listings. Use MetaMask." },
-        400
-      );
+      return json({ error: "Stripe is not supported for ETH listings. Use MetaMask." }, 400);
     }
 
-    // Ensure success url includes listing/artwork ids (helps Success.tsx + back button)
-    success_url = ensureParam(success_url, "listing_id", String(listing.id));
-    success_url = ensureParam(success_url, "artwork_id", String(listing.artwork_id));
-
-    cancel_url = ensureParam(cancel_url, "listing_id", String(listing.id));
-    cancel_url = ensureParam(cancel_url, "artwork_id", String(listing.artwork_id));
-
-    // ✅ IMPORTANT: ensure raw placeholder (NOT url-encoded)
-    success_url = ensureSessionIdPlaceholderRaw(success_url);
+    // Block repurchase if sold/canceled/etc.
+    if (["sold", "canceled"].includes(status)) {
+      return json({ error: "Listing is no longer purchasable." }, 400);
+    }
 
     let payableAmount = 0;
 
-    // 4) Determine amount (fixed-price vs auction)
     if (listingType === "auction") {
+      // Only allow payment when auction has ended
+      if (status !== "ended") {
+        return json({ error: "Auction is not ended yet." }, 400);
+      }
+
       const { data: topBid, error: bErr } = await db
         .from("bids")
         .select("id, amount, bidder_id, created_at")
@@ -166,8 +146,7 @@ Deno.serve(async (req) => {
       if (bErr) return json({ error: bErr.message }, 400);
       if (!topBid) return json({ error: "No bids found for this auction" }, 400);
 
-      const reserve =
-        listing.reserve_price == null ? null : Number(listing.reserve_price);
+      const reserve = listing.reserve_price == null ? null : Number(listing.reserve_price);
       const amount = Number(topBid.amount);
 
       if (reserve != null && amount < reserve) {
@@ -178,16 +157,10 @@ Deno.serve(async (req) => {
         return json({ error: "Only the auction winner can pay" }, 403);
       }
 
-      if (status === "paid" || status === "sold") {
-        return json({ error: "Auction already paid" }, 400);
-      }
-
       payableAmount = amount;
     } else {
-      if (status !== "active") {
-        return json({ error: "Listing is not active" }, 400);
-      }
-
+      // Fixed price
+      if (status !== "active") return json({ error: "Listing is not active" }, 400);
       const fp = Number(listing.fixed_price);
       if (!isFinite(fp) || fp <= 0) return json({ error: "Invalid fixed price" }, 400);
       payableAmount = fp;
@@ -195,16 +168,17 @@ Deno.serve(async (req) => {
 
     const unit_amount = toStripeUnitAmount(payableAmount, currency);
 
-    // 5) Create Stripe checkout session
+    // ✅ Always include listing_id + artwork_id + session_id in success URL
+    const success_url = buildSuccessUrl(success_url_raw, String(listing.id), String(listing.artwork_id));
+
+    // 5) Stripe session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
     const stripe = new Stripe(STRIPE_SK, {
       apiVersion: "2023-10-16",
       httpClient: Stripe.createFetchHttpClient(),
     });
 
-    const name = listingType === "auction"
-      ? "Auction winner payment"
-      : "Artwork purchase";
+    const name = listingType === "auction" ? "Auction winner payment" : "Artwork purchase";
 
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -216,10 +190,7 @@ Deno.serve(async (req) => {
           price_data: {
             currency: currencyToStripe(currency),
             unit_amount,
-            product_data: {
-              name,
-              description: `Listing ${listing_id}`,
-            },
+            product_data: { name, description: `Listing ${listing_id}` },
           },
         },
       ],
@@ -235,7 +206,7 @@ Deno.serve(async (req) => {
       },
     });
 
-    return json({ url: session.url, session_id: session.id });
+    return json({ url: session.url, session_id: session.id, success_url });
   } catch (e: any) {
     console.error("create-checkout fatal:", e?.message || e);
     return json({ error: e?.message || "create-checkout failed" }, 500);

@@ -4,19 +4,13 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL") || "";
-const ANON = Deno.env.get("SUPABASE_ANON_KEY") || "";
-
-// IMPORTANT: people often set ONE of these names — so we support all:
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const ANON = Deno.env.get("SUPABASE_ANON_KEY")!;
 const SERVICE_ROLE =
   Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ||
   Deno.env.get("SUPABASE_SERVICE_ROLE") ||
-  Deno.env.get("SERVICE_ROLE_KEY") ||
-  Deno.env.get("SERVICE_ROLE") ||
-  "";
-
-// Stripe secret key (must be set in Supabase secrets)
-const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY") || "";
+  Deno.env.get("SUPABASE_SERVICE_KEY")!;
+const STRIPE_SK = Deno.env.get("STRIPE_SECRET_KEY")!;
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
@@ -24,71 +18,57 @@ const cors = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-function json(body: any, status = 200) {
+function j(body: any, status = 200) {
   return new Response(JSON.stringify(body), {
     status,
     headers: { ...cors, "Content-Type": "application/json" },
   });
 }
 
-function isZeroDecimalCurrency(cur: string) {
-  const c = String(cur || "").toUpperCase();
-  return ["JPY", "KRW"].includes(c);
+// Stripe sends amount_total in smallest units.
+// USD/SGD/EUR = cents; JPY/KRW = no decimals.
+function isZeroDecimalCurrency(currencyUpper: string) {
+  return ["JPY", "KRW"].includes(currencyUpper.toUpperCase());
 }
-
-async function stripeRetrieveSession(sessionId: string) {
-  if (!STRIPE_SK) throw new Error("Missing STRIPE_SECRET_KEY in Supabase Edge Function secrets.");
-
-  const res = await fetch(
-    `https://api.stripe.com/v1/checkout/sessions/${encodeURIComponent(sessionId)}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${STRIPE_SK}` },
-    }
-  );
-
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(t || "Failed to retrieve Stripe session");
-  }
-  return await res.json();
+function stripeAmountToNormal(amountTotalSmallest: number, currencyUpper: string) {
+  if (!isFinite(amountTotalSmallest)) return 0;
+  if (isZeroDecimalCurrency(currencyUpper)) return amountTotalSmallest;
+  return amountTotalSmallest / 100;
 }
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  if (req.method !== "POST") return j({ ok: false, error: "Method not allowed" }, 405);
 
   try {
-    if (!SUPABASE_URL) throw new Error("Missing SUPABASE_URL");
-    if (!ANON) throw new Error("Missing SUPABASE_ANON_KEY");
-    if (!SERVICE_ROLE) {
-      throw new Error(
-        "Missing SERVICE ROLE key in Edge Function secrets. Set SUPABASE_SERVICE_ROLE_KEY (recommended)."
-      );
-    }
+    if (!SUPABASE_URL || !ANON || !SERVICE_ROLE) throw new Error("Supabase keys not set.");
+    if (!STRIPE_SK) throw new Error("Stripe secret not set.");
 
-    const authHeader =
-      req.headers.get("Authorization") ||
-      req.headers.get("authorization") ||
-      "";
+    const authHeader = req.headers.get("Authorization") || req.headers.get("authorization") || "";
+    if (!authHeader) throw new Error("Missing Authorization.");
 
-    // 1) Identify caller (buyer)
+    // Identify signed-in caller
     const supabaseUser = createClient(SUPABASE_URL, ANON, {
       global: { headers: { Authorization: authHeader } },
     });
 
     const { data: u, error: uErr } = await supabaseUser.auth.getUser();
     if (uErr) throw uErr;
+    const buyerId = u.user?.id;
+    if (!buyerId) throw new Error("Not signed in.");
 
-    const userId = u.user?.id;
-    if (!userId) throw new Error("Not signed in (buyer).");
-
-    // 2) Parse request
     const body = await req.json().catch(() => ({}));
     const session_id = String(body?.session_id || "");
     if (!session_id) throw new Error("Missing session_id");
 
-    // 3) Pull Stripe session and validate paid
-    const session = await stripeRetrieveSession(session_id);
+    // Retrieve Stripe session
+    const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
+    const stripe = new Stripe(STRIPE_SK, {
+      apiVersion: "2023-10-16",
+      httpClient: Stripe.createFetchHttpClient(),
+    });
+
+    const session = await stripe.checkout.sessions.retrieve(session_id);
 
     const paid =
       String(session?.payment_status || "").toLowerCase() === "paid" ||
@@ -96,61 +76,51 @@ Deno.serve(async (req) => {
 
     if (!paid) throw new Error("Stripe session is not paid/complete yet.");
 
-    // 4) Use Stripe metadata as source of truth
-    const meta = session?.metadata || {};
-    const listing_id = String(meta?.listing_id || "");
-    const artwork_id = String(meta?.artwork_id || "");
-    const buyerFromMeta = String(meta?.buyer_id || "");
+    // Validate metadata (source of truth)
+    const meta: any = session?.metadata || {};
+    const listingId = String(meta?.listing_id || "");
+    const artworkId = String(meta?.artwork_id || "");
+    const metaBuyer = String(meta?.buyer_id || "");
+    const currency = String(meta?.currency || session?.currency || "usd").toUpperCase();
 
-    if (!listing_id) throw new Error("Missing listing_id in Stripe metadata.");
-    if (!artwork_id) throw new Error("Missing artwork_id in Stripe metadata.");
+    if (!listingId || !artworkId) throw new Error("Stripe metadata missing listing_id/artwork_id.");
+    if (metaBuyer && metaBuyer !== buyerId) throw new Error("This Stripe session is not for the signed-in buyer.");
 
-    if (buyerFromMeta && buyerFromMeta !== userId) {
-      throw new Error("This Stripe session does not belong to the signed-in buyer.");
-    }
-
-    // 5) Amount/currency
     const amountTotalSmallest = Number(session?.amount_total ?? 0);
-    const currency = String(session?.currency || meta?.currency || "usd").toUpperCase();
-    const amountMajor = isZeroDecimalCurrency(currency)
-      ? amountTotalSmallest
-      : amountTotalSmallest / 100;
+    const amountTotal = stripeAmountToNormal(amountTotalSmallest, currency);
 
-    // 6) Finalize in DB (service role bypasses RLS)
+    // Admin client (bypasses RLS)
     const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE);
 
+    // ✅ Calls your SQL RPC (you already inserted)
     const { data, error } = await supabaseAdmin.rpc("fulfill_stripe_purchase", {
-      p_stripe_session_id: session_id,
-      p_listing_id: listing_id,
-      p_artwork_id: artwork_id,
-      p_buyer_id: userId,
-      p_amount: amountMajor,
+      p_stripe_session_id: String(session_id),
+      p_listing_id: listingId,
+      p_artwork_id: artworkId,
+      p_buyer_id: buyerId,
+      p_amount: amountTotal,
       p_currency: currency,
     });
 
     if (error) throw error;
 
-    // IMPORTANT: always return 200 so frontend can see the body
-    return json({
-      ok: true,
-      paid: true,
-      listing_id,
-      artwork_id,
-      currency,
-      amount: amountMajor,
-      session: {
-        id: session?.id,
-        payment_status: session?.payment_status,
-        status: session?.status,
-        metadata: meta,
+    return j(
+      {
+        ok: true,
+        paid: true,
+        result: data,
+        session: {
+          id: session?.id,
+          status: session?.status,
+          payment_status: session?.payment_status,
+          currency: String(session?.currency || "").toUpperCase(),
+          amount_total: session?.amount_total,
+          metadata: meta,
+        },
       },
-      result: data,
-    });
+      200
+    );
   } catch (e: any) {
-    // IMPORTANT: return 200 with ok:false so Success.tsx can show the real error
-    return json({
-      ok: false,
-      error: e?.message ?? String(e),
-    });
+    return j({ ok: false, error: e?.message ?? String(e) }, 400);
   }
 });
