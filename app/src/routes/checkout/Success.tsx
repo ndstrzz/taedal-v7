@@ -5,7 +5,7 @@ import { supabase } from "../../lib/supabase";
 
 type Status =
   | { state: "loading" }
-  | { state: "ok"; paid: boolean; meta: any; artworkId: string; listingId: string }
+  | { state: "ok"; paid: boolean; meta: any }
   | { state: "error"; message: string; detail?: string };
 
 export default function CheckoutSuccess() {
@@ -13,20 +13,14 @@ export default function CheckoutSuccess() {
   const [sp] = useSearchParams();
 
   const sessionId = sp.get("session_id") || "";
-  const listingIdFromUrl = sp.get("listing") || sp.get("listing_id") || "";
-  const artworkIdFromUrl = sp.get("artwork") || sp.get("artwork_id") || "";
+  const listingId = sp.get("listing") || sp.get("listing_id") || "";
+  const artworkId = sp.get("artwork") || sp.get("artwork_id") || "";
 
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
   const receipt = useMemo(
-    () => ({
-      sessionId,
-      listingId:
-        status.state === "ok" ? status.listingId : listingIdFromUrl,
-      artworkId:
-        status.state === "ok" ? status.artworkId : artworkIdFromUrl,
-    }),
-    [sessionId, listingIdFromUrl, artworkIdFromUrl, status]
+    () => ({ sessionId, listingId, artworkId }),
+    [sessionId, listingId, artworkId]
   );
 
   const run = async () => {
@@ -34,21 +28,14 @@ export default function CheckoutSuccess() {
       setStatus({ state: "error", message: "Missing session_id in URL." });
       return;
     }
-    if (sessionId.includes("CHECKOUT_SESSION_ID")) {
-      setStatus({
-        state: "error",
-        message: "Stripe did not inject a real session id (still placeholder).",
-        detail: "Fix create-checkout success_url so {CHECKOUT_SESSION_ID} is NOT url-encoded.",
-      });
-      return;
-    }
-
     setStatus({ state: "loading" });
 
     try {
+      // ✅ ensure we have auth (Stripe redirect sometimes lands before session restored)
       const { data: sess } = await supabase.auth.getSession();
       const accessToken = sess.session?.access_token;
 
+      // If your finalize function is allowed without auth, you can remove this check.
       if (!accessToken) {
         setStatus({
           state: "error",
@@ -63,44 +50,17 @@ export default function CheckoutSuccess() {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
-      if (error) {
-        setStatus({
-          state: "error",
-          message: "Finalize call failed (transport).",
-          detail: (error as any)?.message ?? String(error),
-        });
-        return;
-      }
-
-      if (!data?.ok) {
-        setStatus({
-          state: "error",
-          message: "Failed to verify/finalize with the Edge Function",
-          detail: String(data?.error || "Unknown error"),
-        });
-        return;
-      }
-
-      const meta = data?.session?.metadata ?? {};
-      const artworkId = String(data?.artwork_id || meta?.artwork_id || artworkIdFromUrl || "");
-      const listingId = String(data?.listing_id || meta?.listing_id || listingIdFromUrl || "");
+      if (error) throw error;
 
       setStatus({
         state: "ok",
         paid: Boolean(data?.paid),
-        meta,
-        artworkId,
-        listingId,
+        meta: data?.session?.metadata ?? {},
       });
-
-      // ✅ Auto redirect to fresh artwork page
-      if (artworkId) {
-        nav(`/art/${artworkId}?justPurchased=1&t=${Date.now()}`, { replace: true });
-      }
     } catch (e: any) {
       setStatus({
         state: "error",
-        message: "Unexpected error during finalize",
+        message: "Failed to send a request to the Edge Function",
         detail: e?.message ?? String(e),
       });
     }
@@ -112,10 +72,7 @@ export default function CheckoutSuccess() {
   }, [sessionId]);
 
   const goArtwork = () => {
-    const artworkId =
-      status.state === "ok" ? status.artworkId : artworkIdFromUrl;
-
-    if (artworkId) nav(`/art/${artworkId}?justPurchased=1&t=${Date.now()}`);
+    if (artworkId) nav(`/art/${artworkId}`);
     else nav("/home");
   };
 
@@ -134,7 +91,7 @@ export default function CheckoutSuccess() {
           <div className="mt-3">
             {status.paid ? (
               <div className="text-white/80">
-                Payment received and finalized. Redirecting you back to the artwork…
+                Payment received and finalized. Your purchase should reflect now.
               </div>
             ) : (
               <div className="text-amber-300">
@@ -164,15 +121,21 @@ export default function CheckoutSuccess() {
           <div className="mt-3 space-y-2 text-sm">
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Stripe session</div>
-              <div className="text-white/85 break-all text-right">{receipt.sessionId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.sessionId || "—"}
+              </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Listing</div>
-              <div className="text-white/85 break-all text-right">{receipt.listingId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.listingId || "—"}
+              </div>
             </div>
             <div className="flex justify-between gap-3">
               <div className="text-white/60">Artwork</div>
-              <div className="text-white/85 break-all text-right">{receipt.artworkId || "—"}</div>
+              <div className="text-white/85 break-all text-right">
+                {receipt.artworkId || "—"}
+              </div>
             </div>
           </div>
         </div>

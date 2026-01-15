@@ -24,7 +24,7 @@ type DuplicateHit = {
   id: string;
   title: string | null;
   image_url: string | null;
-  author_id: string | null; 
+  author_id: string | null; // ✅ Updated from creator_id to author_id
 };
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
@@ -155,13 +155,9 @@ function Stepper({ step }: { step: 1 | 2 | 3 | 4 }) {
         return (
           <div key={label} className="flex items-center gap-2">
             <div
-              className={`flex items-center gap-2 h-7 pl-1 pr-2 rounded-full border transition 
-                ${active ? "bg-white text-black border-white" : "bg-white/0 text-white/70 border-white/20"}`}
-            >
+              className={`flex items-center gap-2 h-7 pl-1 pr-2 rounded-full border transition                ${active ? "bg-white text-black border-white" : "bg-white/0 text-white/70 border-white/20"}`}            >
               <span
-                className={`grid place-items-center w-5 h-5 text-[11px] rounded-full 
-                  ${active ? "bg-black text-white" : "bg-white/15 text-white"}`}
-              >
+                className={`grid place-items-center w-5 h-5 text-[11px] rounded-full                  ${active ? "bg-black text-white" : "bg-white/15 text-white"}`}              >
                 {i + 1}
               </span>
               <span className="text-xs">{label}</span>
@@ -215,11 +211,9 @@ function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin
 
   return (
     <>
-      <style>{`
-        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
+      <style>{`        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
         .thicccboi { font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: 0.2px; }
-      `}</style>
-      <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
+      `}</style>      <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
         <div className="relative w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
           <video src={videoSrc} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-black/30" />
@@ -533,7 +527,7 @@ export default function CreateArtworkWizard() {
       const hash = await sha256File(file);
       const { data, error } = await supabase
         .from("artworks")
-        .select("id,title,image_url,author_id")
+        .select("id,title,image_url,author_id") // ✅ Updated author_id as source of truth
         .eq("image_sha256", hash)
         .limit(5);
 
@@ -708,17 +702,8 @@ export default function CreateArtworkWizard() {
 
   // STEP 2 → 3
   const onSubmitDetails = handleSubmit(async (values) => {
-    // 🔥 Fix 1: Frontend Safety - ensure session is attached before insert
-    const { data: u } = await supabase.auth.getUser();
-    console.log("auth user:", u.user?.id, "state userId:", userId);
-    
-    if (!u.user?.id) {
-      setGlobalMsg("No authenticated session (supabase user is null). Please sign in again.");
-      return;
-    }
-
-    if (images.length === 0) {
-      setGlobalMsg("Please upload at least one image.");
+    if (!userId || images.length === 0) {
+      setGlobalMsg("Please sign in and upload at least one image.");
       return;
     }
     if (!artType) {
@@ -737,13 +722,12 @@ export default function CreateArtworkWizard() {
 
     try {
       // upload cover
-      const coverUpload = await uploadToArtworksBucket(images[0].current, u.user.id);
+      const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
       setCoverUrl(coverUpload.publicUrl);
 
       const payload: any = {
-        author_id: u.user.id,
-        creator_id: u.user.id, // ✅ Fix 2: Add creator_id for legacy compatibility
-        owner_id: u.user.id,
+        author_id: userId, // ✅ NEW SCHEMA: author_id is required
+        owner_id: userId,
         title: values.title,
         description: values.description || null,
 
@@ -789,7 +773,7 @@ export default function CreateArtworkWizard() {
 
       // upload additional images
       if (images.length > 1) {
-        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, u.user.id)));
+        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
         const records = uploads.map((up, i) => ({
           artwork_id: row.id,
           url: up.publicUrl,

@@ -199,7 +199,7 @@ export default function PublicProfile() {
         .map((a: any) => [a.id, a])
     );
     setPurchased(
-      rows.map((r) => r.artwork_id)
+      rows.map(r => r.artwork_id)
         .map((id) => map.get(id))
         .filter(Boolean)
         .map((a: any) => ({
@@ -322,8 +322,7 @@ export default function PublicProfile() {
       }
 
       const payload: any = await res.json();
-      const passUrl: string | undefined =
-        payload.passUrl || payload.url || payload.link || payload.profileUrl;
+      const passUrl: string | undefined = payload.passUrl || payload.url || payload.link || payload.profileUrl;
 
       if (passUrl) window.location.href = passUrl;
       else setMsg("Wallet card prepared, but no URL was returned from the server.");
@@ -365,20 +364,10 @@ export default function PublicProfile() {
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
-      <div
-        className="relative border-b border-neutral-800 overflow-hidden"
-        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
-      >
+      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
         {coverUrl ? (
           isCoverVideo ? (
-            <video
-              src={coverUrl}
-              className="absolute inset-0 h-full w-full object-cover"
-              autoPlay
-              loop
-              muted
-              playsInline
-            />
+            <video src={coverUrl} className="absolute inset-0 h-full w-full object-cover" autoPlay loop muted playsInline />
           ) : (
             <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
           )
