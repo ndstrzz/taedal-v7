@@ -31,6 +31,32 @@ import {
   dmSendText,
 } from "../../features/messages/api";
 
+/** ✅ Notification helper */
+import { createNotification } from "../../lib/notifications";
+
+
+/* ------------------------------ Helper Functions ------------------------------ */
+
+function buildWinnerCongratsMessage(params: {
+  artworkTitle?: string | null;
+  artworkId: string;
+  stripeUrl?: string | null; // if you already generate a checkout link
+}) {
+  const title = params.artworkTitle || "your artwork";
+  const artLink = `${window.location.origin}/art/${params.artworkId}`;
+
+  return [
+    `🎉 Congratulations! You’re the winning bidder for **${title}**.`,
+    ``,
+    `To complete your purchase, please choose a payment method below:`,
+    `1) **Card / Stripe** ${params.stripeUrl ? `-> ${params.stripeUrl}` : "(owner will provide checkout link shortly)"}`,
+    `2) **Crypto / MetaMask** -> open the artwork page and use the crypto checkout option (if available)`,
+    ``,
+    `Artwork link: ${artLink}`,
+    ``,
+    `If you need help, just reply here — I’ll assist you with the next step.`,
+  ].join("\n");
+}
 
 /* ------------------------------ WalletModal ------------------------------ */
 
@@ -1425,13 +1451,17 @@ export default function ArtworkDetail() {
           listing_id: activeListing.id,
           quantity: 1,
 
-          // Extra fields (safe even if the function ignores them)
           listing_type: String((activeListing as any)?.type ?? "fixed"),
           artwork_id: art.id,
           seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
           buyer_id: viewerId,
 
-          success_url: `${location.origin}/checkout/success`,
+          /** ✅ Updated success_url with session_id */
+          success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
+            activeListing.id
+          )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+            `/art/${art.id}`
+          )}`,
           cancel_url: location.href,
         },
       });
@@ -1539,8 +1569,11 @@ export default function ArtworkDetail() {
     setMsg(null);
 
     try {
-      const successUrl = `${location.origin}/art/${art.id}?paid=1&listing=${encodeURIComponent(
+      /** ✅ Updated successUrl with session_id */
+      const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
         activeListing.id
+      )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+        `/art/${art.id}`
       )}`;
       const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
         activeListing.id
@@ -1550,15 +1583,11 @@ export default function ArtworkDetail() {
         body: {
           listing_id: activeListing.id,
           quantity: 1,
-
-          // ✅ These fields help your edge function build the right Stripe checkout for auctions,
-          // and also make your webhook fallback resolution work reliably.
           listing_type: "auction",
           artwork_id: art.id,
           seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
           buyer_id: viewerId,
           currency,
-          // if your function supports overriding/using this, great; if not, harmless
           auction_amount: isFinite(finalAmt) && finalAmt > 0 ? finalAmt : null,
 
           success_url: successUrl,
@@ -1667,63 +1696,65 @@ export default function ArtworkDetail() {
     }
   }
 
+  /** ✅ Contact winner (seller) — now includes Inbox notification */
+  async function contactWinner() {
+    const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
+    if (!winId || !activeListing || !art) return;
 
+    try {
+      const { data: sess } = await supabase.auth.getSession();
+      const actorId = sess.session?.user?.id;
+      if (!actorId) throw new Error("Not signed in.");
 
-  /** ✅ Contact winner (seller) */
-/** ✅ Contact winner (seller) */
-async function contactWinner() {
-  const winId = winnerIdNow ?? auctionOutcome?.winner?.id ?? null;
-  if (!winId || !activeListing || !art) return;
+      const tid = await dmGetOrCreateThread(winId);
 
-  try {
-    const tid = await dmGetOrCreateThread(winId);
+      const base = location.origin;
+      const listingId = activeListing.id;
+      const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
 
-    const base = location.origin;
-    const listingId = activeListing.id;
+      // Check for available checkout link
+      const stripeLink = ccy === "ETH" ? null : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
+      const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(listingId)}`;
 
-    const stripeLink = `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
-      listingId
-    )}`;
-    const metaLink = `${base}/art/${art.id}?pay=1&method=metamask&listing=${encodeURIComponent(
-      listingId
-    )}`;
+      // 1) Build Congratulation Message
+      const msg = buildWinnerCongratsMessage({
+        artworkTitle: art.title,
+        artworkId: art.id,
+        stripeUrl: stripeLink,
+      });
 
-    const finalAmt = topBid?.amount ?? auctionOutcome?.amount ?? null;
-    const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
+      // 2) SEND MESSAGE in your existing messaging system
+      await dmSendText(tid, msg);
 
-    // 1) Congratulation + context message
-    const header =
-      `🎉 Congratulations — you’re the winner of the bidding auction for “${art.title ?? "this artwork"}”!\n\n` +
-      (finalAmt != null ? `Final price: ${finalAmt} ${ccy}\n` : "") +
-      `Auction listing: ${listingId}\n\n` +
-      `Choose a payment method below (tap the link):`;
+      // 3) Send artwork card
+      await dmSendArtworkShare(tid, art.id, {
+        title: art.title ?? "Untitled",
+        image_url: art.image_url,
+      });
 
-    await dmSendText(tid, header);
+      // 4) CREATE INBOX NOTIFICATION for the winner
+      await createNotification({
+        user_id: winId,
+        actor_id: actorId,
+        type: "auction_won",
+        title: "You won the auction 🎉",
+        body: `Congratulations — you won the auction for ${art.title ?? "an artwork"}. Tap to pay.`,
+        href: `/messages?t=${encodeURIComponent(tid)}`, // or `/art/${art.id}` if you prefer
+        metadata: {
+          artwork_id: art.id,
+          kind: "auction_won",
+        },
+      });
 
-    // 2) Send the payment link as URL-only messages (renders as rich “card” in ChatView)
-    if (ccy === "ETH") {
-      await dmSendText(tid, metaLink);
-    } else {
-      await dmSendText(tid, stripeLink);
+      // 5) Jump to Messages
+      nav(`/messages?t=${encodeURIComponent(tid)}`);
+    } catch (e: any) {
+      setMsg(e?.message ?? "Failed to open chat");
     }
-
-    // 3) Send artwork card (nice preview)
-    await dmSendArtworkShare(tid, art.id, {
-      title: art.title ?? "Untitled",
-      image_url: art.image_url,
-    });
-
-    // 4) Jump you to Messages thread (seller side)
-    nav(`/messages?t=${encodeURIComponent(tid)}`);
-  } catch (e: any) {
-    setMsg(e?.message ?? "Failed to open chat");
   }
-}
-
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
   const isSeller = !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
-
   const isWinner = !!viewerId && !!winnerIdNow && viewerId === winnerIdNow;
 
   const paymentPending = isAuction && auctionClosed && reserveMetNow && !auctionPaid;
@@ -1863,14 +1894,12 @@ async function contactWinner() {
   }
 
   const canRequestLicense = !!viewerId && viewerId !== art.creator_id;
-
   const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
   const bidStep = ccy === "ETH" ? "0.00000001" : "0.01";
 
   return (
     <>
       <div className="max-w-7xl mx-auto p-6 space-y-8">
-        {/* Top: Image + Right panel */}
         <div className="grid gap-8 lg:grid-cols-12">
           {/* Left */}
           <div className="lg:col-span-7 space-y-3">
@@ -1901,8 +1930,7 @@ async function contactWinner() {
                         : "border-white/10 hover:border-white/30"
                     } bg-neutral-900`}
                   >
-                    {/* @ts-ignore */}
-                    <img src={f.url} className="h-full w-full object-cover" />
+                    <img src={f.url} className="h-full w-full object-cover" alt="gallery item" />
                   </button>
                 ))}
               </div>
@@ -1913,7 +1941,6 @@ async function contactWinner() {
           <div className="lg:col-span-5 space-y-4 lg:sticky lg:top-6 self-start">
             {msg && <p className="text-xs text-amber-300">{msg}</p>}
 
-            {/* Header */}
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
                 <h1 className="text-3xl font-semibold leading-tight truncate">
@@ -1971,7 +1998,6 @@ async function contactWinner() {
                 </div>
               </div>
 
-              {/* Actions */}
               <div className="flex flex-wrap items-center justify-end gap-2 shrink-0">
                 {isOwner && (
                   <button
@@ -2026,7 +2052,6 @@ async function contactWinner() {
               </div>
             </div>
 
-            {/* Stats */}
             <Card>
               <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
                 <StatBox
@@ -2056,7 +2081,6 @@ async function contactWinner() {
               </div>
             </Card>
 
-            {/* Listing / Auction */}
             <Card
               title="Listing"
               right={
@@ -2126,7 +2150,6 @@ async function contactWinner() {
                     ) : null}
                   </div>
 
-                  {/* Main action area */}
                   <div className="mt-3 flex gap-2">
                     {isAuction ? (
                       canBid ? (
@@ -2174,7 +2197,6 @@ async function contactWinner() {
                     )}
                   </div>
 
-                  {/* Post-auction payment panel */}
                   {isAuction && auctionClosed ? (
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
                       {!reserveMetNow ? (
@@ -2243,7 +2265,6 @@ async function contactWinner() {
 
                   {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
 
-                  {/* ✅ Bid history preview */}
                   {isAuction ? (
                     <div className="mt-3">
                       <div className="flex items-center justify-between mb-2">
@@ -2477,7 +2498,6 @@ function SellerConsole({
           </button>
         </div>
 
-        {/* Post-auction banner */}
         {postAuctionMode ? (
           <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
             {paymentPending ? (

@@ -16,6 +16,7 @@ type NavItem = {
   iconSrc: string;
   alt?: string;
   onClick?: () => void; // for actions like opening the search panel
+  badgeDot?: boolean; // ✅ show a dot indicator
 };
 
 type SearchRow = {
@@ -45,7 +46,20 @@ function saveRecent(list: SearchRow[]) {
 }
 
 /* ---------------------------- Rail Link ---------------------------- */
-function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
+function RailLink({ to, label, iconSrc, alt, onClick, badgeDot }: NavItem) {
+  const Icon = (
+    <div className="relative grid place-items-center w-8 shrink-0">
+      <img
+        src={iconSrc}
+        alt={alt || label}
+        className="h-5 w-5 transition-transform group-hover/item:scale-105"
+      />
+      {badgeDot ? (
+        <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 border border-black/70" />
+      ) : null}
+    </div>
+  );
+
   // Action button variant
   if (onClick) {
     return (
@@ -59,13 +73,7 @@ function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30",
         ].join(" ")}
       >
-        <div className="grid place-items-center w-8 shrink-0">
-          <img
-            src={iconSrc}
-            alt={alt || label}
-            className="h-5 w-5 transition-transform group-hover/item:scale-105"
-          />
-        </div>
+        {Icon}
         <span
           className="
             overflow-hidden opacity-0 max-w-0
@@ -96,7 +104,7 @@ function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
     >
       {({ isActive }) => (
         <>
-          <div className="grid place-items-center w-8 shrink-0">
+          <div className="relative grid place-items-center w-8 shrink-0">
             <img
               src={iconSrc}
               alt={alt || label}
@@ -105,7 +113,11 @@ function RailLink({ to, label, iconSrc, alt, onClick }: NavItem) {
                 isActive ? "scale-105" : "group-hover/item:scale-105",
               ].join(" ")}
             />
+            {badgeDot ? (
+              <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full bg-emerald-300 border border-black/70" />
+            ) : null}
           </div>
+
           <span
             className="
               overflow-hidden opacity-0 max-w-0
@@ -131,13 +143,21 @@ export default function Sidebar() {
 
   /* -------------------- auth / profile -------------------- */
   const [user, setUser] = useState<UserBits | null>(null);
+
+  // ✅ inbox unread dot
+  const [inboxUnreadDot, setInboxUnreadDot] = useState(false);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
       const { data } = await supabase.auth.getSession();
       const u = data.session?.user ?? null;
       if (!mounted) return;
-      if (!u) return setUser(null);
+      if (!u) {
+        setUser(null);
+        setInboxUnreadDot(false);
+        return;
+      }
 
       const { data: prof } = await supabase
         .from("profiles")
@@ -155,13 +175,18 @@ export default function Sidebar() {
 
     const sub = supabase.auth.onAuthStateChange((_e, s) => {
       const u = s?.user ?? null;
-      if (!u) return setUser(null);
+      if (!u) {
+        setUser(null);
+        setInboxUnreadDot(false);
+        return;
+      }
       (async () => {
         const { data: prof } = await supabase
           .from("profiles")
           .select("username, avatar_url")
           .eq("id", u.id)
           .maybeSingle();
+
         setUser({
           id: u.id,
           email: u.email,
@@ -173,6 +198,48 @@ export default function Sidebar() {
 
     return () => sub.data.subscription.unsubscribe();
   }, []);
+
+  // ✅ watch unread notifications (dot only)
+  useEffect(() => {
+    if (!user?.id) return;
+
+    let alive = true;
+
+    async function refreshDot() {
+      try {
+        const { count } = await supabase
+          .from("notifications")
+          .select("id", { count: "exact", head: true })
+          .eq("user_id", user.id)
+          .is("read_at", null);
+        if (!alive) return;
+        setInboxUnreadDot(Boolean(count && count > 0));
+      } catch {
+        if (!alive) return;
+        setInboxUnreadDot(false);
+      }
+    }
+
+    refreshDot();
+
+    const ch = supabase
+      .channel(`inbox_dot_${user.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "notifications", filter: `user_id=eq.${user.id}` },
+        () => {
+          void refreshDot();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      alive = false;
+      try {
+        supabase.removeChannel(ch);
+      } catch {}
+    };
+  }, [user?.id]);
 
   const avatar = useMemo(
     () => user?.avatar_url || "/images/taedal-logo.svg",
@@ -269,37 +336,21 @@ export default function Sidebar() {
 
   /* -------------------- nav model -------------------- */
   const mainNav: NavItem[] = [
-    {
-      to: "/discover",
-      label: "Discover",
-      iconSrc: "/images/discover-icon.svg",
-      alt: "Discover",
-    },
-    {
-      to: "/explore",
-      label: "Collections",
-      iconSrc: "/images/collections-icon.svg",
-    },
-    {
-      to: "/contracts",
-      label: "Contracts",
-      iconSrc: "/images/contract-icon.svg",
-    },
-    {
-      to: "/studio",
-      label: "Studio",
-      iconSrc: "/images/studio-icon.svg",
-    },
+    { to: "/discover", label: "Discover", iconSrc: "/images/discover-icon.svg", alt: "Discover" },
+    { to: "/explore", label: "Collections", iconSrc: "/images/collections-icon.svg" },
+    { to: "/contracts", label: "Contracts", iconSrc: "/images/contract-icon.svg" },
+    { to: "/studio", label: "Studio", iconSrc: "/images/studio-icon.svg" },
 
-    /* NEW: Messages */
-    {
-      to: "/messages",
-      label: "Messages",
-      iconSrc: "/images/messages-icon.svg", // swap to any existing icon if needed
-      alt: "Messages",
-    },
+    { to: "/messages", label: "Messages", iconSrc: "/images/messages-icon.svg", alt: "Messages" },
 
-    // Social is handled separately (with dropdown)
+    // ✅ Inbox + unread dot
+    {
+      to: "/inbox",
+      label: "Inbox",
+      iconSrc: "/images/inbox-icon.svg",
+      alt: "Inbox",
+      badgeDot: inboxUnreadDot,
+    },
   ];
 
   /* ---------------------------- render ---------------------------- */
@@ -319,9 +370,9 @@ export default function Sidebar() {
           overflow-hidden
         "
       >
-        {/* Brand (collapsed: taedal-static; expanded: BIG taedal-logo; no wordmark) */}
+        {/* Brand */}
         <Link
-          to="/home" // go to home, not boot
+          to="/home"
           title="Home"
           className="
             w-full flex items-center gap-3 h-11 px-3 rounded-xl
@@ -330,14 +381,11 @@ export default function Sidebar() {
           "
         >
           <div className="relative grid place-items-center w-8 overflow-visible">
-            {/* Collapsed small icon */}
             <img
               src="/images/taedal-static.svg"
               alt="taedal"
               className="h-6 w-6 transition-opacity duration-200 group-hover:opacity-0"
             />
-
-            {/* Expanded BIG logo (acts as the button) */}
             <img
               src="/images/taedal-logo.svg"
               alt="taedal"
@@ -354,7 +402,7 @@ export default function Sidebar() {
           <span className="sr-only">taedal</span>
         </Link>
 
-        {/* Search rail button (opens panel) */}
+        {/* Search rail button */}
         <div className="mt-2 px-1">
           <RailLink
             label="Search"
@@ -369,12 +417,11 @@ export default function Sidebar() {
         {/* Main nav */}
         <nav className="mt-2 grid gap-2 px-1" role="navigation">
           {mainNav.map((it) => (
-            <RailLink key={it.to} {...it} />
+            <RailLink key={it.to || it.label} {...it} />
           ))}
 
-          {/* Social with hover dropdown (post/view feed) */}
+          {/* Social dropdown */}
           <div className="relative group">
-            {/* Parent row */}
             <button
               type="button"
               title="Social"
@@ -404,7 +451,6 @@ export default function Sidebar() {
               </span>
             </button>
 
-            {/* Dropdown panel (below the Social pill, inside the sidebar) */}
             <div
               className="
                 absolute left-14 top-full mt-4
@@ -425,11 +471,7 @@ export default function Sidebar() {
                   ].join(" ")
                 }
               >
-                <img
-                  src="/images/post-feed-icon.svg"
-                  alt="Post feed"
-                  className="h-4 w-4 object-contain"
-                />
+                <img src="/images/post-feed-icon.svg" alt="Post feed" className="h-4 w-4 object-contain" />
                 <span>post feed</span>
               </NavLink>
 
@@ -444,11 +486,7 @@ export default function Sidebar() {
                   ].join(" ")
                 }
               >
-                <img
-                  src="/images/view-feed-icon.svg"
-                  alt="View feed"
-                  className="h-4 w-4 object-contain"
-                />
+                <img src="/images/view-feed-icon.svg" alt="View feed" className="h-4 w-4 object-contain" />
                 <span>view feed</span>
               </NavLink>
             </div>
@@ -457,16 +495,12 @@ export default function Sidebar() {
 
         <div className="flex-1" />
 
-        {/* Settings link */}
+        {/* Settings */}
         <nav className="grid gap-2 px-1 mb-2">
-          <RailLink
-            to="/settings"
-            label="Settings"
-            iconSrc="/images/settings-icon.svg"
-          />
+          <RailLink to="/settings" label="Settings" iconSrc="/images/settings-icon.svg" />
         </nav>
 
-        {/* Account bubble with hover/click menu */}
+        {/* Account bubble */}
         <div className="px-1" ref={accountRef}>
           {!user ? (
             <Link
@@ -478,17 +512,12 @@ export default function Sidebar() {
                 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
               "
               onClick={() => {
-                const here =
-                  window.location.pathname + window.location.search;
+                const here = window.location.pathname + window.location.search;
                 sessionStorage.setItem("returnTo", here || "/account");
               }}
             >
               <div className="grid place-items-center w-8">
-                <img
-                  src="/images/account-icon.svg"
-                  alt="Account"
-                  className="h-5 w-5"
-                />
+                <img src="/images/account-icon.svg" alt="Account" className="h-5 w-5" />
               </div>
               <span
                 className="
@@ -513,11 +542,7 @@ export default function Sidebar() {
                   focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/30
                 "
               >
-                <img
-                  src={avatar}
-                  className="h-8 w-8 rounded-lg object-cover"
-                  alt="profile avatar"
-                />
+                <img src={avatar} className="h-8 w-8 rounded-lg object-cover" alt="profile avatar" />
                 <span
                   className="
                     overflow-hidden opacity-0 max-w-0
@@ -526,9 +551,7 @@ export default function Sidebar() {
                     whitespace-nowrap
                   "
                 >
-                  {user.username
-                    ? `@${user.username}`
-                    : user.email ?? "Profile"}
+                  {user.username ? `@${user.username}` : user.email ?? "Profile"}
                 </span>
               </button>
 
@@ -630,8 +653,7 @@ export default function Sidebar() {
                     setSel((i) => (i - 1 + rows.length) % rows.length);
                   }
                   if (e.key === "Enter") {
-                    const r =
-                      rows[Math.max(0, Math.min(sel, rows.length - 1))];
+                    const r = rows[Math.max(0, Math.min(sel, rows.length - 1))];
                     if (r) goToProfile(r);
                   }
                 }}
@@ -670,19 +692,13 @@ export default function Sidebar() {
                       className="h-10 w-10 rounded-full object-cover"
                     />
                     <div className="min-w-0 text-left">
-                      <div className="truncate">
-                        {r.display_name || r.username || "User"}
-                      </div>
-                      <div className="text-sm text-neutral-400 truncate">
-                        @{r.username || r.id}
-                      </div>
+                      <div className="truncate">{r.display_name || r.username || "User"}</div>
+                      <div className="text-sm text-neutral-400 truncate">@{r.username || r.id}</div>
                     </div>
                   </button>
                 </li>
               ))}
-              {!rows.length && (
-                <div className="px-6 py-8 text-neutral-400">No results.</div>
-              )}
+              {!rows.length && <div className="px-6 py-8 text-neutral-400">No results.</div>}
             </ul>
           ) : (
             <div className="overflow-auto max-h-[calc(100vh-170px)]">
@@ -716,12 +732,8 @@ export default function Sidebar() {
                         className="h-10 w-10 rounded-full object-cover"
                       />
                       <div className="min-w-0">
-                        <div className="truncate">
-                          {r.display_name || r.username || "User"}
-                        </div>
-                        <div className="text-sm text-neutral-400 truncate">
-                          @{r.username || r.id}
-                        </div>
+                        <div className="truncate">{r.display_name || r.username || "User"}</div>
+                        <div className="text-sm text-neutral-400 truncate">@{r.username || r.id}</div>
                       </div>
                     </button>
                     <button
@@ -735,9 +747,7 @@ export default function Sidebar() {
                   </li>
                 ))}
                 {recent.length === 0 && (
-                  <div className="px-6 py-8 text-neutral-400">
-                    No recent searches.
-                  </div>
+                  <div className="px-6 py-8 text-neutral-400">No recent searches.</div>
                 )}
               </ul>
             </div>

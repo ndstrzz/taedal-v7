@@ -57,6 +57,9 @@ import StreakHUD from "./components/streaks/StreakHUD";
 /* Messages */
 import MessagesPage from "./features/messages/MessagesPage";
 
+/* ✅ NEW: Inbox */
+import InboxPage from "./routes/inbox/Inbox";
+
 import "@google/model-viewer";
 
 /* Assistant */
@@ -124,7 +127,7 @@ function RequireBootGate() {
   const loc = useLocation();
 
   useEffect(() => {
-    const needBoot = shouldShowBootOnce("site"); // localStorage + BOOT_VERSION
+    const needBoot = shouldShowBootOnce("site");
     const onBoot = loc.pathname === "/";
     if (needBoot && !onBoot) {
       nav("/", { replace: true });
@@ -167,18 +170,33 @@ const router = createBrowserRouter([
         element: <AppLayout />,
         children: [{ index: true, element: <Explore /> }],
       },
-
       {
         path: "/discover",
         element: <AppLayout />,
         children: [{ index: true, element: <DiscoverPage /> }],
       },
 
-      /* ✅ Messages (NO RequireAuth here; page handles sign-in state) */
+      /* ✅ Messages */
       {
         path: "/messages",
         element: <AppLayout />,
         children: [{ index: true, element: <MessagesPage /> }],
+      },
+
+      /* ✅ NEW: Inbox */
+      {
+        path: "/inbox",
+        element: <AppLayout />,
+        children: [
+          {
+            index: true,
+            element: (
+              <RequireAuth>
+                <InboxPage />
+              </RequireAuth>
+            ),
+          },
+        ],
       },
 
       // Social routes
