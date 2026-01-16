@@ -15,6 +15,8 @@ export default function CheckoutSuccess() {
   const sessionId = sp.get("session_id") || "";
   const listingId = sp.get("listing") || sp.get("listing_id") || "";
   const artworkId = sp.get("artwork") || sp.get("artwork_id") || "";
+  // A) Read return_to from the URL params
+  const returnTo = sp.get("return_to") || "";
 
   const [status, setStatus] = useState<Status>({ state: "loading" });
 
@@ -35,7 +37,6 @@ export default function CheckoutSuccess() {
       const { data: sess } = await supabase.auth.getSession();
       const accessToken = sess.session?.access_token;
 
-      // If your finalize function is allowed without auth, you can remove this check.
       if (!accessToken) {
         setStatus({
           state: "error",
@@ -52,11 +53,24 @@ export default function CheckoutSuccess() {
 
       if (error) throw error;
 
+      // B) After successful finalize + paid, auto-navigate back
+      const paid = Boolean(data?.paid);
+      
       setStatus({
         state: "ok",
-        paid: Boolean(data?.paid),
+        paid,
         meta: data?.session?.metadata ?? {},
       });
+
+      if (paid) {
+        // Small delay so UI updates, allowing the user to see the success state briefly
+        setTimeout(() => {
+          if (returnTo) nav(returnTo);
+          else if (artworkId) nav(`/art/${artworkId}`);
+          else nav("/home");
+        }, 400);
+      }
+      
     } catch (e: any) {
       setStatus({
         state: "error",
@@ -91,7 +105,7 @@ export default function CheckoutSuccess() {
           <div className="mt-3">
             {status.paid ? (
               <div className="text-white/80">
-                Payment received and finalized. Your purchase should reflect now.
+                Payment received and finalized. Redirecting you back...
               </div>
             ) : (
               <div className="text-amber-300">

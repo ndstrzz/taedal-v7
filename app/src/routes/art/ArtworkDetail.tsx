@@ -32,7 +32,6 @@ import {
 /** ✅ Notification helper */
 import { createNotification } from "../../lib/notifications.ts";
 
-
 /* ------------------------------ Helper Functions ------------------------------ */
 
 function buildWinnerCongratsMessage(params: {
@@ -46,7 +45,11 @@ function buildWinnerCongratsMessage(params: {
   return [
     `🎉 Congratulations! You’re the winning bidder for **${title}**.`,
     `To complete your purchase, please choose a payment method below:`,
-    `1) **Card / Stripe** ${params.stripeUrl ? `-> ${params.stripeUrl}` : "(owner will provide checkout link shortly)"}`,
+    `1) **Card / Stripe** ${
+      params.stripeUrl
+        ? `-> ${params.stripeUrl}`
+        : "(owner will provide checkout link shortly)"
+    }`,
     `2) **Crypto / MetaMask** -> open the artwork page and use the crypto checkout option (if available)`,
     `Artwork link: ${artLink}`,
     `If you need help, just reply here — I’ll assist you with the next step.`,
@@ -1454,7 +1457,9 @@ export default function ArtworkDetail() {
           /** ✅ Updated success_url with session_id */
           success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
             activeListing.id
-          )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+          )}&artwork_id=${encodeURIComponent(
+            art.id
+          )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
             `/art/${art.id}`
           )}`,
           cancel_url: location.href,
@@ -1567,7 +1572,9 @@ export default function ArtworkDetail() {
       /** ✅ Updated successUrl with session_id */
       const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
         activeListing.id
-      )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+      )}&artwork_id=${encodeURIComponent(
+        art.id
+      )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
         `/art/${art.id}`
       )}`;
       const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
@@ -1709,7 +1716,12 @@ export default function ArtworkDetail() {
       const ccy = (activeListing.sale_currency ?? "USD").toUpperCase();
 
       // Check for available checkout link
-      const stripeLink = ccy === "ETH" ? null : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
+      const stripeLink =
+        ccy === "ETH"
+          ? null
+          : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(
+              listingId
+            )}`;
 
       // 1) Build Congratulation Message for the DM thread
       const msg = buildWinnerCongratsMessage({
@@ -1729,12 +1741,12 @@ export default function ArtworkDetail() {
 
       // 4) PATCH ADDED: INSERT NOTIFICATION for the winning bidder in notifications table
       await createNotification({
-        user_id: winId,               // recipient (winner)
-        actor_id: actorId,             // sender (owner)
-        type: "auction_win",           
+        user_id: winId, // recipient (winner)
+        actor_id: actorId, // sender (owner)
+        type: "auction_win",
         title: "Congratulations! You won the auction 🥳",
         body: `You won "${art.title ?? "this artwork"}". Please complete your purchase via Stripe or MetaMask on the artwork page.`,
-        href: `/art/${art.id}`,        // Link to the artwork page for payment
+        href: `/art/${art.id}`, // Link to the artwork page for payment
         metadata: {
           listing_id: listingId,
           artwork_id: art.id,
@@ -1750,14 +1762,19 @@ export default function ArtworkDetail() {
   }
 
   const isOwner = !!viewerId && !!art?.owner_id && viewerId === art.owner_id;
-  const isSeller = !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
+  const isSeller =
+    !!activeListing && !!viewerId && viewerId === (activeListing as any).seller_id;
   const isWinner = !!viewerId && !!winnerIdNow && viewerId === winnerIdNow;
 
   const paymentPending = isAuction && auctionClosed && reserveMetNow && !auctionPaid;
 
   const canBuy = !!activeListing && !!viewerId && !isSeller && !isAuction;
   const canBid =
-    !!viewerId && !isSeller && isAuction && !auctionClosed && String(listingStatus ?? "") === "active";
+    !!viewerId &&
+    !isSeller &&
+    isAuction &&
+    !auctionClosed &&
+    String(listingStatus ?? "") === "active";
 
   const minNextBid = useMemo(() => {
     if (!isAuction) return 0;
@@ -1889,7 +1906,9 @@ export default function ArtworkDetail() {
     );
   }
 
-  const canRequestLicense = !!viewerId && viewerId !== art.author_id; // ✅ Changed from creator_id to author_id
+  // ✅ UPDATED: Only non-owners can request license
+  const canRequestLicense = !!viewerId && !isOwner && viewerId !== art.author_id;
+
   const ccy = (activeListing?.sale_currency ?? "USD").toUpperCase();
   const bidStep = ccy === "ETH" ? "0.00000001" : "0.01";
 
@@ -1924,8 +1943,13 @@ export default function ArtworkDetail() {
                       mainUrl === f.url
                         ? "border-white/50"
                         : "border-white/10 hover:border-white/30"
-                    } bg-neutral-900`}                  >
-                    <img src={f.url} className="h-full w-full object-cover" alt="gallery item" />
+                    } bg-neutral-900`}
+                  >
+                    <img
+                      src={f.url}
+                      className="h-full w-full object-cover"
+                      alt="gallery item"
+                    />
                   </button>
                 ))}
               </div>
@@ -2250,13 +2274,20 @@ export default function ArtworkDetail() {
                     </div>
                   ) : null}
 
-                  {canRequestLicense && (
+                  {/* ✅ UPDATED: After buyer becomes owner, show "List this artwork" instead of Request license */}
+                  {canRequestLicense ? (
                     <div className="mt-3">
                       <button className="btn w-full" onClick={() => setShowLicense(true)}>
                         Request license
                       </button>
                     </div>
-                  )}
+                  ) : isOwner && isClosedStatus(listingStatus) ? (
+                    <div className="mt-3">
+                      <button className="btn w-full" onClick={() => setSellerOpen(true)}>
+                        List this artwork
+                      </button>
+                    </div>
+                  ) : null}
 
                   {bidMsg && <div className="text-xs text-neutral-200 mt-2">{bidMsg}</div>}
 
@@ -2356,7 +2387,11 @@ export default function ArtworkDetail() {
         disabledText="Coming soon"
       />
 
-      <ShareQRModal open={showShareQR} onClose={() => setShowShareQR(false)} url={`${location.origin}/art/${id}`} />
+      <ShareQRModal
+        open={showShareQR}
+        onClose={() => setShowShareQR(false)}
+        url={`${location.origin}/art/${id}`}
+      />
 
       <ShareToDMModal
         open={showShareDM}
@@ -2524,7 +2559,8 @@ function SellerConsole({
                 tab === t
                   ? "bg-white text-black font-medium"
                   : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
-              }`}            >
+              }`}
+            >
               {t === "price" ? "Price" : t === "auction" ? "Auction" : "Details"}
             </button>
           ))}
