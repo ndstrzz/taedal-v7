@@ -109,7 +109,7 @@ type Artwork = {
   title: string | null;
   description: string | null;
   image_url: string | null;
-  author_id: string;
+  author_id: string; // ✅ your schema
   owner_id: string | null;
   created_at: string;
   ipfs_image_cid?: string | null;
@@ -458,11 +458,7 @@ function ShareToDMModal({
 
         <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 flex gap-3">
           {artwork.image_url ? (
-            <img
-              src={artwork.image_url}
-              className="h-14 w-14 rounded-lg object-cover border border-white/10"
-              alt={artwork.title ?? "Artwork"}
-            />
+            <img src={artwork.image_url} className="h-14 w-14 rounded-lg object-cover border border-white/10" alt={artwork.title ?? "Artwork"} />
           ) : (
             <div className="h-14 w-14 rounded-lg bg-white/5 border border-white/10" />
           )}
@@ -645,6 +641,7 @@ function CommentsThread({
     setBusy(true);
     setErr(null);
     try {
+      // simplest: fetch comments + profile fields (join)
       const { data, error } = await supabase
         .from("artwork_comments")
         .select("id,artwork_id,parent_id,content,created_at,user_id, profiles:profiles ( username, display_name, avatar_url )")
@@ -697,6 +694,7 @@ function CommentsThread({
     if (!viewerId) throw new Error("Please sign in to comment.");
     const { data } = await supabase.from("profiles").select("id").eq("id", viewerId).maybeSingle();
     if (!data?.id) {
+      // This is the exact issue you hit manually: FK requires profile row.
       throw new Error("Your profile row is missing. Go to Profile and save your profile once, then try again.");
     }
   }
@@ -806,9 +804,7 @@ function CommentsThread({
                       >
                         Reply
                       </button>
-                      <span className="text-[11px] text-white/50">
-                        {replies.length ? `${replies.length} reply${replies.length > 1 ? "ies" : ""}` : ""}
-                      </span>
+                      <span className="text-[11px] text-white/50">{replies.length ? `${replies.length} reply${replies.length > 1 ? "ies" : ""}` : ""}</span>
                     </div>
 
                     {replyTo?.id === c.id ? (
@@ -863,73 +859,6 @@ function CommentsThread({
   );
 }
 
-/* ------------------------------ Price history mini chart ------------------------------ */
-
-function PriceHistoryChart({ rows }: { rows: PriceHistoryRow[] }) {
-  const W = 560;
-  const H = 180;
-  const P = 18;
-
-  if (!rows.length) {
-    return (
-      <div className="rounded-xl border border-white/10 bg-white/5 p-4 text-sm text-white/60">
-        No price history yet.
-      </div>
-    );
-  }
-
-  const points = rows
-    .slice()
-    .reverse()
-    .map((r, i) => ({ x: i, y: Number(r.amount) }));
-
-  const xs = points.map((p) => p.x);
-  const ys = points.map((p) => p.y);
-
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const yPad = (maxY - minY) * 0.12 || 1;
-
-  const xTo = (x: number) =>
-    P + ((x - minX) / Math.max(1, maxX - minX)) * (W - P * 2);
-  const yTo = (y: number) =>
-    H -
-    P -
-    ((y - (minY - yPad)) / Math.max(1, (maxY + yPad) - (minY - yPad))) *
-      (H - P * 2);
-
-  const d = points
-    .map((p, i) => `${i === 0 ? "M" : "L"} ${xTo(p.x).toFixed(2)} ${yTo(p.y).toFixed(2)}`)
-    .join(" ");
-
-  return (
-    <div className="rounded-xl border border-white/10 bg-white/5 p-4">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-sm font-semibold">Price market</div>
-        <div className="text-xs text-white/50">
-          Range: {minY.toLocaleString()} → {maxY.toLocaleString()}
-        </div>
-      </div>
-
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-[180px] w-full">
-        <path d={d} fill="none" stroke="currentColor" strokeWidth={2} opacity={0.9} />
-        {points.map((p, i) => (
-          <circle key={p.x + "-" + i} cx={xTo(p.x)} cy={yTo(p.y)} r={3} fill="currentColor" opacity={0.85} />
-        ))}
-      </svg>
-
-      <div className="mt-2 text-xs text-white/50">
-        Latest:{" "}
-        <span className="text-white/80">
-          {points[points.length - 1].y.toLocaleString()}
-        </span>
-      </div>
-    </div>
-  );
-}
-
 /* ------------------------------ Main Page ------------------------------ */
 
 export default function ArtworkDetail() {
@@ -981,7 +910,6 @@ export default function ArtworkDetail() {
 
   // tabs
   const [tab, setTab] = useState<"details" | "orders" | "activity">("details");
-  const [activityView, setActivityView] = useState<"bids" | "price">("bids");
 
   // UI modals
   const [walletOpen, setWalletOpen] = useState(false);
@@ -1008,12 +936,13 @@ export default function ArtworkDetail() {
 
   const winnerProfileRef = useRef<{ id: string; display_name: string | null; username: string | null } | null>(null);
 
-  // ✅ internal refs
+  // ✅ internal refs to avoid duplicate popups / finalize spam
   const shownForListingRef = useRef<string | null>(null);
   const finalizeStateRef = useRef<{ listingId: string; at: number } | null>(null);
   const finalizeInFlightRef = useRef<string | null>(null);
+
+  // ✅ internal ref to prevent auto-pay retrigger loop
   const autoPayRef = useRef<string | null>(null);
-  const refreshInFlight = useRef(false);
 
   useEffect(() => {
     (async () => {
@@ -1093,6 +1022,7 @@ export default function ArtworkDetail() {
     const endedByTime = Date.now() >= new Date(endAt).getTime();
     if (!endedByTime) return;
 
+    // throttle attempts
     const last = finalizeStateRef.current;
     if (last?.listingId === listingId && Date.now() - last.at < 8000) return;
     if (finalizeInFlightRef.current === listingId) return;
@@ -1142,10 +1072,7 @@ export default function ArtworkDetail() {
 
       let profMap = new Map<string, Profile>();
       if (bidderIds.length > 0) {
-        const { data: profs } = await supabase
-          .from("profiles")
-          .select("id,username,display_name,avatar_url")
-          .in("id", bidderIds);
+        const { data: profs } = await supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", bidderIds);
         (profs ?? []).forEach((p: any) => profMap.set(p.id, p as Profile));
       }
 
@@ -1163,10 +1090,7 @@ export default function ArtworkDetail() {
   }
 
   async function loadOwners(artworkId: string) {
-    const { data } = await supabase
-      .from("ownerships")
-      .select("owner_id, quantity, updated_at")
-      .eq("artwork_id", artworkId);
+    const { data } = await supabase.from("ownerships").select("owner_id, quantity, updated_at").eq("artwork_id", artworkId);
     const rows = (data ?? []) as { owner_id: string; quantity: number; updated_at: string }[];
 
     const ids = Array.from(new Set(rows.map((r) => r.owner_id))).filter(Boolean);
@@ -1175,10 +1099,7 @@ export default function ArtworkDetail() {
       return;
     }
 
-    const { data: profs } = await supabase
-      .from("profiles")
-      .select("id,username,display_name,avatar_url")
-      .in("id", ids);
+    const { data: profs } = await supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", ids);
 
     const map = new Map<string, Profile>();
     (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
@@ -1191,25 +1112,16 @@ export default function ArtworkDetail() {
   }
 
   async function loadSales(artworkId: string) {
-    const { data } = await supabase
-      .from("sales")
-      .select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash")
-      .eq("artwork_id", artworkId)
-      .order("sold_at", {
-        ascending: false,
-      });
+    const { data } = await supabase.from("sales").select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash").eq("artwork_id", artworkId).order("sold_at", {
+      ascending: false,
+    });
 
     const rows = (data ?? []) as SaleRow[];
-    const ids = Array.from(
-      new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))
-    ) as string[];
+    const ids = Array.from(new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))) as string[];
 
     let map = new Map<string, Profile>();
     if (ids.length > 0) {
-      const { data: profs } = await supabase
-        .from("profiles")
-        .select("id,username,display_name,avatar_url")
-        .in("id", ids);
+      const { data: profs } = await supabase.from("profiles").select("id,username,display_name,avatar_url").in("id", ids);
       (profs ?? []).forEach((p: any) => map.set(p.id, p as Profile));
     }
 
@@ -1282,7 +1194,7 @@ export default function ArtworkDetail() {
     await loadBidHistory(listing.id);
   }
 
-  /* ------------------------------ Load page (initial) ------------------------------ */
+  /* ------------------------------ Load page ------------------------------ */
 
   useEffect(() => {
     let alive = true;
@@ -1296,9 +1208,7 @@ export default function ArtworkDetail() {
 
         const { data, error } = await supabase
           .from("artworks")
-          .select(
-            "id,title,description,image_url,author_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
-          )
+          .select("id,title,description,image_url,author_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id")
           .eq("id", id)
           .maybeSingle();
 
@@ -1318,24 +1228,12 @@ export default function ArtworkDetail() {
         const artworkId = artwork.id;
 
         const [c, o, l, af] = await Promise.all([
-          supabase
-            .from("profiles")
-            .select("id,username,display_name,avatar_url")
-            .eq("id", artwork.author_id)
-            .maybeSingle(),
+          supabase.from("profiles").select("id,username,display_name,avatar_url").eq("id", artwork.author_id).maybeSingle(),
           artwork.owner_id
-            ? supabase
-                .from("profiles")
-                .select("id,username,display_name,avatar_url")
-                .eq("id", artwork.owner_id as string)
-                .maybeSingle()
+            ? supabase.from("profiles").select("id,username,display_name,avatar_url").eq("id", artwork.owner_id as string).maybeSingle()
             : Promise.resolve({ data: null, error: null } as any),
           fetchListingForPage(artworkId),
-          supabase
-            .from("artwork_files")
-            .select("id,url,kind,position")
-            .eq("artwork_id", artworkId)
-            .order("position", { ascending: true }),
+          supabase.from("artwork_files").select("id,url,kind,position").eq("artwork_id", artworkId).order("position", { ascending: true }),
         ]);
 
         if (!alive) return;
@@ -1345,12 +1243,7 @@ export default function ArtworkDetail() {
         setActiveListing(l as any);
         setFiles(((af.data as any[]) ?? []).filter((f) => !!f?.url));
 
-        await Promise.all([
-          loadOwners(artworkId),
-          loadSales(artworkId),
-          loadTopOfferSafe(artworkId),
-          loadPriceHistory(artworkId),
-        ]);
+        await Promise.all([loadOwners(artworkId), loadSales(artworkId), loadTopOfferSafe(artworkId), loadPriceHistory(artworkId)]);
 
         if (l && String((l as any).type) === "auction") {
           await refreshAuctionBits(l as any);
@@ -1366,97 +1259,6 @@ export default function ArtworkDetail() {
     return () => {
       alive = false;
     };
-  }, [id]);
-
-  /* ------------------------------ Global 1s refresher ------------------------------ */
-
-  async function refreshAll() {
-    if (!id) return;
-    if (refreshInFlight.current) return;
-    refreshInFlight.current = true;
-
-    try {
-      // 1) lightweight artwork + owner/creator refresh
-      const { data: artData, error: artErr } = await supabase
-        .from("artworks")
-        .select(
-          "id,title,description,image_url,author_id,owner_id,created_at,ipfs_image_cid,ipfs_metadata_cid,token_uri,type,physical_status,collection_id"
-        )
-        .eq("id", id)
-        .maybeSingle();
-
-      if (!artErr && artData) {
-        const artwork = artData as Artwork;
-        setArt(artwork);
-        if (!mainUrl) setMainUrl(artwork.image_url || null);
-
-        // creator
-        if (!creator || creator.id !== artwork.author_id) {
-          const { data: c } = await supabase
-            .from("profiles")
-            .select("id,username,display_name,avatar_url")
-            .eq("id", artwork.author_id)
-            .maybeSingle();
-          setCreator((c as any) ?? null);
-        }
-
-        // owner
-        if (!owner || owner.id !== artwork.owner_id) {
-          if (artwork.owner_id) {
-            const { data: o } = await supabase
-              .from("profiles")
-              .select("id,username,display_name,avatar_url")
-              .eq("id", artwork.owner_id)
-              .maybeSingle();
-            setOwner((o as any) ?? null);
-          }
-        }
-
-        // 2) listing refresh
-        if (activeListing?.id) {
-          const l = await fetchListingById(activeListing.id);
-          if (l) {
-            setActiveListing(l as any);
-            if (String((l as any).type) === "auction") {
-              await refreshAuctionBits(l as any);
-              await finalizeAuctionOnce(l as any);
-            }
-          }
-        } else {
-          const l2 = await fetchListingForPage(artwork.id);
-          setActiveListing(l2 as any);
-          if (l2 && String((l2 as any).type) === "auction") {
-            await refreshAuctionBits(l2 as any);
-            await finalizeAuctionOnce(l2 as any);
-          }
-        }
-
-        // 3) other dynamic data
-        await Promise.all([
-          loadOwners(artwork.id),
-          loadSales(artwork.id),
-          loadTopOfferSafe(artwork.id),
-          loadPriceHistory(artwork.id),
-        ]);
-      }
-    } catch {
-      // swallow – refresh is best-effort
-    } finally {
-      refreshInFlight.current = false;
-    }
-  }
-
-  useEffect(() => {
-    if (!id) return;
-    void refreshAll();
-
-    const idInterval = window.setInterval(() => {
-      if (document.hidden) return;
-      void refreshAll();
-    }, 1000);
-
-    return () => window.clearInterval(idInterval);
-    // only depend on id; internals read latest state via closures
   }, [id]);
 
   /* ------------------------------ Derived state ------------------------------ */
@@ -1525,8 +1327,6 @@ export default function ArtworkDetail() {
     [art?.image_url, files]
   );
 
-  const currentOwnerId = art?.owner_id ?? null;
-
   /* ------------------------------ Realtime: bids ------------------------------ */
 
   useEffect(() => {
@@ -1539,6 +1339,7 @@ export default function ArtworkDetail() {
         return better ? b : cur;
       });
 
+      // lightweight refresh for UI
       setBidHistory((cur) => {
         const exists = cur.some((x) => x.id === (b as any).id);
         if (exists) return cur;
@@ -1601,6 +1402,36 @@ export default function ArtworkDetail() {
     };
   }, [activeListing?.id]);
 
+  /* ------------------------------ Poll fallback + finalize ------------------------------ */
+
+  useEffect(() => {
+    if (!activeListing || !isAuction) return;
+
+    let alive = true;
+    const t = setInterval(async () => {
+      try {
+        const tb = await fetchTopBid(activeListing.id);
+        if (!alive) return;
+        setTopBid(tb);
+      } catch {}
+
+      try {
+        if (!alive) return;
+        await loadBidHistory(activeListing.id);
+      } catch {}
+
+      try {
+        if (!alive) return;
+        await finalizeAuctionOnce(activeListing as any);
+      } catch {}
+    }, 6000);
+
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [activeListing?.id, isAuction]);
+
   /* ------------------------------ Auto pay trigger (?pay=1...) ------------------------------ */
 
   useEffect(() => {
@@ -1621,6 +1452,7 @@ export default function ArtworkDetail() {
     if (autoPayRef.current === key) return;
     autoPayRef.current = key;
 
+    // clear query params so refresh doesn’t loop
     try {
       nav(`/art/${id}`, { replace: true });
     } catch {}
@@ -1693,9 +1525,7 @@ export default function ArtworkDetail() {
           seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
           buyer_id: viewerId,
 
-          success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
-            activeListing.id
-          )}&artwork_id=${encodeURIComponent(
+          success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(activeListing.id)}&artwork_id=${encodeURIComponent(
             art.id
           )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(`/art/${art.id}`)}`,
           cancel_url: location.href,
@@ -1734,27 +1564,18 @@ export default function ArtworkDetail() {
         if (chainId !== SEPOLIA_CHAIN_ID_HEX) throw new Error("Please switch MetaMask to Sepolia.");
       }
 
-      const priceEth = Number((activeListing as any).fixed_price || 0);
+      const priceEth = Number(activeListing.fixed_price || 0);
       if (!isFinite(priceEth) || priceEth <= 0) throw new Error("Invalid price for listing.");
 
       const to = (activeListing as any).seller_wallet || FALLBACK_PAYTO || "";
       if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
 
       const value = toHex(parseEther(priceEth));
-      const txHash: string = await ethereum.request({
-        method: "eth_sendTransaction",
-        params: [{ from, to, value }],
-      });
+      const txHash: string = await ethereum.request({ method: "eth_sendTransaction", params: [{ from, to, value }] });
 
       try {
         await supabase.functions.invoke("record-eth-purchase", {
-          body: {
-            listing_id: activeListing.id,
-            tx_hash: txHash,
-            buyer_wallet: from,
-            amount_eth: priceEth,
-            network: "sepolia",
-          },
+          body: { listing_id: activeListing.id, tx_hash: txHash, buyer_wallet: from, amount_eth: priceEth, network: "sepolia" },
         });
       } catch (e) {
         console.warn("record-eth-purchase failed:", e);
@@ -1793,9 +1614,7 @@ export default function ArtworkDetail() {
     setMsg(null);
 
     try {
-      const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
-        activeListing.id
-      )}&artwork_id=${encodeURIComponent(
+      const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(activeListing.id)}&artwork_id=${encodeURIComponent(
         art.id
       )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(`/art/${art.id}`)}`;
       const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(activeListing.id)}`;
@@ -1875,10 +1694,7 @@ export default function ArtworkDetail() {
       if (!to) throw new Error("No receiving wallet configured (VITE_SEPOLIA_PAYTO).");
 
       const value = toHex(parseEther(amount));
-      const txHash: string = await ethereum.request({
-        method: "eth_sendTransaction",
-        params: [{ from, to, value }],
-      });
+      const txHash: string = await ethereum.request({ method: "eth_sendTransaction", params: [{ from, to, value }] });
 
       try {
         await supabase.functions.invoke("record-auction-eth-payment", {
@@ -1920,11 +1736,7 @@ export default function ArtworkDetail() {
           ? null
           : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
 
-      const dmMsg = buildWinnerCongratsMessage({
-        artworkTitle: art.title,
-        artworkId: art.id,
-        stripeUrl: stripeLink,
-      });
+      const dmMsg = buildWinnerCongratsMessage({ artworkTitle: art.title, artworkId: art.id, stripeUrl: stripeLink });
 
       await dmSendText(tid, dmMsg);
       await dmSendArtworkShare(tid, art.id, { title: art.title ?? "Untitled", image_url: art.image_url });
@@ -1976,6 +1788,7 @@ export default function ArtworkDetail() {
     );
   }
 
+  // ✅ only non-owners can request license
   const canRequestLicense = !!viewerId && viewerId !== art.author_id && viewerId !== art.owner_id;
 
   return (
@@ -2025,10 +1838,7 @@ export default function ArtworkDetail() {
                 <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
                   <span className="text-white/80">
                     {creator ? (
-                      <Link
-                        to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`}
-                        className="underline"
-                      >
+                      <Link to={creator.username ? `/u/${creator.username}` : `/u/${creator.id}`} className="underline">
                         {creator.display_name || creator.username || "Creator"}
                       </Link>
                     ) : (
@@ -2039,10 +1849,7 @@ export default function ArtworkDetail() {
                   <span className="text-white/80">
                     Owned by{" "}
                     {owner ? (
-                      <Link
-                        to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`}
-                        className="underline"
-                      >
+                      <Link to={owner.username ? `/u/${owner.username}` : `/u/${owner.id}`} className="underline">
                         {owner.display_name || owner.username || "Collector"}
                       </Link>
                     ) : (
@@ -2054,11 +1861,7 @@ export default function ArtworkDetail() {
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Pill>ERC721</Pill>
                   <Pill>ETHEREUM</Pill>
-                  {art.type === "physical" ? (
-                    <PhysicalBadge status={art.physical_status || "with_creator"} />
-                  ) : (
-                    <Pill>TOKEN</Pill>
-                  )}
+                  {art.type === "physical" ? <PhysicalBadge status={art.physical_status || "with_creator"} /> : <Pill>TOKEN</Pill>}
 
                   {isAuction ? (
                     auctionPaid ? (
@@ -2119,10 +1922,7 @@ export default function ArtworkDetail() {
                   ⧉
                 </button>
 
-                <button
-                  className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10"
-                  title="Favorite"
-                >
+                <button className="rounded-lg border border-white/10 bg-white/5 px-2.5 py-1.5 text-sm hover:bg-white/10" title="Favorite">
                   <HeartIcon />
                 </button>
               </div>
@@ -2132,25 +1932,14 @@ export default function ArtworkDetail() {
               <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
                 <StatBox
                   label="Top offer"
-                  value={
-                    displayedTopOffer
-                      ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency)
-                      : "—"
-                  }
+                  value={displayedTopOffer ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency) : "—"}
                 />
                 <StatBox
                   label="Original price"
-                  value={
-                    sales.length
-                      ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency)
-                      : "—"
-                  }
+                  value={sales.length ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency) : "—"}
                 />
                 <StatBox label="Rarity" value={"—"} />
-                <StatBox
-                  label="Last sale"
-                  value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"}
-                />
+                <StatBox label="Last sale" value={sales[0] ? fmtCurrency(sales[0].price, sales[0].currency) : "—"} />
               </div>
             </Card>
 
@@ -2180,12 +1969,7 @@ export default function ArtworkDetail() {
 
                         {(activeListing as any).reserve_price != null ? (
                           <div className="text-[11px] text-white/60 mt-1">
-                            Reserve:{" "}
-                            {fmtCurrency(
-                              (activeListing as any).reserve_price,
-                              activeListing.sale_currency
-                            )}{" "}
-                            •{" "}
+                            Reserve: {fmtCurrency((activeListing as any).reserve_price, activeListing.sale_currency)} •{" "}
                             {!topBid ? (
                               <span className="text-amber-300">not met</span>
                             ) : reserveMetNow ? (
@@ -2196,20 +1980,13 @@ export default function ArtworkDetail() {
                           </div>
                         ) : null}
 
-                        {auctionClosed && !auctionPaid ? (
-                          <div className="mt-2 text-xs text-amber-300">Auction has ended.</div>
-                        ) : null}
-                        {auctionPaid ? (
-                          <div className="mt-2 text-xs text-emerald-300">Payment received.</div>
-                        ) : null}
+                        {auctionClosed && !auctionPaid ? <div className="mt-2 text-xs text-amber-300">Auction has ended.</div> : null}
+                        {auctionPaid ? <div className="mt-2 text-xs text-emerald-300">Payment received.</div> : null}
                       </div>
                     ) : (
                       <div className="space-y-1">
                         <div className="text-3xl font-semibold">
-                          {fmtCurrency(
-                            (activeListing as any).fixed_price ?? null,
-                            activeListing.sale_currency
-                          )}
+                          {fmtCurrency(activeListing.fixed_price ?? null, activeListing.sale_currency)}
                         </div>
                       </div>
                     )}
@@ -2240,23 +2017,13 @@ export default function ArtworkDetail() {
                             onChange={(e) => setBidInput(e.target.value)}
                             disabled={!canBid || bidBusy}
                           />
-                          <button
-                            className="btn flex-1"
-                            onClick={onPlaceBid}
-                            disabled={!canBid || bidBusy}
-                          >
+                          <button className="btn flex-1" onClick={onPlaceBid} disabled={!canBid || bidBusy}>
                             {bidBusy ? "Bidding…" : "Place bid"}
                           </button>
                         </>
                       ) : (
                         <div className="text-sm text-white/70">
-                          {auctionPaid
-                            ? "Auction completed."
-                            : auctionClosed
-                            ? "Auction ended."
-                            : isSeller
-                            ? "Sellers can’t bid on their own auction."
-                            : "Sign in to bid."}
+                          {auctionPaid ? "Auction completed." : auctionClosed ? "Auction ended." : isSeller ? "Sellers can’t bid on their own auction." : "Sign in to bid."}
                         </div>
                       )
                     ) : (
@@ -2266,9 +2033,7 @@ export default function ArtworkDetail() {
                             Buy now
                           </button>
                         )}
-                        <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">
-                          Make offer
-                        </button>
+                        <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">Make offer</button>
                       </>
                     )}
                   </div>
@@ -2276,24 +2041,16 @@ export default function ArtworkDetail() {
                   {isAuction && auctionClosed ? (
                     <div className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] p-3">
                       {!reserveMetNow ? (
-                        <div className="text-sm text-white/70">
-                          Reserve not met — no winner. Seller can relist.
-                        </div>
+                        <div className="text-sm text-white/70">Reserve not met — no winner. Seller can relist.</div>
                       ) : auctionPaid ? (
-                        <div className="text-sm text-white/80">
-                          ✅ Winner has paid. Proceed with handover / shipping.
-                        </div>
+                        <div className="text-sm text-white/80">✅ Winner has paid. Proceed with handover / shipping.</div>
                       ) : (
                         <div className="flex items-center justify-between gap-3 flex-wrap">
                           <div className="text-sm text-white/80">
                             {isWinner ? (
-                              <span>
-                                You won the auction. Choose a payment method to secure the artwork.
-                              </span>
+                              <span>You won the auction. Choose a payment method to secure the artwork.</span>
                             ) : isSeller ? (
-                              <span>
-                                Awaiting winner payment. You can contact the winner if needed.
-                              </span>
+                              <span>Awaiting winner payment. You can contact the winner if needed.</span>
                             ) : (
                               <span>Auction ended. Winner is completing payment.</span>
                             )}
@@ -2302,28 +2059,17 @@ export default function ArtworkDetail() {
                           <div className="flex gap-2 flex-wrap">
                             {isWinner ? (
                               <>
-                                <button
-                                  className="btn"
-                                  onClick={payForAuctionStripe}
-                                  disabled={payBusy || ccy === "ETH"}
-                                >
+                                <button className="btn" onClick={payForAuctionStripe} disabled={payBusy || ccy === "ETH"}>
                                   {payBusy ? "Preparing…" : "Stripe"}
                                 </button>
-                                <button
-                                  className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                                  onClick={payForAuctionMetaMask}
-                                  disabled={payBusy || ccy !== "ETH"}
-                                >
+                                <button className="btn bg-white/0 border border-white/20 hover:bg-white/10" onClick={payForAuctionMetaMask} disabled={payBusy || ccy !== "ETH"}>
                                   {payBusy ? "Preparing…" : "MetaMask"}
                                 </button>
                               </>
                             ) : null}
 
                             {isSeller ? (
-                              <button
-                                className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                                onClick={contactWinner}
-                              >
+                              <button className="btn bg-white/0 border border-white/20 hover:bg-white/10" onClick={contactWinner}>
                                 Contact winner
                               </button>
                             ) : null}
@@ -2379,9 +2125,7 @@ export default function ArtworkDetail() {
                   key={t}
                   onClick={() => setTab(t)}
                   className={`px-3 py-1.5 rounded-lg text-sm transition ${
-                    tab === t
-                      ? "bg-white text-black font-medium"
-                      : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
+                    tab === t ? "bg-white text-black font-medium" : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
                   }`}
                 >
                   {t === "details" ? "Details" : t === "orders" ? "Orders" : "Activity"}
@@ -2392,9 +2136,7 @@ export default function ArtworkDetail() {
             {tab === "details" ? (
               <div className="space-y-4">
                 <Card title="About">
-                  <div className="text-sm text-white/80 whitespace-pre-wrap">
-                    {art.description || "—"}
-                  </div>
+                  <div className="text-sm text-white/80 whitespace-pre-wrap">{art.description || "—"}</div>
                   <div className="mt-3 text-xs text-white/60">
                     Minted: {new Date(art.created_at).toLocaleString()} • Token URI:{" "}
                     <span className="text-white/70">{art.token_uri ? "set" : "—"}</span>
@@ -2411,9 +2153,7 @@ export default function ArtworkDetail() {
                   title="Owners"
                   right={
                     <span className="text-[11px] text-white/50">
-                      {owners.length
-                        ? `${owners.length} holder${owners.length > 1 ? "s" : ""}`
-                        : "—"}
+                      {owners.length ? `${owners.length} holder${owners.length > 1 ? "s" : ""}` : "—"}
                     </span>
                   }
                 >
@@ -2422,35 +2162,17 @@ export default function ArtworkDetail() {
                       <div className="p-3 text-sm text-white/60">No ownership records.</div>
                     ) : (
                       owners.map((o) => {
-                        const nm =
-                          o.profile.display_name ||
-                          o.profile.username ||
-                          o.profile.id.slice(0, 6);
-                        const isCurrent =
-                          !!currentOwnerId && o.profile.id === currentOwnerId;
-
+                        const nm = o.profile.display_name || o.profile.username || o.profile.id.slice(0, 6);
                         return (
-                          <div
-                            key={o.profile.id}
-                            className="p-3 flex items-center justify-between gap-3"
-                          >
+                          <div key={o.profile.id} className="p-3 flex items-center justify-between gap-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <Avatar url={o.profile.avatar_url} name={nm} size={34} />
                               <div className="min-w-0">
                                 <div className="text-sm text-white/90 truncate">{nm}</div>
-                                <div className="text-[11px] text-white/50">
-                                  Updated: {new Date(o.updated_at).toLocaleString()}
-                                </div>
+                                <div className="text-[11px] text-white/50">Updated: {new Date(o.updated_at).toLocaleString()}</div>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              {isCurrent && (
-                                <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-300">
-                                  CURRENT
-                                </span>
-                              )}
-                              <div className="text-sm font-semibold">x{o.quantity}</div>
-                            </div>
+                            <div className="text-sm font-semibold">x{o.quantity}</div>
                           </div>
                         );
                       })
@@ -2461,10 +2183,7 @@ export default function ArtworkDetail() {
                 <Card
                   title="Sales"
                   right={
-                    <button
-                      className="text-xs underline text-white/70 hover:text-white"
-                      onClick={() => loadSales(art.id)}
-                    >
+                    <button className="text-xs underline text-white/70 hover:text-white" onClick={() => loadSales(art.id)}>
                       Refresh
                     </button>
                   }
@@ -2474,33 +2193,18 @@ export default function ArtworkDetail() {
                       <div className="p-3 text-sm text-white/60">No sales yet.</div>
                     ) : (
                       sales.map((s) => (
-                        <div
-                          key={s.id}
-                          className="p-3 flex items-center justify-between gap-3"
-                        >
+                        <div key={s.id} className="p-3 flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-sm text-white/90">
                               {fmtCurrency(s.price, s.currency)} •{" "}
-                              <span className="text-white/60">
-                                {new Date(s.sold_at).toLocaleString()}
-                              </span>
+                              <span className="text-white/60">{new Date(s.sold_at).toLocaleString()}</span>
                             </div>
                             <div className="text-[11px] text-white/55 truncate">
-                              Buyer:{" "}
-                              {s.buyer?.display_name ||
-                                s.buyer?.username ||
-                                s.buyer_id?.slice(0, 6) ||
-                                "—"}{" "}
-                              • Seller:{" "}
-                              {s.seller?.display_name ||
-                                s.seller?.username ||
-                                s.seller_id?.slice(0, 6) ||
-                                "—"}
+                              Buyer: {s.buyer?.display_name || s.buyer?.username || s.buyer_id?.slice(0, 6) || "—"} • Seller:{" "}
+                              {s.seller?.display_name || s.seller?.username || s.seller_id?.slice(0, 6) || "—"}
                             </div>
                           </div>
-                          <div className="text-[11px] text-white/60">
-                            {s.tx_hash ? "On-chain" : "Stripe"}
-                          </div>
+                          <div className="text-[11px] text-white/60">{s.tx_hash ? "On-chain" : "Stripe"}</div>
                         </div>
                       ))
                     )}
@@ -2510,11 +2214,7 @@ export default function ArtworkDetail() {
                 <Card
                   title="Price history"
                   right={
-                    <button
-                      className="text-xs underline text-white/70 hover:text-white"
-                      onClick={() => loadPriceHistory(art.id)}
-                      disabled={priceHistoryBusy}
-                    >
+                    <button className="text-xs underline text-white/70 hover:text-white" onClick={() => loadPriceHistory(art.id)} disabled={priceHistoryBusy}>
                       {priceHistoryBusy ? "Loading…" : "Refresh"}
                     </button>
                   }
@@ -2524,32 +2224,17 @@ export default function ArtworkDetail() {
                       <div className="p-3 text-sm text-white/60">No price history yet.</div>
                     ) : (
                       priceHistory.slice(0, 30).map((r, idx) => (
-                        <div
-                          key={`${r.ts}-${idx}`}
-                          className="p-3 flex items-center justify-between gap-3"
-                        >
+                        <div key={`${r.ts}-${idx}`} className="p-3 flex items-center justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-sm text-white/90">
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[11px] ${
-                                  r.kind === "sale"
-                                    ? "bg-emerald-400 text-black"
-                                    : "bg-white/10 text-white"
-                                }`}
-                              >
+                              <span className={`px-2 py-0.5 rounded-full text-[11px] ${r.kind === "sale" ? "bg-emerald-400 text-black" : "bg-white/10 text-white"}`}>
                                 {r.kind.toUpperCase()}
                               </span>{" "}
-                              <span className="ml-2 font-semibold">
-                                {fmtCurrency(r.amount, r.currency)}
-                              </span>
+                              <span className="ml-2 font-semibold">{fmtCurrency(r.amount, r.currency)}</span>
                             </div>
-                            <div className="text-[11px] text-white/55">
-                              {new Date(r.ts).toLocaleString()}
-                            </div>
+                            <div className="text-[11px] text-white/55">{new Date(r.ts).toLocaleString()}</div>
                           </div>
-                          <div className="text-[11px] text-white/50 truncate">
-                            {r.actor_id ? r.actor_id.slice(0, 6) : "—"}
-                          </div>
+                          <div className="text-[11px] text-white/50 truncate">{r.actor_id ? r.actor_id.slice(0, 6) : "—"}</div>
                         </div>
                       ))
                     )}
@@ -2561,129 +2246,44 @@ export default function ArtworkDetail() {
             {tab === "activity" ? (
               <div className="space-y-4">
                 <Card
-                  title={
-                    <div className="flex items-center gap-2">
-                      <span>Activity</span>
-                      <span className="text-[11px] text-white/50">
-                        {activityView === "bids" ? "Bid history" : "Price market"}
-                      </span>
-                    </div>
-                  }
+                  title="Bid history"
                   right={
-                    <div className="flex items-center gap-2">
-                      <button
-                        className={`px-3 py-1.5 rounded-lg text-xs ${
-                          activityView === "bids"
-                            ? "bg-white text-black"
-                            : "bg-white/5 text-white/80"
-                        }`}
-                        onClick={() => setActivityView("bids")}
-                      >
-                        Bids
-                      </button>
-                      <button
-                        className={`px-3 py-1.5 rounded-lg text-xs ${
-                          activityView === "price"
-                            ? "bg-white text-black"
-                            : "bg-white/5 text-white/80"
-                        }`}
-                        onClick={() => setActivityView("price")}
-                      >
-                        Price market
-                      </button>
-                    </div>
+                    <button
+                      className="text-xs underline text-white/70 hover:text-white disabled:opacity-50"
+                      disabled={bidHistoryBusy || !activeListing?.id || !isAuction}
+                      onClick={() => activeListing?.id && loadBidHistory(activeListing.id)}
+                    >
+                      {bidHistoryBusy ? "Refreshing…" : "Refresh"}
+                    </button>
                   }
                 >
-                  {activityView === "bids" ? (
-                    <>
-                      <div className="rounded-xl border border-white/10 divide-y divide-white/10 overflow-hidden">
-                        {!isAuction ? (
-                          <div className="p-3 text-sm text-white/60">
-                            Not an auction listing.
+                  <div className="rounded-xl border border-white/10 divide-y divide-white/10 overflow-hidden">
+                    {!isAuction ? (
+                      <div className="p-3 text-sm text-white/60">Not an auction listing.</div>
+                    ) : bidHistory.length === 0 ? (
+                      <div className="p-3 text-sm text-white/60">No bids yet.</div>
+                    ) : (
+                      bidHistory.map((b) => {
+                        const nm = b.bidder?.display_name || b.bidder?.username || b.bidder_id.slice(0, 6);
+                        return (
+                          <div key={b.id} className="p-3 flex items-center justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="text-sm text-white/85 truncate">{nm}</div>
+                              <div className="text-xs text-white/55">{new Date(b.created_at).toLocaleString()}</div>
+                            </div>
+                            <div className="text-sm font-semibold">{fmtCurrency(b.amount, activeListing?.sale_currency)}</div>
                           </div>
-                        ) : bidHistory.length === 0 ? (
-                          <div className="p-3 text-sm text-white/60">No bids yet.</div>
-                        ) : (
-                          bidHistory.map((b) => {
-                            const nm =
-                              b.bidder?.display_name ||
-                              b.bidder?.username ||
-                              b.bidder_id.slice(0, 6);
-                            return (
-                              <div
-                                key={b.id}
-                                className="p-3 flex items-center justify-between gap-3"
-                              >
-                                <div className="min-w-0">
-                                  <div className="text-sm text-white/85 truncate">{nm}</div>
-                                  <div className="text-xs text-white/55">
-                                    {new Date(b.created_at).toLocaleString()}
-                                  </div>
-                                </div>
-                                <div className="text-sm font-semibold">
-                                  {fmtCurrency(b.amount, activeListing?.sale_currency)}
-                                </div>
-                              </div>
-                            );
-                          })
-                        )}
-                      </div>
+                        );
+                      })
+                    )}
+                  </div>
 
-                      {isAuction ? (
-                        <div className="mt-2 text-[11px] text-white/55">
-                          Min next bid: {minNextBid || "—"} {activeListing?.sale_currency}{" "}
-                          {viewerId && topBid?.bidder_id === viewerId
-                            ? " • You’re winning"
-                            : ""}
-                        </div>
-                      ) : null}
-                    </>
-                  ) : (
-                    <div className="space-y-4">
-                      <PriceHistoryChart rows={priceHistory} />
-                      <div className="rounded-xl border border-white/10 divide-y divide-white/10 overflow-hidden">
-                        {priceHistory.length === 0 ? (
-                          <div className="p-3 text-sm text-white/60">
-                            No price history yet.
-                          </div>
-                        ) : (
-                          priceHistory
-                            .slice()
-                            .reverse()
-                            .slice(0, 30)
-                            .map((r, idx) => (
-                              <div
-                                key={`${r.ts}-pm-${idx}`}
-                                className="p-3 flex items-center justify-between gap-3"
-                              >
-                                <div className="min-w-0">
-                                  <div className="text-sm text-white/90">
-                                    <span
-                                      className={`px-2 py-0.5 rounded-full text-[11px] ${
-                                        r.kind === "sale"
-                                          ? "bg-emerald-400 text-black"
-                                          : "bg-white/10 text-white"
-                                      }`}
-                                    >
-                                      {r.kind.toUpperCase()}
-                                    </span>{" "}
-                                    <span className="ml-2 font-semibold">
-                                      {fmtCurrency(r.amount, r.currency)}
-                                    </span>
-                                  </div>
-                                  <div className="text-[11px] text-white/55">
-                                    {new Date(r.ts).toLocaleString()}
-                                  </div>
-                                </div>
-                                <div className="text-[11px] text-white/50 truncate">
-                                  {r.actor_id ? r.actor_id.slice(0, 6) : "—"}
-                                </div>
-                              </div>
-                            ))
-                        )}
-                      </div>
+                  {isAuction ? (
+                    <div className="mt-2 text-[11px] text-white/55">
+                      Min next bid: {minNextBid || "—"} {activeListing?.sale_currency}{" "}
+                      {viewerId && topBid?.bidder_id === viewerId ? " • You’re winning" : ""}
                     </div>
-                  )}
+                  ) : null}
                 </Card>
 
                 <CommentsThread artworkId={art.id} viewerId={viewerId} />
@@ -2700,17 +2300,9 @@ export default function ArtworkDetail() {
       </div>
 
       {/* Modals */}
-      <WalletModal
-        open={walletOpen}
-        onClose={() => (payBusy ? null : setWalletOpen(false))}
-        onMetaMask={onBuyWithMetaMask}
-      />
+      <WalletModal open={walletOpen} onClose={() => (payBusy ? null : setWalletOpen(false))} onMetaMask={onBuyWithMetaMask} />
 
-      <ShareQRModal
-        open={showShareQR}
-        onClose={() => setShowShareQR(false)}
-        url={`${location.origin}/art/${id}`}
-      />
+      <ShareQRModal open={showShareQR} onClose={() => setShowShareQR(false)} url={`${location.origin}/art/${id}`} />
 
       <ShareToDMModal
         open={showShareDM}
@@ -2720,12 +2312,7 @@ export default function ArtworkDetail() {
       />
 
       {art && (
-        <RequestLicenseModal
-          open={showLicense}
-          onClose={() => setShowLicense(false)}
-          artworkId={art.id}
-          ownerId={art.author_id}
-        />
+        <RequestLicenseModal open={showLicense} onClose={() => setShowLicense(false)} artworkId={art.id} ownerId={art.author_id} />
       )}
 
       {isOwner && (
@@ -2736,11 +2323,7 @@ export default function ArtworkDetail() {
           onListingUpdated={async () => {
             const l = await fetchListingForPage(art.id);
             setActiveListing(l as any);
-            await Promise.all([
-              loadOwners(art.id),
-              loadSales(art.id),
-              loadPriceHistory(art.id),
-            ]);
+            await Promise.all([loadOwners(art.id), loadSales(art.id), loadPriceHistory(art.id)]);
             if (l && String((l as any).type) === "auction") await refreshAuctionBits(l as any);
           }}
           postAuctionMode={isAuction && auctionClosed}
@@ -2790,20 +2373,8 @@ function OwnerListPanel({ artworkId, onUpdated }: { artworkId: string; onUpdated
   return (
     <Card title="Fixed price">
       <div className="flex gap-2 items-center">
-        <input
-          className="input w-32"
-          placeholder="Price"
-          value={price}
-          onChange={(e) => setPrice(e.target.value)}
-          type="number"
-          step="0.00000001"
-          min="0"
-        />
-        <select
-          className="input w-28"
-          value={currency}
-          onChange={(e) => setCurrency(e.target.value)}
-        >
+        <input className="input w-32" placeholder="Price" value={price} onChange={(e) => setPrice(e.target.value)} type="number" step="0.00000001" min="0" />
+        <select className="input w-28" value={currency} onChange={(e) => setCurrency(e.target.value)}>
           <option value="ETH">ETH</option>
           <option value="USD">USD</option>
         </select>
@@ -2842,9 +2413,7 @@ function SellerConsole({
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div className="absolute right-0 top-0 h-full w-full sm:w-[520px] bg-neutral-950 border-l border-white/10 shadow-2xl p-4 overflow-y-auto">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">
-            {postAuctionMode ? "Auction tools" : "Seller tools"}
-          </h3>
+          <h3 className="text-lg font-semibold">{postAuctionMode ? "Auction tools" : "Seller tools"}</h3>
           <button className="text-sm text-white/70 hover:text-white" onClick={onClose}>
             Close
           </button>
@@ -2854,20 +2423,13 @@ function SellerConsole({
           <div className="mb-4 rounded-xl border border-white/10 bg-white/[0.03] p-3">
             {paymentPending ? (
               <div className="flex items-center justify-between gap-3 flex-wrap">
-                <div className="text-sm text-white/80">
-                  Awaiting winner payment. You can contact the winner.
-                </div>
-                <button
-                  className="btn bg-white/0 border border-white/20 hover:bg-white/10"
-                  onClick={onContactWinner}
-                >
+                <div className="text-sm text-white/80">Awaiting winner payment. You can contact the winner.</div>
+                <button className="btn bg-white/0 border border-white/20 hover:bg-white/10" onClick={onContactWinner}>
                   Contact winner
                 </button>
               </div>
             ) : (
-              <div className="text-sm text-white/70">
-                Auction ended. If reserve wasn’t met, you can relist or start a new auction.
-              </div>
+              <div className="text-sm text-white/70">Auction ended. If reserve wasn’t met, you can relist or start a new auction.</div>
             )}
           </div>
         ) : null}
@@ -2878,9 +2440,7 @@ function SellerConsole({
               key={t}
               onClick={() => setTab(t)}
               className={`px-3 py-1.5 rounded-lg text-sm transition ${
-                tab === t
-                  ? "bg-white text-black font-medium"
-                  : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
+                tab === t ? "bg-white text-black font-medium" : "bg-white/0 text-white/80 hover:bg-white/10 border border-white/10"
               }`}
             >
               {t === "price" ? "Price" : t === "auction" ? "Auction" : "Details"}
@@ -2890,9 +2450,7 @@ function SellerConsole({
 
         {tab === "price" && (
           <div className="space-y-3">
-            <div className="text-sm text-white/70">
-              Create or update a fixed-price listing.
-            </div>
+            <div className="text-sm text-white/70">Create or update a fixed-price listing.</div>
             <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
               <OwnerListPanel artworkId={artworkId} onUpdated={onListingUpdated} />
             </div>
@@ -2908,16 +2466,12 @@ function SellerConsole({
 
         {tab === "details" && (
           <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
-            <div className="text-sm text-white/70">
-              Update artwork metadata (title/description, tags, etc.).
-            </div>
+            <div className="text-sm text-white/70">Update artwork metadata (title/description, tags, etc.).</div>
             <div className="flex gap-2">
               <a href={`/art/${artworkId}/edit`} className="btn">
                 Go to edit page
               </a>
-              <span className="text-xs text-white/60 self-center">
-                (If you don’t have an edit route yet, we can add one.)
-              </span>
+              <span className="text-xs text-white/60 self-center">(If you don’t have an edit route yet, we can add one.)</span>
             </div>
           </div>
         )}
