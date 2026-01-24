@@ -338,7 +338,17 @@ function WalletModal({
 
 /* ------------------------------ Share QR ------------------------------ */
 
-function ShareQRModal({ open, onClose, url, title = "Share QR" }: { open: boolean; onClose: () => void; url: string; title?: string }) {
+function ShareQRModal({
+  open,
+  onClose,
+  url,
+  title = "Share QR",
+}: {
+  open: boolean;
+  onClose: () => void;
+  url: string;
+  title?: string;
+}) {
   const [img, setImg] = useState<string>("");
 
   useEffect(() => {
@@ -458,7 +468,11 @@ function ShareToDMModal({
 
         <div className="mb-3 rounded-xl border border-white/10 bg-white/[0.04] p-3 flex gap-3">
           {artwork.image_url ? (
-            <img src={artwork.image_url} className="h-14 w-14 rounded-lg object-cover border border-white/10" alt={artwork.title ?? "Artwork"} />
+            <img
+              src={artwork.image_url}
+              className="h-14 w-14 rounded-lg object-cover border border-white/10"
+              alt={artwork.title ?? "Artwork"}
+            />
           ) : (
             <div className="h-14 w-14 rounded-lg bg-white/5 border border-white/10" />
           )}
@@ -535,7 +549,9 @@ function AuctionEndedModal({
   if (!open) return null;
 
   const winnerName =
-    outcome?.winner?.display_name || outcome?.winner?.username || (outcome?.winner?.id ? outcome.winner.id.slice(0, 6) : null);
+    outcome?.winner?.display_name ||
+    outcome?.winner?.username ||
+    (outcome?.winner?.id ? outcome.winner.id.slice(0, 6) : null);
 
   const ccy = (outcome?.currency ?? "USD").toUpperCase();
   const canStripe = ccy !== "ETH";
@@ -585,7 +601,12 @@ function AuctionEndedModal({
         <div className="mt-4 space-y-2">
           {showPay ? (
             <>
-              <button className="btn w-full" onClick={onPayStripe} disabled={payBusy || !canStripe} title={!canStripe ? "Stripe is only for non-ETH auctions" : ""}>
+              <button
+                className="btn w-full"
+                onClick={onPayStripe}
+                disabled={payBusy || !canStripe}
+                title={!canStripe ? "Stripe is only for non-ETH auctions" : ""}
+              >
                 {payBusy ? "Preparing payment…" : "Pay with Stripe"}
               </button>
 
@@ -598,9 +619,7 @@ function AuctionEndedModal({
                 {payBusy ? "Preparing payment…" : "Pay with MetaMask"}
               </button>
 
-              {!canStripe && !canMeta ? (
-                <div className="text-xs text-amber-300">This auction currency is not supported for payment yet.</div>
-              ) : null}
+              {!canStripe && !canMeta ? <div className="text-xs text-amber-300">This auction currency is not supported for payment yet.</div> : null}
             </>
           ) : null}
 
@@ -619,13 +638,7 @@ function nameOf(c: Pick<CommentRow, "display_name" | "username" | "user_id">) {
   return c.display_name || c.username || (c.user_id ? c.user_id.slice(0, 6) : "—");
 }
 
-function CommentsThread({
-  artworkId,
-  viewerId,
-}: {
-  artworkId: string;
-  viewerId: string | null;
-}) {
+function CommentsThread({ artworkId, viewerId }: { artworkId: string; viewerId: string | null }) {
   const [rows, setRows] = useState<CommentRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -802,7 +815,9 @@ function CommentsThread({
                       >
                         Reply
                       </button>
-                      <span className="text-[11px] text-white/50">{replies.length ? `${replies.length} reply${replies.length > 1 ? "ies" : ""}` : ""}</span>
+                      <span className="text-[11px] text-white/50">
+                        {replies.length ? `${replies.length} reply${replies.length > 1 ? "ies" : ""}` : ""}
+                      </span>
                     </div>
 
                     {replyTo?.id === c.id ? (
@@ -869,7 +884,6 @@ function PriceMarketChart({
   const points = useMemo(() => {
     if (!rows?.length) return { currency: null as string | null, pts: [] as { t: number; v: number; kind: "bid" | "sale" }[] };
 
-    // pick currency
     const cur =
       (preferredCurrency ? String(preferredCurrency).toUpperCase() : null) ||
       (rows[0]?.currency ? String(rows[0].currency).toUpperCase() : null);
@@ -937,7 +951,6 @@ function PriceMarketChart({
 
       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-2 overflow-hidden">
         <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-[180px]">
-          {/* grid */}
           <path
             d={`M${PAD},${H / 2} L${W - PAD},${H / 2} M${PAD},${PAD} L${W - PAD},${PAD} M${PAD},${H - PAD} L${W - PAD},${H - PAD}`}
             stroke="rgba(255,255,255,0.08)"
@@ -1229,9 +1242,11 @@ export default function ArtworkDetail() {
   }
 
   async function loadSales(artworkId: string) {
-    const { data } = await supabase.from("sales").select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash").eq("artwork_id", artworkId).order("sold_at", {
-      ascending: false,
-    });
+    const { data } = await supabase
+      .from("sales")
+      .select("id,buyer_id,seller_id,price,currency,sold_at,tx_hash")
+      .eq("artwork_id", artworkId)
+      .order("sold_at", { ascending: false });
 
     const rows = (data ?? []) as SaleRow[];
     const ids = Array.from(new Set(rows.flatMap((r) => [r.buyer_id, r.seller_id]).filter(Boolean))) as string[];
@@ -1669,76 +1684,69 @@ export default function ArtworkDetail() {
   }
 
   /** ✅ Payment (fixed-price) */
-  /** ✅ Payment (fixed-price) */
-async function onBuy() {
-  if (!activeListing || !art) return;
-  if (!viewerId) {
-    setMsg("Please sign in to buy.");
-    return;
-  }
+  async function onBuy() {
+    if (!activeListing || !art) return;
+    if (!viewerId) {
+      setMsg("Please sign in to buy.");
+      return;
+    }
 
-  const currency = String(activeListing.sale_currency ?? "USD").toUpperCase();
+    const currency = String(activeListing.sale_currency ?? "USD").toUpperCase();
 
-  // ETH uses MetaMask modal
-  if (currency === "ETH") {
+    // ETH uses MetaMask modal
+    if (currency === "ETH") {
+      setMsg(null);
+      setWalletOpen(true);
+      return;
+    }
+
+    setPayBusy(true);
     setMsg(null);
-    setWalletOpen(true);
-    return;
+
+    try {
+      // ✅ IMPORTANT: normalize listing_type so the Edge Function won't choke
+      const listingType = "fixed"; // <- do NOT pass activeListing.type through
+
+      const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
+        activeListing.id
+      )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+        `/art/${art.id}`
+      )}`;
+
+      const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(activeListing.id)}`;
+
+      const { data, error } = await supabase.functions.invoke("create-checkout", {
+        body: {
+          listing_id: activeListing.id,
+          quantity: 1,
+          listing_type: listingType, // ✅ fixed
+          artwork_id: art.id,
+          seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
+          buyer_id: viewerId,
+          currency, // ✅ include currency like auction flow
+
+          // (Optional but helps some implementations)
+          fixed_amount:
+            typeof (activeListing as any)?.fixed_price === "number"
+              ? (activeListing as any).fixed_price
+              : activeListing.fixed_price != null
+              ? Number(activeListing.fixed_price)
+              : null,
+
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+        },
+      });
+
+      if (error) throw error;
+      if (!data?.url) throw new Error("Checkout URL not returned");
+      window.location.href = data.url;
+    } catch (e: any) {
+      setMsg(parseInvokeError(e));
+    } finally {
+      setPayBusy(false);
+    }
   }
-
-  setPayBusy(true);
-  setMsg(null);
-
-  try {
-    // ✅ IMPORTANT: normalize listing_type so the Edge Function won't choke
-    const listingType = "fixed"; // <- do NOT pass activeListing.type through
-
-    const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
-      activeListing.id
-    )}&artwork_id=${encodeURIComponent(
-      art.id
-    )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
-      `/art/${art.id}`
-    )}`;
-
-    const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(
-      activeListing.id
-    )}`;
-
-    const { data, error } = await supabase.functions.invoke("create-checkout", {
-      body: {
-        listing_id: activeListing.id,
-        quantity: 1,
-        listing_type: listingType, // ✅ fixed
-        artwork_id: art.id,
-        seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
-        buyer_id: viewerId,
-        currency, // ✅ include currency like auction flow
-
-        // (Optional but helps some implementations)
-        fixed_amount:
-          typeof (activeListing as any)?.fixed_price === "number"
-            ? (activeListing as any).fixed_price
-            : activeListing.fixed_price != null
-            ? Number(activeListing.fixed_price)
-            : null,
-
-        success_url: successUrl,
-        cancel_url: cancelUrl,
-      },
-    });
-
-    if (error) throw error;
-    if (!data?.url) throw new Error("Checkout URL not returned");
-    window.location.href = data.url;
-  } catch (e: any) {
-    setMsg(parseInvokeError(e));
-  } finally {
-    setPayBusy(false);
-  }
-}
-
-
 
   /** ✅ ETH payment (fixed-price) */
   async function onBuyWithMetaMask() {
@@ -1932,10 +1940,7 @@ async function onBuy() {
       const listingId = activeListing.id;
       const ccy2 = (activeListing.sale_currency ?? "USD").toUpperCase();
 
-      const stripeLink =
-        ccy2 === "ETH"
-          ? null
-          : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
+      const stripeLink = ccy2 === "ETH" ? null : `${base}/art/${art.id}?pay=1&method=stripe&listing=${encodeURIComponent(listingId)}`;
 
       const dmMsg = buildWinnerCongratsMessage({ artworkTitle: art.title, artworkId: art.id, stripeUrl: stripeLink });
 
@@ -1990,7 +1995,6 @@ async function onBuy() {
   }
 
   const canRequestLicense = !!viewerId && viewerId !== art.author_id && viewerId !== art.owner_id;
-
   const currentOwnerId = art.owner_id ?? null;
 
   return (
@@ -2132,10 +2136,7 @@ async function onBuy() {
 
             <Card>
               <div className="grid grid-cols-2 sm:grid-cols-4 divide-y sm:divide-y-0 sm:divide-x divide-white/10 rounded-xl bg-white/[0.03]">
-                <StatBox
-                  label="Top offer"
-                  value={displayedTopOffer ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency) : "—"}
-                />
+                <StatBox label="Top offer" value={displayedTopOffer ? fmtCurrency(displayedTopOffer.amount, displayedTopOffer.currency) : "—"} />
                 <StatBox
                   label="Original price"
                   value={sales.length ? fmtCurrency(sales[sales.length - 1].price, sales[sales.length - 1].currency) : "—"}
@@ -2231,8 +2232,8 @@ async function onBuy() {
                     ) : (
                       <>
                         {canBuy && (
-                          <button className="btn flex-1" onClick={onBuy}>
-                            Buy now
+                          <button className="btn flex-1" onClick={onBuy} disabled={payBusy}>
+                            {payBusy ? "Preparing…" : "Buy now"}
                           </button>
                         )}
                         <button className="btn bg-white/0 border border-white/20 hover:bg-white/10 flex-1">Make offer</button>
@@ -2264,7 +2265,11 @@ async function onBuy() {
                                 <button className="btn" onClick={payForAuctionStripe} disabled={payBusy || ccy === "ETH"}>
                                   {payBusy ? "Preparing…" : "Stripe"}
                                 </button>
-                                <button className="btn bg-white/0 border border-white/20 hover:bg-white/10" onClick={payForAuctionMetaMask} disabled={payBusy || ccy !== "ETH"}>
+                                <button
+                                  className="btn bg-white/0 border border-white/20 hover:bg-white/10"
+                                  onClick={payForAuctionMetaMask}
+                                  disabled={payBusy || ccy !== "ETH"}
+                                >
                                   {payBusy ? "Preparing…" : "MetaMask"}
                                 </button>
                               </>
@@ -2353,11 +2358,7 @@ async function onBuy() {
               <div className="space-y-4">
                 <Card
                   title="Owners"
-                  right={
-                    <span className="text-[11px] text-white/50">
-                      {owners.length ? `${owners.length} holder${owners.length > 1 ? "s" : ""}` : "—"}
-                    </span>
-                  }
+                  right={<span className="text-[11px] text-white/50">{owners.length ? `${owners.length} holder${owners.length > 1 ? "s" : ""}` : "—"}</span>}
                 >
                   <div className="rounded-xl border border-white/10 divide-y divide-white/10 overflow-hidden">
                     {owners.length === 0 ? (
@@ -2373,7 +2374,11 @@ async function onBuy() {
                               <div className="min-w-0">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <div className="text-sm text-white/90 truncate">{nm}</div>
-                                  {isCurrent ? <Pill tone="success" className="shrink-0">CURRENT</Pill> : null}
+                                  {isCurrent ? (
+                                    <Pill tone="success" className="shrink-0">
+                                      CURRENT
+                                    </Pill>
+                                  ) : null}
                                 </div>
                                 <div className="text-[11px] text-white/50">Updated: {new Date(o.updated_at).toLocaleString()}</div>
                               </div>
@@ -2384,9 +2389,7 @@ async function onBuy() {
                       })
                     )}
                   </div>
-                  <div className="mt-2 text-[11px] text-white/55">
-                    {currentOwnerId ? "Only one CURRENT holder (ERC721). Previous owners remain as history." : ""}
-                  </div>
+                  <div className="mt-2 text-[11px] text-white/55">{currentOwnerId ? "Only one CURRENT holder (ERC721). Previous owners remain as history." : ""}</div>
                 </Card>
 
                 <Card
@@ -2423,7 +2426,11 @@ async function onBuy() {
                 <Card
                   title="Price history"
                   right={
-                    <button className="text-xs underline text-white/70 hover:text-white" onClick={() => loadPriceHistory(art.id)} disabled={priceHistoryBusy}>
+                    <button
+                      className="text-xs underline text-white/70 hover:text-white"
+                      onClick={() => loadPriceHistory(art.id)}
+                      disabled={priceHistoryBusy}
+                    >
                       {priceHistoryBusy ? "Loading…" : "Refresh"}
                     </button>
                   }
@@ -2498,19 +2505,13 @@ async function onBuy() {
                 <Card
                   title="Price market"
                   right={
-                    <button
-                      className="text-xs underline text-white/70 hover:text-white"
-                      onClick={() => loadPriceHistory(art.id)}
-                      disabled={priceHistoryBusy}
-                    >
+                    <button className="text-xs underline text-white/70 hover:text-white" onClick={() => loadPriceHistory(art.id)} disabled={priceHistoryBusy}>
                       {priceHistoryBusy ? "Loading…" : "Refresh"}
                     </button>
                   }
                 >
                   <PriceMarketChart rows={priceHistory} preferredCurrency={activeListing?.sale_currency ?? sales?.[0]?.currency ?? null} />
-                  <div className="mt-2 text-[11px] text-white/55">
-                    This chart updates automatically (live refresh). Sales are green dots, bids are white.
-                  </div>
+                  <div className="mt-2 text-[11px] text-white/55">This chart updates automatically (live refresh). Sales are green dots, bids are white.</div>
                 </Card>
 
                 <CommentsThread artworkId={art.id} viewerId={viewerId} />
@@ -2538,9 +2539,7 @@ async function onBuy() {
         onSent={(threadId) => nav(`/messages?t=${encodeURIComponent(threadId)}`)}
       />
 
-      {art && (
-        <RequestLicenseModal open={showLicense} onClose={() => setShowLicense(false)} artworkId={art.id} ownerId={art.author_id} />
-      )}
+      {art && <RequestLicenseModal open={showLicense} onClose={() => setShowLicense(false)} artworkId={art.id} ownerId={art.author_id} />}
 
       {isOwner && (
         <SellerConsole
