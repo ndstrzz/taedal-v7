@@ -24,7 +24,7 @@ type DuplicateHit = {
   id: string;
   title: string | null;
   image_url: string | null;
-  creator_id: string | null; // ✅ FIX: match DB column (creator_id), not author_id
+  creator_id: string | null;
 };
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
@@ -51,7 +51,6 @@ type AiEval = {
   notes: string[];
   disclaimer: string;
 
-  // projection analytics
   projection_trend: ProjectionTrend;
   projected_change_pct_30d: number;
   projected_value_low_usd_30d: number;
@@ -309,6 +308,7 @@ function NewCollectionModal({
 
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
+
   const [userId, setUserId] = useState<string | null>(null);
 
   // pre-step
@@ -317,7 +317,7 @@ export default function CreateArtworkWizard() {
 
   // collections
   const [collections, setCollections] = useState<Collection[]>([]);
-  const [collectionId, setCollectionId] = useState<string | "">(""); // '' = no collection
+  const [collectionId, setCollectionId] = useState<string | "">("");
   const [collModalOpen, setCollModalOpen] = useState(false);
 
   // Step 1 media
@@ -383,7 +383,6 @@ export default function CreateArtworkWizard() {
   const showPinOverlay = useMinBusy(pinning, 5000);
   const showAiOverlay = useMinBusy(aiBusy, 5000);
 
-  // Use stable preview src everywhere
   const coverPreviewSrc = coverUrl ?? images[0]?.previewUrl ?? null;
 
   // draft save debounce
@@ -418,26 +417,34 @@ export default function CreateArtworkWizard() {
 
         localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
 
-        // persist files
         for (let i = 0; i < Math.min(images.length, MAX_IMAGES); i++) {
           await idbSet(`img:${i}`, images[i].current);
         }
-        // delete any trailing old images
         for (let i = images.length; i < MAX_IMAGES; i++) {
           await idbDel(`img:${i}`);
         }
-      } catch {
-        // ignore draft save errors
-      }
+      } catch {}
     }, 500);
   }
 
-  // auth
+  // ✅ FIX: keep auth state synced (prod can load session slightly later)
   useEffect(() => {
+    let alive = true;
+
     (async () => {
       const { data } = await supabase.auth.getSession();
+      if (!alive) return;
       setUserId(data.session?.user?.id ?? null);
     })();
+
+    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+      setUserId(session?.user?.id ?? null);
+    });
+
+    return () => {
+      alive = false;
+      sub.subscription.unsubscribe();
+    };
   }, []);
 
   // load my collections when user is known
@@ -473,7 +480,6 @@ export default function CreateArtworkWizard() {
           ...(d.values ?? {}),
         } as any);
 
-        // restore files
         const restored: LocalImage[] = [];
         for (let i = 0; i < MAX_IMAGES; i++) {
           const f = await idbGet<File>(`img:${i}`);
@@ -487,12 +493,8 @@ export default function CreateArtworkWizard() {
             hash: null,
           });
         }
-        if (restored.length) {
-          setImages(restored);
-        }
-      } catch {
-        // ignore
-      }
+        if (restored.length) setImages(restored);
+      } catch {}
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -521,7 +523,6 @@ export default function CreateArtworkWizard() {
     watch("is_nsfw"),
   ]);
 
-  // save draft on tab close
   useEffect(() => {
     const fn = () => scheduleSaveDraft();
     window.addEventListener("beforeunload", fn);
@@ -529,7 +530,6 @@ export default function CreateArtworkWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // cleanup URLs
   useEffect(() => {
     return () => {
       images.forEach((im) => {
@@ -538,7 +538,6 @@ export default function CreateArtworkWizard() {
     };
   }, [images]);
 
-  // internal duplicate check (exact hash match inside Taedal)
   async function checkImageDupes(idx: number, file: File) {
     setImages((arr) => {
       const next = [...arr];
@@ -551,7 +550,7 @@ export default function CreateArtworkWizard() {
       const hash = await sha256File(file);
       const { data, error } = await supabase
         .from("artworks")
-        .select("id,title,image_url,creator_id") // ✅ FIX: match DB column
+        .select("id,title,image_url,creator_id")
         .eq("image_sha256", hash)
         .limit(5);
 
@@ -639,16 +638,22 @@ export default function CreateArtworkWizard() {
     setAiErr(null);
   }
 
-  // upload cover for external reverse-image check (Step 1)
+  // ✅ FIX: use fresh uid (not state) for any upload/insert actions
+  async function getFreshUid(): Promise<string | null> {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
+  }
+
   async function ensureCoverUploadedForExternalCheck(): Promise<string | null> {
-    if (!userId || !images[0]) {
+    const uid = await getFreshUid(); // ✅ FIX
+    if (!uid || !images[0]) {
       setGlobalMsg("Please sign in and upload at least one image first.");
       return null;
     }
     if (coverUrl) return coverUrl;
 
     try {
-      const upload = await uploadToArtworksBucket(images[0].current, userId);
+      const upload = await uploadToArtworksBucket(images[0].current, uid);
       setCoverUrl(upload.publicUrl);
       return upload.publicUrl;
     } catch (e: any) {
@@ -724,10 +729,17 @@ export default function CreateArtworkWizard() {
     }
   }
 
-  // STEP 2 → 3
   const onSubmitDetails = handleSubmit(async (values) => {
-    if (!userId || images.length === 0) {
-      setGlobalMsg("Please sign in and upload at least one image.");
+    // ✅ FIX: always fetch fresh uid right before insert
+    const uid = await getFreshUid();
+    if (!uid) {
+      setGlobalMsg("Your session is not ready (auth uid is missing). Please refresh and sign in again.");
+      return;
+    }
+    setUserId(uid);
+
+    if (images.length === 0) {
+      setGlobalMsg("Please upload at least one image.");
       return;
     }
     if (!artType) {
@@ -745,13 +757,12 @@ export default function CreateArtworkWizard() {
     setGlobalMsg(null);
 
     try {
-      // upload cover
-      const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
+      const coverUpload = await uploadToArtworksBucket(images[0].current, uid);
       setCoverUrl(coverUpload.publicUrl);
 
       const payload: any = {
-        creator_id: userId, // ✅ FIX: DB requires creator_id NOT NULL
-        owner_id: userId,
+        creator_id: uid, // ✅ FIX: never null now
+        owner_id: uid,
 
         title: values.title,
         description: values.description || null,
@@ -796,9 +807,8 @@ export default function CreateArtworkWizard() {
 
       setArtworkId(row.id);
 
-      // upload additional images
       if (images.length > 1) {
-        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
+        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, uid)));
         const records = uploads.map((up, i) => ({
           artwork_id: row.id,
           url: up.publicUrl,
@@ -810,7 +820,6 @@ export default function CreateArtworkWizard() {
         } catch {}
       }
 
-      // go to AI step
       setStep(3);
       await runAiEvaluation(row.id);
     } catch (e: any) {
@@ -829,7 +838,6 @@ export default function CreateArtworkWizard() {
     );
   }
 
-  // STEP 0
   if (step === 0) {
     const hasDraft = !!localStorage.getItem(DRAFT_KEY);
 
@@ -912,7 +920,6 @@ export default function CreateArtworkWizard() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
-      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -943,7 +950,6 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
-            {/* Thumbnails */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
               {images.map((im, i) => (
                 <div
@@ -1025,7 +1031,6 @@ export default function CreateArtworkWizard() {
             </div>
           </div>
 
-          {/* Right: live preview + external check */}
           <div className="lg:col-span-5 space-y-3">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
@@ -1203,7 +1208,6 @@ export default function CreateArtworkWizard() {
             )}
           </div>
 
-          {/* Live preview */}
           <div className="lg:col-span-5">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
@@ -1380,7 +1384,6 @@ export default function CreateArtworkWizard() {
         </div>
       )}
 
-      {/* Modals / overlays */}
       <NewCollectionModal
         open={collModalOpen}
         onClose={() => setCollModalOpen(false)}
