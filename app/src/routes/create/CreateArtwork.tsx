@@ -17,14 +17,13 @@ import AiEvaluationCard from "../../components/AIEvaluationCard";
 
 /* ------------------------------------------------------------------------------------ */
 
-type Step = 0 | 1 | 2 | 3 | 4;
+type Step = 0 | 1 | 2 | 3 | 4; // step 3 = AI eval, step 4 = Preview & Mint
 type ArtworkType = "digital" | "physical";
 
 type DuplicateHit = {
   id: string;
   title: string | null;
   image_url: string | null;
-  author_id: string | null;
 };
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
@@ -51,6 +50,7 @@ type AiEval = {
   notes: string[];
   disclaimer: string;
 
+  // NEW projection analytics (from function)
   projection_trend: ProjectionTrend;
   projected_change_pct_30d: number;
   projected_value_low_usd_30d: number;
@@ -215,8 +215,17 @@ function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin
   return (
     <>
       <style>{`
-        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
-        .thicccboi { font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: 0.2px; }
+        @font-face {
+          font-family: 'THICCCBOI-BOLD';
+          src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype');
+          font-weight: bold;
+          font-style: normal;
+          font-display: swap;
+        }
+        .thicccboi {
+          font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+          letter-spacing: 0.2px;
+        }
       `}</style>
       <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
         <div className="relative w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
@@ -305,24 +314,100 @@ function NewCollectionModal({
 }
 
 /* ------------------------------------------------------------------------------------ */
+/* Robust insert helpers                                                                 */
+/* ------------------------------------------------------------------------------------ */
+
+function extractQuotedColumn(s: string | undefined | null) {
+  if (!s) return null;
+  const m = s.match(/column\s+"([^"]+)"/i);
+  return m?.[1] ?? null;
+}
+
+function extractUnknownColumn(s: string | undefined | null) {
+  if (!s) return null;
+  const m1 = s.match(/Could not find the '([^']+)' column/i);
+  if (m1?.[1]) return m1[1];
+  const m2 = s.match(/column "([^"]+)" of relation/i);
+  if (m2?.[1]) return m2[1];
+  const m3 = s.match(/column "([^"]+)" does not exist/i);
+  if (m3?.[1]) return m3[1];
+  return null;
+}
+
+async function insertArtworkAutoFix(uid: string, initialPayload: Record<string, any>) {
+  let payload = { ...initialPayload };
+
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const { data, error } = await supabase.from("artworks").insert(payload).select("id").single();
+
+    if (!error) return data as { id: string };
+
+    const msg = (error as any)?.message ?? "";
+    const details = (error as any)?.details ?? "";
+    const code = (error as any)?.code ?? "";
+
+    // 1) Not-null constraint (Postgres code 23502)
+    if (code === "23502" || /violates not-null constraint/i.test(msg + " " + details)) {
+      const col = extractQuotedColumn(details) ?? extractQuotedColumn(msg);
+      if (col && /_id$/i.test(col)) {
+        payload[col] = uid;
+        continue;
+      }
+      throw error;
+    }
+
+    // 2) Unknown column (PostgREST often uses PGRST204)
+    if (
+      code === "PGRST204" ||
+      (/column/i.test(msg) && /not found|does not exist|Could not find/i.test(msg))
+    ) {
+      const col = extractUnknownColumn(msg) ?? extractUnknownColumn(details);
+      if (col && Object.prototype.hasOwnProperty.call(payload, col)) {
+        delete payload[col];
+        continue;
+      }
+      throw error;
+    }
+
+    // 3) Type mismatch: try dropping tags first
+    if (/invalid input|cannot cast|malformed|type/i.test(msg + " " + details)) {
+      if (payload.tags != null) {
+        delete payload.tags;
+        continue;
+      }
+      throw error;
+    }
+
+    throw error;
+  }
+
+  throw new Error("Insert failed after retries.");
+}
+
+/* ------------------------------------------------------------------------------------ */
 
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
   const [userId, setUserId] = useState<string | null>(null);
 
+  // pre-step
   const [artType, setArtType] = useState<ArtworkType | null>(null);
   const [step, setStep] = useState<Step>(0);
 
+  // collections
   const [collections, setCollections] = useState<Collection[]>([]);
-  const [collectionId, setCollectionId] = useState<string | "">("");
+  const [collectionId, setCollectionId] = useState<string | "">(""); // '' = no collection
   const [collModalOpen, setCollModalOpen] = useState(false);
 
+  // Step 1 media
   const [images, setImages] = useState<LocalImage[]>([]);
   const [ackOriginal, setAckOriginal] = useState(false);
   const [globalMsg, setGlobalMsg] = useState<string | null>(null);
 
+  // Cropper
   const [cropTargetIdx, setCropTargetIdx] = useState<number | null>(null);
 
+  // Step 2 form
   const {
     register,
     handleSubmit,
@@ -354,16 +439,19 @@ export default function CreateArtworkWizard() {
     },
   });
 
+  // Step 3 AI
   const [aiBusy, setAiBusy] = useState(false);
   const [aiErr, setAiErr] = useState<string | null>(null);
   const [aiData, setAiData] = useState<AiEval | null>(null);
 
+  // Step 4 pin & mint
   const [pinning, setPinning] = useState(false);
   const [pinMsg, setPinMsg] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
   const [artworkId, setArtworkId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
 
+  // cover URL (persistable)
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   const anyChecking = images.some((im) => im.checking);
@@ -374,8 +462,10 @@ export default function CreateArtworkWizard() {
   const showPinOverlay = useMinBusy(pinning, 5000);
   const showAiOverlay = useMinBusy(aiBusy, 5000);
 
+  // Use stable preview src everywhere
   const coverPreviewSrc = coverUrl ?? images[0]?.previewUrl ?? null;
 
+  // draft save debounce
   const saveTimer = useRef<number | null>(null);
 
   function scheduleSaveDraft() {
@@ -407,42 +497,37 @@ export default function CreateArtworkWizard() {
 
         localStorage.setItem(DRAFT_KEY, JSON.stringify(payload));
 
+        // persist files
         for (let i = 0; i < Math.min(images.length, MAX_IMAGES); i++) {
           await idbSet(`img:${i}`, images[i].current);
         }
+        // delete any trailing old images
         for (let i = images.length; i < MAX_IMAGES; i++) {
           await idbDel(`img:${i}`);
         }
-      } catch {}
+      } catch {
+        // ignore draft save errors
+      }
     }, 500);
   }
 
-  // ✅ Keep auth in sync
+  // auth
   useEffect(() => {
-    let alive = true;
-
     (async () => {
       const { data } = await supabase.auth.getSession();
-      if (!alive) return;
       setUserId(data.session?.user?.id ?? null);
     })();
 
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, session) => {
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
       setUserId(session?.user?.id ?? null);
     });
 
-    return () => {
-      alive = false;
-      sub.subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
-  // ✅ Always fetch fresh uid right before DB writes
-  async function getFreshUid(): Promise<string | null> {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.user?.id ?? null;
-  }
-
+  // load my collections when user is known
   useEffect(() => {
     if (!userId) return;
     (async () => {
@@ -455,6 +540,7 @@ export default function CreateArtworkWizard() {
     })();
   }, [userId]);
 
+  // try resume draft on mount
   useEffect(() => {
     (async () => {
       try {
@@ -474,6 +560,7 @@ export default function CreateArtworkWizard() {
           ...(d.values ?? {}),
         } as any);
 
+        // restore files
         const restored: LocalImage[] = [];
         for (let i = 0; i < MAX_IMAGES; i++) {
           const f = await idbGet<File>(`img:${i}`);
@@ -487,12 +574,17 @@ export default function CreateArtworkWizard() {
             hash: null,
           });
         }
-        if (restored.length) setImages(restored);
-      } catch {}
+        if (restored.length) {
+          setImages(restored);
+        }
+      } catch {
+        // ignore
+      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // autosave whenever important state changes
   useEffect(() => {
     scheduleSaveDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -516,6 +608,7 @@ export default function CreateArtworkWizard() {
     watch("is_nsfw"),
   ]);
 
+  // save draft on tab close
   useEffect(() => {
     const fn = () => scheduleSaveDraft();
     window.addEventListener("beforeunload", fn);
@@ -523,6 +616,7 @@ export default function CreateArtworkWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // cleanup URLs
   useEffect(() => {
     return () => {
       images.forEach((im) => {
@@ -531,6 +625,7 @@ export default function CreateArtworkWizard() {
     };
   }, [images]);
 
+  // internal duplicate check (exact hash match inside Taedal)
   async function checkImageDupes(idx: number, file: File) {
     setImages((arr) => {
       const next = [...arr];
@@ -543,7 +638,7 @@ export default function CreateArtworkWizard() {
       const hash = await sha256File(file);
       const { data, error } = await supabase
         .from("artworks")
-        .select("id,title,image_url,author_id") // ✅ author_id
+        .select("id,title,image_url")
         .eq("image_sha256", hash)
         .limit(5);
 
@@ -568,9 +663,8 @@ export default function CreateArtworkWizard() {
   }
 
   async function onPick(e: ChangeEvent<HTMLInputElement>) {
-    const input = e.currentTarget; // ✅ capture immediately (prevents null after await)
-    const files = Array.from(input.files ?? []);
-    input.value = ""; // ✅ clear immediately BEFORE awaits
+    const inputEl = e.currentTarget; // ✅ capture before await (fixes null currentTarget)
+    const files = Array.from(inputEl.files ?? []);
     if (files.length === 0) return;
 
     setGlobalMsg(null);
@@ -599,6 +693,8 @@ export default function CreateArtworkWizard() {
     for (let i = 0; i < mapped.length && startIndex + i < MAX_IMAGES; i++) {
       await checkImageDupes(startIndex + i, mapped[i].current);
     }
+
+    inputEl.value = "";
   }
 
   const currentCropFile = useMemo(
@@ -631,16 +727,16 @@ export default function CreateArtworkWizard() {
     setAiErr(null);
   }
 
+  // upload cover for external reverse-image check (Step 1)
   async function ensureCoverUploadedForExternalCheck(): Promise<string | null> {
-    const uid = await getFreshUid();
-    if (!uid || !images[0]) {
+    if (!userId || !images[0]) {
       setGlobalMsg("Please sign in and upload at least one image first.");
       return null;
     }
     if (coverUrl) return coverUrl;
 
     try {
-      const upload = await uploadToArtworksBucket(images[0].current, uid);
+      const upload = await uploadToArtworksBucket(images[0].current, userId);
       setCoverUrl(upload.publicUrl);
       return upload.publicUrl;
     } catch (e: any) {
@@ -716,16 +812,10 @@ export default function CreateArtworkWizard() {
     }
   }
 
+  // STEP 2 → 3
   const onSubmitDetails = handleSubmit(async (values) => {
-    const uid = await getFreshUid(); // ✅ key fix
-    if (!uid) {
-      setGlobalMsg("Your session is not ready (auth uid missing). Refresh and sign in again.");
-      return;
-    }
-    setUserId(uid);
-
-    if (images.length === 0) {
-      setGlobalMsg("Please upload at least one image.");
+    if (!userId || images.length === 0) {
+      setGlobalMsg("Please sign in and upload at least one image.");
       return;
     }
     if (!artType) {
@@ -743,12 +833,20 @@ export default function CreateArtworkWizard() {
     setGlobalMsg(null);
 
     try {
-      const coverUpload = await uploadToArtworksBucket(images[0].current, uid);
+      // upload cover
+      const coverUpload = await uploadToArtworksBucket(images[0].current, userId);
       setCoverUrl(coverUpload.publicUrl);
 
+      // Safe year handling (some schemas use int)
+      const rawYear = values.year_created ? String(values.year_created).trim() : "";
+      const yearNum = rawYear ? Number(rawYear) : NaN;
+      const yearValue = Number.isFinite(yearNum) ? yearNum : (values.year_created || null);
+
+      // Build payload with BOTH creator_id + author_id (your schema flips between them)
       const payload: any = {
-        author_id: uid, // ✅ REQUIRED by your DB
-        owner_id: uid,
+        author_id: userId,
+        creator_id: userId,
+        owner_id: userId,
 
         title: values.title,
         description: values.description || null,
@@ -760,7 +858,7 @@ export default function CreateArtworkWizard() {
         image_sha256: images[0].hash ?? null,
 
         medium: values.medium || null,
-        year_created: values.year_created || null,
+        year_created: yearValue,
 
         width: values.width ?? null,
         height: values.height ?? null,
@@ -784,17 +882,18 @@ export default function CreateArtworkWizard() {
         type: artType,
         physical_status: artType === "physical" ? "with_creator" : null,
 
+        // These may or may not exist in your table — auto-fix will remove if unknown
         pin_status: "pending",
         collection_id: collectionId || null,
       };
 
-      const { data: row, error } = await supabase.from("artworks").insert(payload).select("id").single();
-      if (error) throw error;
-
+      // ✅ robust insert
+      const row = await insertArtworkAutoFix(userId, payload);
       setArtworkId(row.id);
 
+      // upload additional images
       if (images.length > 1) {
-        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, uid)));
+        const uploads = await Promise.all(images.slice(1).map((im) => uploadToArtworksBucket(im.current, userId)));
         const records = uploads.map((up, i) => ({
           artwork_id: row.id,
           url: up.publicUrl,
@@ -806,6 +905,7 @@ export default function CreateArtworkWizard() {
         } catch {}
       }
 
+      // go to AI step
       setStep(3);
       await runAiEvaluation(row.id);
     } catch (e: any) {
@@ -907,6 +1007,7 @@ export default function CreateArtworkWizard() {
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-6">
+      {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -937,6 +1038,7 @@ export default function CreateArtworkWizard() {
               </div>
             </Section>
 
+            {/* Thumbnails */}
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-3 gap-3">
               {images.map((im, i) => (
                 <div
@@ -1018,6 +1120,7 @@ export default function CreateArtworkWizard() {
             </div>
           </div>
 
+          {/* Right: live preview + external check */}
           <div className="lg:col-span-5 space-y-3">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
@@ -1106,15 +1209,30 @@ export default function CreateArtworkWizard() {
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm">Width</label>
-                  <input className="input" type="number" step="0.01" {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Height</label>
-                  <input className="input" type="number" step="0.01" {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Depth</label>
-                  <input className="input" type="number" step="0.01" {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
@@ -1176,6 +1294,7 @@ export default function CreateArtworkWizard() {
             )}
           </div>
 
+          {/* Live preview */}
           <div className="lg:col-span-5">
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
@@ -1189,7 +1308,8 @@ export default function CreateArtworkWizard() {
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
                   <div className="text-xs text-white/60">
-                    By you • {collectionId ? `In ${collections.find((c) => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
+                    By you •{" "}
+                    {collectionId ? `In ${collections.find((c) => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
                   </div>
                 </div>
 
@@ -1257,7 +1377,12 @@ export default function CreateArtworkWizard() {
               </button>
 
               {aiData?.usco_recommendation && (
-                <a className="btn bg-white/0 border border-emerald-300/30 hover:bg-emerald-400/10" href="https://copyright.gov/registration/" target="_blank" rel="noreferrer">
+                <a
+                  className="btn bg-white/0 border border-emerald-300/30 hover:bg-emerald-400/10"
+                  href="https://copyright.gov/registration/"
+                  target="_blank"
+                  rel="noreferrer"
+                >
                   USCO registration (link)
                 </a>
               )}
@@ -1346,6 +1471,7 @@ export default function CreateArtworkWizard() {
         </div>
       )}
 
+      {/* Modals / overlays */}
       <NewCollectionModal
         open={collModalOpen}
         onClose={() => setCollModalOpen(false)}
