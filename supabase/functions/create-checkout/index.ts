@@ -45,12 +45,22 @@ function toStripeUnitAmount(amount: number, currencyUpper: string) {
 }
 
 function withSessionId(url: string) {
-  // Ensure we always have the session id in success url
   const u = new URL(url);
   if (!u.searchParams.get("session_id")) {
     u.searchParams.set("session_id", "{CHECKOUT_SESSION_ID}");
   }
   return u.toString();
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function isPastEnd(endAt: any) {
+  const s = String(endAt || "");
+  if (!s) return false;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? Date.now() >= t : false;
 }
 
 Deno.serve(async (req) => {
@@ -89,15 +99,16 @@ Deno.serve(async (req) => {
 
     // Default URLs (safe defaults)
     const success_url_raw = String(
-      body?.success_url || `${SITE}/checkout/success`
+      body?.success_url || `${SITE}/checkout/success`,
     );
     const cancel_url = String(
-      body?.cancel_url || `${SITE}/checkout/cancel`
+      body?.cancel_url || `${SITE}/checkout/cancel`,
     );
 
     if (!listing_id) return json({ error: "Missing listing_id" }, 400);
-    if (!isFinite(quantity) || quantity <= 0)
+    if (!isFinite(quantity) || quantity <= 0) {
       return json({ error: "Invalid quantity" }, 400);
+    }
 
     // ✅ IMPORTANT: always include session_id placeholder
     const success_url = withSessionId(success_url_raw);
@@ -108,7 +119,7 @@ Deno.serve(async (req) => {
     const { data: listing, error: lErr } = await db
       .from("listings")
       .select(
-        "id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at"
+        "id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at",
       )
       .eq("id", listing_id)
       .maybeSingle();
@@ -123,8 +134,29 @@ Deno.serve(async (req) => {
     if (currency === "ETH") {
       return json(
         { error: "Stripe is not supported for ETH listings. Use MetaMask." },
-        400
+        400,
       );
+    }
+
+    if (listingType === "auction") {
+      // ✅ Prevent "pay early": only allow paying after auction ends (status ended/closed OR end_at passed)
+      const canPay =
+        ["ended", "closed", "paid"].includes(status) ||
+        isPastEnd(listing.end_at);
+
+      if (!canPay) {
+        return json(
+          { error: "Auction is still active — payment is only allowed after it ends." },
+          400,
+        );
+      }
+
+      if (status === "paid") return json({ error: "Auction already paid" }, 400);
+    } else {
+      // Fixed price checkout
+      if (status !== "active") {
+        return json({ error: "Listing is not active" }, 400);
+      }
     }
 
     let payableAmount = 0;
@@ -156,18 +188,12 @@ Deno.serve(async (req) => {
         return json({ error: "Only the auction winner can pay" }, 403);
       }
 
-      if (status === "paid") return json({ error: "Auction already paid" }, 400);
-
       payableAmount = amount;
     } else {
-      // Fixed price checkout
-      if (status !== "active") {
-        return json({ error: "Listing is not active" }, 400);
-      }
-
       const fp = Number(listing.fixed_price);
-      if (!isFinite(fp) || fp <= 0)
+      if (!isFinite(fp) || fp <= 0) {
         return json({ error: "Invalid fixed price" }, 400);
+      }
       payableAmount = fp;
     }
 
@@ -210,6 +236,7 @@ Deno.serve(async (req) => {
         quantity: String(quantity),
         listing_type: listingType,
         currency: currency,
+        created_at: nowIso(),
       },
     });
 

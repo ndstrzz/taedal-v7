@@ -24,7 +24,7 @@ type DuplicateHit = {
   id: string;
   title: string | null;
   image_url: string | null;
-  author_id: string | null; // ✅ Updated from creator_id to author_id
+  creator_id: string | null; // ✅ FIX: match DB column (creator_id), not author_id
 };
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
@@ -51,7 +51,7 @@ type AiEval = {
   notes: string[];
   disclaimer: string;
 
-  // NEW projection analytics (from function)
+  // projection analytics
   projection_trend: ProjectionTrend;
   projected_change_pct_30d: number;
   projected_value_low_usd_30d: number;
@@ -155,9 +155,13 @@ function Stepper({ step }: { step: 1 | 2 | 3 | 4 }) {
         return (
           <div key={label} className="flex items-center gap-2">
             <div
-              className={`flex items-center gap-2 h-7 pl-1 pr-2 rounded-full border transition                ${active ? "bg-white text-black border-white" : "bg-white/0 text-white/70 border-white/20"}`}            >
+              className={`flex items-center gap-2 h-7 pl-1 pr-2 rounded-full border transition
+                ${active ? "bg-white text-black border-white" : "bg-white/0 text-white/70 border-white/20"}`}
+            >
               <span
-                className={`grid place-items-center w-5 h-5 text-[11px] rounded-full                  ${active ? "bg-black text-white" : "bg-white/15 text-white"}`}              >
+                className={`grid place-items-center w-5 h-5 text-[11px] rounded-full
+                  ${active ? "bg-black text-white" : "bg-white/15 text-white"}`}
+              >
                 {i + 1}
               </span>
               <span className="text-xs">{label}</span>
@@ -211,9 +215,11 @@ function VideoOverlay({ open, message }: { open: boolean; message: "scan" | "pin
 
   return (
     <>
-      <style>{`        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
+      <style>{`
+        @font-face { font-family: 'THICCCBOI-BOLD'; src: url('/fonts/THICCCBOI-BOLD.TTF') format('truetype'); font-weight: bold; font-style: normal; font-display: swap; }
         .thicccboi { font-family: 'THICCCBOI-BOLD', system-ui, -apple-system, Segoe UI, Roboto, sans-serif; letter-spacing: 0.2px; }
-      `}</style>      <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
+      `}</style>
+      <div className="fixed inset-0 z-[1000] bg-black/90 backdrop-blur-sm flex items-center justify-center">
         <div className="relative w-full max-w-xl aspect-video rounded-2xl overflow-hidden border border-white/10 shadow-2xl">
           <video src={videoSrc} autoPlay muted loop playsInline className="absolute inset-0 h-full w-full object-cover" />
           <div className="absolute inset-0 bg-black/30" />
@@ -377,7 +383,7 @@ export default function CreateArtworkWizard() {
   const showPinOverlay = useMinBusy(pinning, 5000);
   const showAiOverlay = useMinBusy(aiBusy, 5000);
 
-  // Use stable preview src everywhere 
+  // Use stable preview src everywhere
   const coverPreviewSrc = coverUrl ?? images[0]?.previewUrl ?? null;
 
   // draft save debounce
@@ -495,7 +501,25 @@ export default function CreateArtworkWizard() {
   useEffect(() => {
     scheduleSaveDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, artType, collectionId, ackOriginal, coverUrl, images.length, watch("title"), watch("description"), watch("tags"), watch("medium"), watch("year_created"), watch("width"), watch("height"), watch("depth"), watch("dim_unit"), watch("royalty_bps"), watch("is_nsfw")]);
+  }, [
+    step,
+    artType,
+    collectionId,
+    ackOriginal,
+    coverUrl,
+    images.length,
+    watch("title"),
+    watch("description"),
+    watch("tags"),
+    watch("medium"),
+    watch("year_created"),
+    watch("width"),
+    watch("height"),
+    watch("depth"),
+    watch("dim_unit"),
+    watch("royalty_bps"),
+    watch("is_nsfw"),
+  ]);
 
   // save draft on tab close
   useEffect(() => {
@@ -527,7 +551,7 @@ export default function CreateArtworkWizard() {
       const hash = await sha256File(file);
       const { data, error } = await supabase
         .from("artworks")
-        .select("id,title,image_url,author_id") // ✅ Updated author_id as source of truth
+        .select("id,title,image_url,creator_id") // ✅ FIX: match DB column
         .eq("image_sha256", hash)
         .limit(5);
 
@@ -726,8 +750,9 @@ export default function CreateArtworkWizard() {
       setCoverUrl(coverUpload.publicUrl);
 
       const payload: any = {
-        author_id: userId, // ✅ NEW SCHEMA: author_id is required
+        creator_id: userId, // ✅ FIX: DB requires creator_id NOT NULL
         owner_id: userId,
+
         title: values.title,
         description: values.description || null,
 
@@ -1089,15 +1114,30 @@ export default function CreateArtworkWizard() {
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm">Width</label>
-                  <input className="input" type="number" step="0.01" {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Height</label>
-                  <input className="input" type="number" step="0.01" {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Depth</label>
-                  <input className="input" type="number" step="0.01" {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                  <input
+                    className="input"
+                    type="number"
+                    step="0.01"
+                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                  />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
@@ -1132,7 +1172,11 @@ export default function CreateArtworkWizard() {
             <Section title="Royalties (optional)">
               <div>
                 <label className="block text-sm">Royalty (bps)</label>
-                <input className="input" type="number" {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
+                <input
+                  className="input"
+                  type="number"
+                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
+                />
                 <p className="text-xs text-white/60 mt-1">500 bps = 5%.</p>
               </div>
             </Section>
@@ -1258,9 +1302,7 @@ export default function CreateArtworkWizard() {
             <div className="sticky top-6 space-y-3">
               <Section title="Preview">
                 <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
-                  {coverPreviewSrc ? (
-                    <img key={coverPreviewSrc} src={coverPreviewSrc} className="h-full w-full object-cover" />
-                  ) : null}
+                  {coverPreviewSrc ? <img key={coverPreviewSrc} src={coverPreviewSrc} className="h-full w-full object-cover" /> : null}
                 </div>
                 <div className="mt-3">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
@@ -1280,9 +1322,7 @@ export default function CreateArtworkWizard() {
           <div className="lg:col-span-7 space-y-4">
             <Section title="Preview">
               <div className="aspect-square overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
-                {coverPreviewSrc ? (
-                  <img key={coverPreviewSrc} src={coverPreviewSrc} className="h-full w-full object-cover" />
-                ) : null}
+                {coverPreviewSrc ? <img key={coverPreviewSrc} src={coverPreviewSrc} className="h-full w-full object-cover" /> : null}
               </div>
             </Section>
           </div>
