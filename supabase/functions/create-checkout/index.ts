@@ -35,13 +35,31 @@ function currencyToStripe(code: string) {
   return String(code || "USD").toLowerCase();
 }
 
+// Stripe unit_amount max (smallest unit) for most currencies.
+// This is the commonly enforced limit Stripe applies for Checkout price_data.unit_amount.
+const STRIPE_MAX_UNIT_AMOUNT = 99_999_999;
+
 // Stripe "unit_amount" is in the smallest currency unit.
 // USD/SGD/EUR = cents; JPY/KRW = no decimals.
 function toStripeUnitAmount(amount: number, currencyUpper: string) {
   const c = currencyUpper.toUpperCase();
   if (!isFinite(amount) || amount <= 0) throw new Error("Invalid amount");
-  if (["JPY", "KRW"].includes(c)) return Math.round(amount);
-  return Math.round(amount * 100);
+
+  const unit = ["JPY", "KRW"].includes(c) ? Math.round(amount) : Math.round(amount * 100);
+
+  // ✅ Prevent Stripe hard failure (was causing your 500)
+  if (!Number.isFinite(unit) || unit <= 0) throw new Error("Invalid amount");
+  if (unit > STRIPE_MAX_UNIT_AMOUNT) {
+    // Give a helpful message to the UI
+    const prettyMax =
+      ["JPY", "KRW"].includes(c)
+        ? `${STRIPE_MAX_UNIT_AMOUNT.toLocaleString()} ${c}`
+        : `${(STRIPE_MAX_UNIT_AMOUNT / 100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${c}`;
+
+    throw new Error(`Amount too large for Stripe. Max supported is ~${prettyMax}.`);
+  }
+
+  return unit;
 }
 
 function withSessionId(url: string) {
@@ -61,6 +79,15 @@ function isPastEnd(endAt: any) {
   if (!s) return false;
   const t = Date.parse(s);
   return Number.isFinite(t) ? Date.now() >= t : false;
+}
+
+// Extract a useful message from Stripe errors
+function stripeErrMessage(e: any) {
+  return (
+    e?.raw?.message ||
+    e?.message ||
+    "Stripe request failed"
+  );
 }
 
 Deno.serve(async (req) => {
@@ -98,17 +125,11 @@ Deno.serve(async (req) => {
     const quantity = Number(body?.quantity || 1);
 
     // Default URLs (safe defaults)
-    const success_url_raw = String(
-      body?.success_url || `${SITE}/checkout/success`,
-    );
-    const cancel_url = String(
-      body?.cancel_url || `${SITE}/checkout/cancel`,
-    );
+    const success_url_raw = String(body?.success_url || `${SITE}/checkout/success`);
+    const cancel_url = String(body?.cancel_url || `${SITE}/checkout/cancel`);
 
     if (!listing_id) return json({ error: "Missing listing_id" }, 400);
-    if (!isFinite(quantity) || quantity <= 0) {
-      return json({ error: "Invalid quantity" }, 400);
-    }
+    if (!isFinite(quantity) || quantity <= 0) return json({ error: "Invalid quantity" }, 400);
 
     // ✅ IMPORTANT: always include session_id placeholder
     const success_url = withSessionId(success_url_raw);
@@ -118,28 +139,25 @@ Deno.serve(async (req) => {
 
     const { data: listing, error: lErr } = await db
       .from("listings")
-      .select(
-        "id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at",
-      )
+      .select("id, artwork_id, seller_id, type, status, fixed_price, sale_currency, reserve_price, end_at")
       .eq("id", listing_id)
       .maybeSingle();
 
     if (lErr) return json({ error: lErr.message }, 400);
     if (!listing) return json({ error: "Listing not found" }, 404);
 
-    const listingType = String(listing.type || "").toLowerCase();
+    const listingTypeRaw = String(listing.type || "").toLowerCase();
+    // Optional normalization (helps if your DB uses fixed_price)
+    const listingType = (listingTypeRaw === "fixed_price" || listingTypeRaw === "fixed-price") ? "fixed" : listingTypeRaw;
+
     const status = String(listing.status || "").toLowerCase();
     const currency = String(listing.sale_currency || "USD").toUpperCase();
 
     if (currency === "ETH") {
-      return json(
-        { error: "Stripe is not supported for ETH listings. Use MetaMask." },
-        400,
-      );
+      return json({ error: "Stripe is not supported for ETH listings. Use MetaMask." }, 400);
     }
 
-    if (listingType === "auction") {
-      // ✅ Prevent "pay early": only allow paying after auction ends (status ended/closed OR end_at passed)
+    if (listingTypeRaw === "auction") {
       const canPay =
         ["ended", "closed", "paid"].includes(status) ||
         isPastEnd(listing.end_at);
@@ -153,17 +171,13 @@ Deno.serve(async (req) => {
 
       if (status === "paid") return json({ error: "Auction already paid" }, 400);
     } else {
-      // Fixed price checkout
-      if (status !== "active") {
-        return json({ error: "Listing is not active" }, 400);
-      }
+      if (status !== "active") return json({ error: "Listing is not active" }, 400);
     }
 
     let payableAmount = 0;
 
     // 4) Determine amount (fixed-price vs auction)
-    if (listingType === "auction") {
-      // Winner-only: payable = top bid (must be the caller)
+    if (listingTypeRaw === "auction") {
       const { data: topBid, error: bErr } = await db
         .from("bids")
         .select("id, amount, bidder_id, created_at")
@@ -176,28 +190,26 @@ Deno.serve(async (req) => {
       if (bErr) return json({ error: bErr.message }, 400);
       if (!topBid) return json({ error: "No bids found for this auction" }, 400);
 
-      const reserve =
-        listing.reserve_price == null ? null : Number(listing.reserve_price);
+      const reserve = listing.reserve_price == null ? null : Number(listing.reserve_price);
       const amount = Number(topBid.amount);
 
-      if (reserve != null && amount < reserve) {
-        return json({ error: "Reserve not met — cannot pay" }, 400);
-      }
-
-      if (String(topBid.bidder_id) !== buyerId) {
-        return json({ error: "Only the auction winner can pay" }, 403);
-      }
+      if (reserve != null && amount < reserve) return json({ error: "Reserve not met — cannot pay" }, 400);
+      if (String(topBid.bidder_id) !== buyerId) return json({ error: "Only the auction winner can pay" }, 403);
 
       payableAmount = amount;
     } else {
       const fp = Number(listing.fixed_price);
-      if (!isFinite(fp) || fp <= 0) {
-        return json({ error: "Invalid fixed price" }, 400);
-      }
+      if (!isFinite(fp) || fp <= 0) return json({ error: "Invalid fixed price" }, 400);
       payableAmount = fp;
     }
 
-    const unit_amount = toStripeUnitAmount(payableAmount, currency);
+    // ✅ This is where your huge price was killing Stripe
+    let unit_amount: number;
+    try {
+      unit_amount = toStripeUnitAmount(payableAmount, currency);
+    } catch (e: any) {
+      return json({ error: e?.message ?? "Invalid payment amount" }, 400);
+    }
 
     // 5) Create Stripe checkout session
     const Stripe = (await import("https://esm.sh/stripe@14?target=deno")).default;
@@ -206,41 +218,46 @@ Deno.serve(async (req) => {
       httpClient: Stripe.createFetchHttpClient(),
     });
 
-    const name = listingType === "auction"
-      ? "Auction winner payment"
-      : "Artwork purchase";
+    const name = listingTypeRaw === "auction" ? "Auction winner payment" : "Artwork purchase";
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      success_url,
-      cancel_url,
-      line_items: [
-        {
-          quantity,
-          price_data: {
-            currency: currencyToStripe(currency),
-            unit_amount,
-            product_data: {
-              name,
-              description: `Listing ${listing_id}`,
+    try {
+      const session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        success_url,
+        cancel_url,
+        line_items: [
+          {
+            quantity,
+            price_data: {
+              currency: currencyToStripe(currency),
+              unit_amount,
+              product_data: {
+                name,
+                description: `Listing ${listing_id}`,
+              },
             },
           },
+        ],
+        client_reference_id: `${buyerId}:${listing.id}:${listing.artwork_id}:${listing.seller_id}`,
+        metadata: {
+          listing_id: String(listing.id),
+          artwork_id: String(listing.artwork_id),
+          seller_id: String(listing.seller_id),
+          buyer_id: String(buyerId),
+          quantity: String(quantity),
+          listing_type: listingType,
+          currency: currency,
+          created_at: nowIso(),
         },
-      ],
-      client_reference_id: `${buyerId}:${listing.id}:${listing.artwork_id}:${listing.seller_id}`,
-      metadata: {
-        listing_id: String(listing.id),
-        artwork_id: String(listing.artwork_id),
-        seller_id: String(listing.seller_id),
-        buyer_id: String(buyerId),
-        quantity: String(quantity),
-        listing_type: listingType,
-        currency: currency,
-        created_at: nowIso(),
-      },
-    });
+      });
 
-    return json({ url: session.url, session_id: session.id });
+      return json({ url: session.url, session_id: session.id });
+    } catch (e: any) {
+      // ✅ Don’t hide Stripe errors as 500
+      const msg = stripeErrMessage(e);
+      console.error("Stripe create session failed:", msg);
+      return json({ error: msg }, 400);
+    }
   } catch (e: any) {
     console.error("create-checkout fatal:", e?.message || e);
     return json({ error: e?.message || "create-checkout failed" }, 500);
