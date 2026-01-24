@@ -1,3 +1,5 @@
+// C:\Users\User\Downloads\taedal-v7\app\src\routes\profiles\PublicProfile.tsx
+
 import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "../../lib/supabase";
@@ -37,7 +39,8 @@ export default function PublicProfile() {
   const nav = useNavigate();
   const { handle } = useParams();
   const [sp, setSp] = useSearchParams();
-  const activeTab = (sp.get("tab") as "created" | "purchased" | "hidden") || "created";
+  const activeTab =
+    (sp.get("tab") as "created" | "purchased" | "hidden") || "created";
 
   const [viewerId, setViewerId] = useState<string | null>(null);
   const [p, setP] = useState<Profile | null>(null);
@@ -60,7 +63,7 @@ export default function PublicProfile() {
   const [msgBusy, setMsgBusy] = useState(false);
 
   // ✅ Updated column list: author_id
-  const ARTWORK_COLS = "id,title,image_url,author_id,owner_id,created_at";
+  const ARTWORK_COLS = "id,title,image_url,author_id,created_at";
 
   /* session (viewer) */
   useEffect(() => {
@@ -79,14 +82,18 @@ export default function PublicProfile() {
       try {
         let { data, error } = await supabase
           .from("profiles")
-          .select("id,username,display_name,bio,avatar_url,cover_url,instagram,x_handle,youtube,telegram")
+          .select(
+            "id,username,display_name,bio,avatar_url,cover_url,instagram,x_handle,youtube,telegram"
+          )
           .eq("username", handle!)
           .maybeSingle();
 
         if (!data) {
           const r = await supabase
             .from("profiles")
-            .select("id,username,display_name,bio,avatar_url,cover_url,instagram,x_handle,youtube,telegram")
+            .select(
+              "id,username,display_name,bio,avatar_url,cover_url,instagram,x_handle,youtube,telegram"
+            )
             .eq("id", handle!)
             .maybeSingle();
           data = r.data as any;
@@ -142,9 +149,10 @@ export default function PublicProfile() {
     const { data, error } = await supabase
       .from("artworks")
       .select(ARTWORK_COLS)
-      .eq("author_id", profileId) // ✅ Updated to author_id
+      .eq("author_id", profileId)
       .order("created_at", { ascending: false })
       .limit(200);
+
     if (error) throw error;
     const createdRows = (data ?? []) as any[];
 
@@ -153,6 +161,7 @@ export default function PublicProfile() {
       return;
     }
 
+    // If it's me, hide pieces I created AND still own with hidden=true
     const ids = createdRows.map((r) => r.id);
     const { data: hiddenRows, error: hErr } = await supabase
       .from("ownerships")
@@ -161,9 +170,10 @@ export default function PublicProfile() {
       .eq("hidden", true)
       .gt("quantity", 0)
       .in("artwork_id", ids);
-    if (hErr) throw hErr;
 
+    if (hErr) throw hErr;
     const hiddenIds = new Set((hiddenRows ?? []).map((r: any) => r.artwork_id));
+
     setCreated(
       createdRows
         .filter((r) => !hiddenIds.has(r.id))
@@ -175,64 +185,85 @@ export default function PublicProfile() {
     );
   }
 
+  /**
+   * ✅ IMPORTANT FIX:
+   * Your `public.ownerships` has NO FK constraints, so PostgREST cannot do embedded joins
+   * like `artworks:artworks!some_fkey(...)`.
+   *
+   * We use a safe 2-step query: ownerships → artwork ids → artworks.
+   */
   async function loadPurchased(profileId: string) {
-    const { data: own, error } = await supabase
+    const { data: ownIds, error: idsErr } = await supabase
       .from("ownerships")
-      .select(`
-                artwork_id,
-        updated_at,
-        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
-            `)
+      .select("artwork_id, updated_at")
       .eq("owner_id", profileId)
       .eq("hidden", false)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
-    if (error) throw error;
 
-    type Row = { artwork_id: string; artworks: any | any[] };
-    const rows = (own ?? []) as Row[];
-    const map = new Map(
-      rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
-        .filter(Boolean)
-        .map((a: any) => [a.id, a])
-    );
+    if (idsErr) throw idsErr;
+
+    const ids = (ownIds ?? []).map((r: any) => r.artwork_id);
+    if (ids.length === 0) {
+      setPurchased([]);
+      return;
+    }
+
+    const { data: arts, error: artsErr } = await supabase
+      .from("artworks")
+      .select("id,title,image_url")
+      .in("id", ids);
+
+    if (artsErr) throw artsErr;
+
+    const byId = new Map((arts ?? []).map((a: any) => [a.id, a]));
     setPurchased(
-      rows.map(r => r.artwork_id)
-        .map((id) => map.get(id))
+      ids
+        .map((id) => byId.get(id))
         .filter(Boolean)
         .map((a: any) => ({
           id: a.id,
-          title: a.title,
-          image_url: a.image_url,
+          title: a.title ?? null,
+          image_url: a.image_url ?? null,
         }))
     );
   }
 
   async function loadHidden(profileId: string) {
-    const { data, error } = await supabase
+    const { data: ownIds, error: idsErr } = await supabase
       .from("ownerships")
-      .select(`
-                artwork_id,
-        artworks:artworks!public_ownerships_artwork_id_fkey ( id, title, image_url )
-            `)
+      .select("artwork_id, updated_at")
       .eq("owner_id", profileId)
       .eq("hidden", true)
       .gt("quantity", 0)
       .order("updated_at", { ascending: false })
       .limit(200);
-    if (error) throw error;
 
-    const rows = (data ?? []) as { artworks: any | any[] }[];
+    if (idsErr) throw idsErr;
+
+    const ids = (ownIds ?? []).map((r: any) => r.artwork_id);
+    if (ids.length === 0) {
+      setHidden([]);
+      return;
+    }
+
+    const { data: arts, error: artsErr } = await supabase
+      .from("artworks")
+      .select("id,title,image_url")
+      .in("id", ids);
+
+    if (artsErr) throw artsErr;
+
+    const byId = new Map((arts ?? []).map((a: any) => [a.id, a]));
     setHidden(
-      rows
-        .map((r) => (Array.isArray(r.artworks) ? r.artworks[0] : r.artworks))
+      ids
+        .map((id) => byId.get(id))
         .filter(Boolean)
         .map((a: any) => ({
           id: a.id,
-          title: a.title,
-          image_url: a.image_url,
+          title: a.title ?? null,
+          image_url: a.image_url ?? null,
         }))
     );
   }
@@ -240,14 +271,14 @@ export default function PublicProfile() {
   useEffect(() => {
     if (!p?.id) return;
     let alive = true;
-    const isMe = Boolean(viewerId && viewerId === p.id);
+    const isMeLocal = Boolean(viewerId && viewerId === p.id);
 
     const load = async () => {
       setLoadingGrid(true);
       setMsg(null);
       try {
         if (activeTab === "created") {
-          await loadCreated(p.id, isMe);
+          await loadCreated(p.id, isMeLocal);
         } else if (activeTab === "purchased") {
           await loadPurchased(p.id);
         } else {
@@ -271,7 +302,11 @@ export default function PublicProfile() {
     document.title = `${p.display_name?.trim() || p.username || "Profile"} — taedal`;
   }, [p]);
 
-  const isMe = useMemo(() => Boolean(viewerId && p?.id && viewerId === p.id), [viewerId, p?.id]);
+  const isMe = useMemo(
+    () => Boolean(viewerId && p?.id && viewerId === p.id),
+    [viewerId, p?.id]
+  );
+
   const coverUrl = p?.cover_url || "";
   const isCoverVideo = isVideoUrl(coverUrl);
   const avatarUrl = p?.avatar_url || "/images/taedal-logo.svg";
@@ -322,7 +357,8 @@ export default function PublicProfile() {
       }
 
       const payload: any = await res.json();
-      const passUrl: string | undefined = payload.passUrl || payload.url || payload.link || payload.profileUrl;
+      const passUrl: string | undefined =
+        payload.passUrl || payload.url || payload.link || payload.profileUrl;
 
       if (passUrl) window.location.href = passUrl;
       else setMsg("Wallet card prepared, but no URL was returned from the server.");
@@ -364,12 +400,26 @@ export default function PublicProfile() {
   return (
     <div className="min-h-[100dvh]">
       {/* Cover */}
-      <div className="relative border-b border-neutral-800 overflow-hidden" style={{ height: "clamp(12rem, 48vh, 52rem)" }}>
+      <div
+        className="relative border-b border-neutral-800 overflow-hidden"
+        style={{ height: "clamp(12rem, 48vh, 52rem)" }}
+      >
         {coverUrl ? (
           isCoverVideo ? (
-            <video src={coverUrl} className="absolute inset-0 h-full w-full object-cover" autoPlay loop muted playsInline />
+            <video
+              src={coverUrl}
+              className="absolute inset-0 h-full w-full object-cover"
+              autoPlay
+              loop
+              muted
+              playsInline
+            />
           ) : (
-            <img src={coverUrl} alt="cover" className="absolute inset-0 h-full w-full object-cover" />
+            <img
+              src={coverUrl}
+              alt="cover"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
           )
         ) : (
           <div className="absolute inset-0 bg-neutral-900" />
@@ -398,11 +448,19 @@ export default function PublicProfile() {
               {usernameText && <p className="text-neutral-400">{usernameText}</p>}
 
               <div className="flex items-center gap-6 text-sm text-neutral-300 mt-1">
-                <Link to={`/u/${p?.username || p?.id}/followers`} className="hover:underline">
-                  <span className="font-semibold">{followers ?? 0}</span> followers
+                <Link
+                  to={`/u/${p?.username || p?.id}/followers`}
+                  className="hover:underline"
+                >
+                  <span className="font-semibold">{followers ?? 0}</span>{" "}
+                  followers
                 </Link>
-                <Link to={`/u/${p?.username || p?.id}/following`} className="hover:underline">
-                  <span className="font-semibold">{following ?? 0}</span> following
+                <Link
+                  to={`/u/${p?.username || p?.id}/following`}
+                  className="hover:underline"
+                >
+                  <span className="font-semibold">{following ?? 0}</span>{" "}
+                  following
                 </Link>
               </div>
 
@@ -415,14 +473,27 @@ export default function PublicProfile() {
           <div className="pb-1">
             {isMe ? (
               <div className="flex gap-2">
-                <Link to="/account" className="btn">Edit profile</Link>
-                <button type="button" className="btn" onClick={handleWalletCard} disabled={walletLoading}>
+                <Link to="/account" className="btn">
+                  Edit profile
+                </Link>
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleWalletCard}
+                  disabled={walletLoading}
+                >
                   {walletLoading ? "Preparing card…" : "Wallet card"}
                 </button>
               </div>
             ) : p?.id ? (
               <div className="flex gap-2">
-                <button type="button" className="btn" onClick={handleMessage} disabled={msgBusy} title="Message">
+                <button
+                  type="button"
+                  className="btn"
+                  onClick={handleMessage}
+                  disabled={msgBusy}
+                  title="Message"
+                >
                   {msgBusy ? "Opening…" : "Message"}
                 </button>
                 <FollowButton profileId={p.id} />
@@ -435,10 +506,16 @@ export default function PublicProfile() {
       {/* Tabs */}
       <div className="sticky top-14 z-30 bg-black/75 backdrop-blur border-b border-neutral-800">
         <div className="max-w-6xl mx-auto px-4 h-12 flex items-end gap-6">
-          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>Created</TabButton>
-          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>Purchased</TabButton>
+          <TabButton active={activeTab === "created"} onClick={() => setTab("created")}>
+            Created
+          </TabButton>
+          <TabButton active={activeTab === "purchased"} onClick={() => setTab("purchased")}>
+            Purchased
+          </TabButton>
           {isMe && (
-            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>Hidden</TabButton>
+            <TabButton active={activeTab === "hidden"} onClick={() => setTab("hidden")}>
+              Hidden
+            </TabButton>
           )}
         </div>
       </div>
@@ -475,7 +552,9 @@ function TabButton({
       onClick={onClick}
       className={[
         "h-12 -mb-px px-1 border-b-2",
-        active ? "border-white text-white" : "border-transparent text-neutral-400 hover:text-neutral-200",
+        active
+          ? "border-white text-white"
+          : "border-transparent text-neutral-400 hover:text-neutral-200",
       ].join(" ")}
     >
       {children}
@@ -495,11 +574,18 @@ function ArtworkGrid({ items, emptyText }: { items: Artwork[]; emptyText: string
         >
           <div className="aspect-square bg-neutral-800">
             {a.image_url ? (
-              <img src={a.image_url} alt={a.title ?? "Artwork"} className="w-full h-full object-cover" loading="lazy" />
+              <img
+                src={a.image_url}
+                alt={a.title ?? "Artwork"}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
             ) : null}
           </div>
           <div className="p-3">
-            <div className="truncate font-medium group-hover:text-white">{a.title || "Untitled"}</div>
+            <div className="truncate font-medium group-hover:text-white">
+              {a.title || "Untitled"}
+            </div>
           </div>
         </Link>
       ))}
@@ -526,11 +612,20 @@ function GridSkeleton() {
 function Socials({ p }: { p: Profile | null }) {
   if (!p) return null;
   const items: { label: string; href: string }[] = [];
-  if (p.instagram) items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
-  if (p.x_handle) items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
-  if (p.youtube) items.push({ label: "YT", href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}` });
-  if (p.telegram) items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
+  if (p.instagram)
+    items.push({ label: "IG", href: `https://instagram.com/${p.instagram.replace(/^@/, "")}` });
+  if (p.x_handle)
+    items.push({ label: "X", href: `https://x.com/${p.x_handle.replace(/^@/, "")}` });
+  if (p.youtube)
+    items.push({
+      label: "YT",
+      href: p.youtube.startsWith("http") ? p.youtube : `https://youtube.com/${p.youtube}`,
+    });
+  if (p.telegram)
+    items.push({ label: "TG", href: `https://t.me/${p.telegram.replace(/^@/, "")}` });
+
   if (!items.length) return null;
+
   return (
     <div className="flex items-center gap-2">
       {items.map((it) => (
