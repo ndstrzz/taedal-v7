@@ -17,14 +17,14 @@ import AiEvaluationCard from "../../components/AIEvaluationCard";
 
 /* ------------------------------------------------------------------------------------ */
 
-type Step = 0 | 1 | 2 | 3 | 4; // step 3 = AI eval, step 4 = Preview & Mint
+type Step = 0 | 1 | 2 | 3 | 4;
 type ArtworkType = "digital" | "physical";
 
 type DuplicateHit = {
   id: string;
   title: string | null;
   image_url: string | null;
-  creator_id: string | null;
+  author_id: string | null;
 };
 
 type PinResp = { imageCID: string; metadataCID: string; tokenURI: string };
@@ -308,27 +308,21 @@ function NewCollectionModal({
 
 export default function CreateArtworkWizard() {
   const nav = useNavigate();
-
   const [userId, setUserId] = useState<string | null>(null);
 
-  // pre-step
   const [artType, setArtType] = useState<ArtworkType | null>(null);
   const [step, setStep] = useState<Step>(0);
 
-  // collections
   const [collections, setCollections] = useState<Collection[]>([]);
   const [collectionId, setCollectionId] = useState<string | "">("");
   const [collModalOpen, setCollModalOpen] = useState(false);
 
-  // Step 1 media
   const [images, setImages] = useState<LocalImage[]>([]);
   const [ackOriginal, setAckOriginal] = useState(false);
   const [globalMsg, setGlobalMsg] = useState<string | null>(null);
 
-  // Cropper
   const [cropTargetIdx, setCropTargetIdx] = useState<number | null>(null);
 
-  // Step 2 form
   const {
     register,
     handleSubmit,
@@ -360,19 +354,16 @@ export default function CreateArtworkWizard() {
     },
   });
 
-  // Step 3 AI
   const [aiBusy, setAiBusy] = useState(false);
   const [aiErr, setAiErr] = useState<string | null>(null);
   const [aiData, setAiData] = useState<AiEval | null>(null);
 
-  // Step 4 pin & mint
   const [pinning, setPinning] = useState(false);
   const [pinMsg, setPinMsg] = useState<string | null>(null);
   const [pinData, setPinData] = useState<PinResp | null>(null);
   const [artworkId, setArtworkId] = useState<string | null>(null);
   const [showMint, setShowMint] = useState(false);
 
-  // cover URL (persistable)
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
 
   const anyChecking = images.some((im) => im.checking);
@@ -385,7 +376,6 @@ export default function CreateArtworkWizard() {
 
   const coverPreviewSrc = coverUrl ?? images[0]?.previewUrl ?? null;
 
-  // draft save debounce
   const saveTimer = useRef<number | null>(null);
 
   function scheduleSaveDraft() {
@@ -427,7 +417,7 @@ export default function CreateArtworkWizard() {
     }, 500);
   }
 
-  // ✅ FIX: keep auth state synced (prod can load session slightly later)
+  // ✅ Keep auth in sync
   useEffect(() => {
     let alive = true;
 
@@ -447,7 +437,12 @@ export default function CreateArtworkWizard() {
     };
   }, []);
 
-  // load my collections when user is known
+  // ✅ Always fetch fresh uid right before DB writes
+  async function getFreshUid(): Promise<string | null> {
+    const { data } = await supabase.auth.getSession();
+    return data.session?.user?.id ?? null;
+  }
+
   useEffect(() => {
     if (!userId) return;
     (async () => {
@@ -460,7 +455,6 @@ export default function CreateArtworkWizard() {
     })();
   }, [userId]);
 
-  // try resume draft on mount
   useEffect(() => {
     (async () => {
       try {
@@ -499,7 +493,6 @@ export default function CreateArtworkWizard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // autosave whenever important state changes
   useEffect(() => {
     scheduleSaveDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -550,7 +543,7 @@ export default function CreateArtworkWizard() {
       const hash = await sha256File(file);
       const { data, error } = await supabase
         .from("artworks")
-        .select("id,title,image_url,creator_id")
+        .select("id,title,image_url,author_id") // ✅ author_id
         .eq("image_sha256", hash)
         .limit(5);
 
@@ -575,7 +568,9 @@ export default function CreateArtworkWizard() {
   }
 
   async function onPick(e: ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? []);
+    const input = e.currentTarget; // ✅ capture immediately (prevents null after await)
+    const files = Array.from(input.files ?? []);
+    input.value = ""; // ✅ clear immediately BEFORE awaits
     if (files.length === 0) return;
 
     setGlobalMsg(null);
@@ -604,8 +599,6 @@ export default function CreateArtworkWizard() {
     for (let i = 0; i < mapped.length && startIndex + i < MAX_IMAGES; i++) {
       await checkImageDupes(startIndex + i, mapped[i].current);
     }
-
-    e.currentTarget.value = "";
   }
 
   const currentCropFile = useMemo(
@@ -638,14 +631,8 @@ export default function CreateArtworkWizard() {
     setAiErr(null);
   }
 
-  // ✅ FIX: use fresh uid (not state) for any upload/insert actions
-  async function getFreshUid(): Promise<string | null> {
-    const { data } = await supabase.auth.getSession();
-    return data.session?.user?.id ?? null;
-  }
-
   async function ensureCoverUploadedForExternalCheck(): Promise<string | null> {
-    const uid = await getFreshUid(); // ✅ FIX
+    const uid = await getFreshUid();
     if (!uid || !images[0]) {
       setGlobalMsg("Please sign in and upload at least one image first.");
       return null;
@@ -730,10 +717,9 @@ export default function CreateArtworkWizard() {
   }
 
   const onSubmitDetails = handleSubmit(async (values) => {
-    // ✅ FIX: always fetch fresh uid right before insert
-    const uid = await getFreshUid();
+    const uid = await getFreshUid(); // ✅ key fix
     if (!uid) {
-      setGlobalMsg("Your session is not ready (auth uid is missing). Please refresh and sign in again.");
+      setGlobalMsg("Your session is not ready (auth uid missing). Refresh and sign in again.");
       return;
     }
     setUserId(uid);
@@ -761,7 +747,7 @@ export default function CreateArtworkWizard() {
       setCoverUrl(coverUpload.publicUrl);
 
       const payload: any = {
-        creator_id: uid, // ✅ FIX: never null now
+        author_id: uid, // ✅ REQUIRED by your DB
         owner_id: uid,
 
         title: values.title,
@@ -838,6 +824,7 @@ export default function CreateArtworkWizard() {
     );
   }
 
+  // STEP 0
   if (step === 0) {
     const hasDraft = !!localStorage.getItem(DRAFT_KEY);
 
@@ -1119,30 +1106,15 @@ export default function CreateArtworkWizard() {
               <div className="grid md:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-sm">Width</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
-                  />
+                  <input className="input" type="number" step="0.01" {...register("width", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
                 </div>
                 <div>
                   <label className="block text-sm">Height</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
-                  />
+                  <input className="input" type="number" step="0.01" {...register("height", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
                 </div>
                 <div>
                   <label className="block text-sm">Depth</label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
-                  />
+                  <input className="input" type="number" step="0.01" {...register("depth", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
                 </div>
                 <div>
                   <label className="block text-sm">Unit</label>
@@ -1177,11 +1149,7 @@ export default function CreateArtworkWizard() {
             <Section title="Royalties (optional)">
               <div>
                 <label className="block text-sm">Royalty (bps)</label>
-                <input
-                  className="input"
-                  type="number"
-                  {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })}
-                />
+                <input className="input" type="number" {...register("royalty_bps", { setValueAs: (v) => (v === "" || v === null ? undefined : Number(v)) })} />
                 <p className="text-xs text-white/60 mt-1">500 bps = 5%.</p>
               </div>
             </Section>
@@ -1221,8 +1189,7 @@ export default function CreateArtworkWizard() {
                 <div className="mt-3 space-y-1">
                   <div className="text-lg font-semibold truncate">{watch("title") || "Untitled"}</div>
                   <div className="text-xs text-white/60">
-                    By you •{" "}
-                    {collectionId ? `In ${collections.find((c) => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
+                    By you • {collectionId ? `In ${collections.find((c) => c.id === collectionId)?.name ?? "collection"}` : "No collection"}
                   </div>
                 </div>
 
@@ -1290,12 +1257,7 @@ export default function CreateArtworkWizard() {
               </button>
 
               {aiData?.usco_recommendation && (
-                <a
-                  className="btn bg-white/0 border border-emerald-300/30 hover:bg-emerald-400/10"
-                  href="https://copyright.gov/registration/"
-                  target="_blank"
-                  rel="noreferrer"
-                >
+                <a className="btn bg-white/0 border border-emerald-300/30 hover:bg-emerald-400/10" href="https://copyright.gov/registration/" target="_blank" rel="noreferrer">
                   USCO registration (link)
                 </a>
               )}
