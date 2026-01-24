@@ -1670,40 +1670,76 @@ export default function ArtworkDetail() {
 
   /** ✅ Payment (fixed-price) */
   async function onBuy() {
-    if (!activeListing || !art) return;
+  if (!activeListing || !art) return;
 
-    const ccy2 = (activeListing.sale_currency || "").toUpperCase();
-    if (ccy2 === "ETH") {
-      setMsg(null);
-      setWalletOpen(true);
-      return;
-    }
-
-    try {
-      setMsg("Redirecting to Stripe…");
-      const { data, error } = await supabase.functions.invoke("create-checkout", {
-        body: {
-          listing_id: activeListing.id,
-          quantity: 1,
-
-          listing_type: String((activeListing as any)?.type ?? "fixed"),
-          artwork_id: art.id,
-          seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
-          buyer_id: viewerId,
-
-          success_url: `${location.origin}/checkout/success?listing_id=${encodeURIComponent(activeListing.id)}&artwork_id=${encodeURIComponent(
-            art.id
-          )}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(`/art/${art.id}`)}`,
-          cancel_url: location.href,
-        },
-      });
-      if (error) throw error;
-      if (!data?.url) throw new Error("Stripe session URL not returned");
-      window.location.href = data.url;
-    } catch (e: any) {
-      setMsg(parseInvokeError(e));
-    }
+  if (!viewerId) {
+    setMsg("Please sign in to buy.");
+    return;
   }
+
+  // Only fixed-price here
+  if (String((activeListing as any)?.type ?? "fixed").toLowerCase() === "auction") {
+    setMsg("This is an auction listing. Please use the auction payment options.");
+    return;
+  }
+
+  const currency = (activeListing.sale_currency ?? "USD").toUpperCase();
+
+  // ETH -> MetaMask modal
+  if (currency === "ETH") {
+    setMsg(null);
+    setWalletOpen(true);
+    return;
+  }
+
+  const fixedAmt = Number((activeListing as any).fixed_price ?? 0);
+  if (!isFinite(fixedAmt) || fixedAmt <= 0) {
+    setMsg("Invalid fixed price.");
+    return;
+  }
+
+  try {
+    setMsg("Redirecting to Stripe…");
+
+    const successUrl = `${location.origin}/checkout/success?listing_id=${encodeURIComponent(
+      activeListing.id
+    )}&artwork_id=${encodeURIComponent(art.id)}&session_id={CHECKOUT_SESSION_ID}&return_to=${encodeURIComponent(
+      `/art/${art.id}`
+    )}`;
+
+    const cancelUrl = `${location.origin}/art/${art.id}?cancelled=1&listing=${encodeURIComponent(activeListing.id)}`;
+
+    const { data, error } = await supabase.functions.invoke("create-checkout", {
+      body: {
+        listing_id: activeListing.id,
+        quantity: 1,
+
+        // ✅ make this explicit + consistent with your auction flow
+        listing_type: "fixed",
+
+        artwork_id: art.id,
+        seller_id: (activeListing as any)?.seller_id ?? art.owner_id ?? null,
+        buyer_id: viewerId,
+
+        // ✅ pass explicit payment info
+        currency,
+        fixed_amount: fixedAmt,
+
+        success_url: successUrl,
+        cancel_url: cancelUrl,
+      },
+    });
+
+    if (error) throw error;
+    if (!data?.url) throw new Error("Stripe session URL not returned");
+
+    // Use assign() to be explicit
+    window.location.assign(data.url);
+  } catch (e: any) {
+    setMsg(parseInvokeError(e));
+  }
+}
+
 
   /** ✅ ETH payment (fixed-price) */
   async function onBuyWithMetaMask() {
